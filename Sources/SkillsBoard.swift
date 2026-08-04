@@ -56,10 +56,25 @@ final class SkillsViewModel: ObservableObject {
     /// 分享区: 对外分发的副本, 不参与本机路由(避免与自用版描述撞车)
     static let sharedRoot = NSHomeDirectory() + "/.claude/skills-shared"
 
+    /// 非启用态的分类(已归档/分享版/已禁用)不是日常关注对象, 固定排在最后,
+    /// 否则会因数量大而挤到筛选条前排, 把常用业务分类推到"更多"里。
+    static let tailCategories = ["已禁用", "分享版", "已归档"]
+
     var categories: [(String, Int)] {
         var c: [String: Int] = [:]
         for i in items { c[i.category, default: 0] += 1 }
-        return [("全部", items.count)] + c.sorted { $0.value > $1.value }.map { ($0.key, $0.value) }
+        let isTail = { (k: String) in Self.tailCategories.contains(k) }
+        let sorted = c.sorted { a, b in
+            let (ta, tb) = (isTail(a.key), isTail(b.key))
+            if ta != tb { return !ta }                       // 非尾部优先
+            if ta {                                          // 尾部之间按固定顺序
+                let ia = Self.tailCategories.firstIndex(of: a.key) ?? 99
+                let ib = Self.tailCategories.firstIndex(of: b.key) ?? 99
+                return ia < ib
+            }
+            return a.value > b.value                         // 其余按数量降序
+        }
+        return [("全部", items.count)] + sorted.map { ($0.key, $0.value) }
     }
 
     var filtered: [SkillItem] {
@@ -569,11 +584,20 @@ struct SkillsBoardView: View {
         var map: [String: [SkillItem]] = [:]
         let bad = items.filter { $0.health != .healthy }
         if !bad.isEmpty { order.append("需要处理"); map["需要处理"] = bad }
+        var tail: [String] = []
         for i in items where i.health == .healthy {
-            if map[i.category] == nil { order.append(i.category) }
+            let isTail = SkillsViewModel.tailCategories.contains(i.category)
+            if map[i.category] == nil {
+                if isTail { tail.append(i.category) } else { order.append(i.category) }
+            }
             map[i.category, default: []].append(i)
         }
-        return order.map { ($0, map[$0] ?? []) }
+        // 已归档 / 分享版 / 已禁用 沉到列表末尾, 保持与筛选条一致的固定次序
+        tail.sort {
+            (SkillsViewModel.tailCategories.firstIndex(of: $0) ?? 99)
+                < (SkillsViewModel.tailCategories.firstIndex(of: $1) ?? 99)
+        }
+        return (order + tail).map { ($0, map[$0] ?? []) }
     }
 
     // MARK: 卡片
