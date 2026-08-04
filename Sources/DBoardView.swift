@@ -696,8 +696,17 @@ struct HeaderView: View {
     @EnvironmentObject var vm: DBoardViewModel
     @EnvironmentObject var theme: ThemeManager
     @EnvironmentObject var fm: FontManager
+    @State private var dragOffset: CGSize = .zero
+    @State private var showHandle = false
+
     var body: some View {
         HStack(spacing: 10) {
+            // 拖动把手: hover 时出现, 暗示可拖出为独立窗口
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(theme.current.textMuted.opacity(showHandle ? 0.6 : 0))
+                .frame(width: 14)
+                .animation(.easeInOut(duration: 0.2), value: showHandle)
             Text("我的需求看板")
                 .font(fm.font(28))
                 .foregroundStyle(theme.current.accentGradient)
@@ -725,6 +734,21 @@ struct HeaderView: View {
             }
         }
         .padding(.horizontal, 20).padding(.vertical, 20)
+        .contentShape(Rectangle())
+        .onHover { showHandle = $0 }
+        .gesture(
+            DragGesture(minimumDistance: 20)
+                .onChanged { v in dragOffset = v.translation }
+                .onEnded { v in
+                    dragOffset = .zero
+                    // 拖动超过 20pt -> 触发脱出
+                    if abs(v.translation.width) > 20 || abs(v.translation.height) > 20 {
+                        if let app = NSApp.delegate as? AppDelegate {
+                            app.detachPanel()
+                        }
+                    }
+                }
+        )
     }
 }
 

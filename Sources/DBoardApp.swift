@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var sysMonTimer: Timer?
     private var prevSysSwap: (ins: UInt64, outs: UInt64, at: Date)?
     private var skillsStatusItem: NSStatusItem!
+    private var isDetached = false   // 面板脱出为独立窗口(不置顶)
     private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -250,16 +251,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     @objc func togglePopover() {
         NSLog("DBoard: togglePopover called")
         guard let win = panelWindow else { return }
-        if win.isVisible {
-            win.orderOut(nil)
-            NSLog("DBoard: window hidden")
+        if isDetached {
+            // 已脱出: 点图标只做 显示/隐藏, 不改位置
+            if win.isVisible && win.isKeyWindow {
+                win.orderOut(nil)
+            } else {
+                win.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            }
         } else {
-            showPopover()
-            NSLog("DBoard: window shown")
+            if win.isVisible {
+                win.orderOut(nil)
+            } else {
+                showPopover()
+            }
         }
     }
 
+    /// 外部调用: 将面板脱出为独立窗口(降层级 + 显示标题栏)
+    func detachPanel() {
+        guard let win = panelWindow, !isDetached else { return }
+        isDetached = true
+        win.level = .normal                          // 不再置顶
+        win.titleVisibility = .visible               // 显示标题
+        win.titlebarAppearsTransparent = false       // 标题栏不透明(出现红绿灯)
+        win.isMovableByWindowBackground = false      // 用标准标题栏拖动
+        win.collectionBehavior = [.moveToActiveSpace, .fullScreenPrimary]
+        NSLog("DBoard: panel detached")
+    }
+
+    /// 收回面板: 恢复浮动模式
+    private func reattachPanel() {
+        guard let win = panelWindow, isDetached else { return }
+        isDetached = false
+        win.level = .floating
+        win.titleVisibility = .hidden
+        win.titlebarAppearsTransparent = true
+        win.isMovableByWindowBackground = true
+        win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        NSLog("DBoard: panel reattached")
+    }
+
     @objc private func hidePanelWindow() {
+        reattachPanel()    // 关窗 -> 回到浮动面板模式
         panelWindow?.orderOut(nil)
     }
 

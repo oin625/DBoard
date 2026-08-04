@@ -163,21 +163,33 @@ final class SkillsViewModel: ObservableObject {
     /// 否则会因数量大而挤到筛选条前排, 把常用业务分类推到"更多"里。
     static let tailCategories = ["分享版", "已归档"]
 
+    /// 筛选条固定展示顺序 —— 之前按数量降序, 每次扫描数量一变顺序就重排, 视觉上一直在跳。
+    /// 顺序按"日常使用频度"手工排定, 与数量无关。
+    static let categoryOrder = ["TMYC", "Luban", "钉钉", "开发工具", "开发方法论",
+                                "设计/动画", "浏览器", "信息获取", "知识库",
+                                "个人效率", "元技能", "其他"]
+
     var categories: [(String, Int)] {
         var c: [String: Int] = [:]
         for i in items { c[i.category, default: 0] += 1 }
-        let isTail = { (k: String) in Self.tailCategories.contains(k) }
+        func rank(_ k: String) -> Int {
+            if let i = Self.categoryOrder.firstIndex(of: k) { return i }
+            if let i = Self.tailCategories.firstIndex(of: k) { return 900 + i }  // 归档/分享垫底
+            return 500                                                          // 自定义分类居中
+        }
         let sorted = c.sorted { a, b in
-            let (ta, tb) = (isTail(a.key), isTail(b.key))
-            if ta != tb { return !ta }                       // 非尾部优先
-            if ta {                                          // 尾部之间按固定顺序
-                let ia = Self.tailCategories.firstIndex(of: a.key) ?? 99
-                let ib = Self.tailCategories.firstIndex(of: b.key) ?? 99
-                return ia < ib
-            }
-            return a.value > b.value                         // 其余按数量降序
+            let (ra, rb) = (rank(a.key), rank(b.key))
+            return ra != rb ? ra < rb : a.key < b.key   // 同档按名字, 保证稳定
         }
         return [("全部", items.count)] + sorted.map { ($0.key, $0.value) }
+    }
+
+    /// 只有归档/分享收进"更多", 其余全部平铺 —— 免得常用分类被折叠进下拉
+    var visibleCategories: [(String, Int)] {
+        categories.filter { !Self.tailCategories.contains($0.0) }
+    }
+    var hiddenCategories: [(String, Int)] {
+        categories.filter { Self.tailCategories.contains($0.0) }
     }
 
     var filtered: [SkillItem] {
@@ -1113,11 +1125,13 @@ struct SkillsBoardView: View {
             .frame(width: 160)
             .background(RoundedRectangle(cornerRadius: 7).fill(theme.current.textTertiary.opacity(0.07)))
 
-            HStack(spacing: 3) {
-                ForEach(vm.categories.prefix(5), id: \.0) { c in catChip(c.0, c.1) }
-                if vm.categories.count > 5 {
+            // 分类全平铺后可能超出窗口宽度 —— 套横向滚动, 保证 chip 不被压缩变形
+            ScrollView(.horizontal, showsIndicators: false) {
+              HStack(spacing: 3) {
+                ForEach(vm.visibleCategories, id: \.0) { c in catChip(c.0, c.1) }
+                if !vm.hiddenCategories.isEmpty {
                     Menu {
-                        ForEach(vm.categories.dropFirst(5), id: \.0) { c in
+                        ForEach(vm.hiddenCategories, id: \.0) { c in
                             Button("\(c.0) (\(c.1))") { vm.categoryFilter = c.0 }
                         }
                     } label: {
@@ -1125,6 +1139,8 @@ struct SkillsBoardView: View {
                     }
                     .menuStyle(.borderlessButton).fixedSize()
                 }
+              }
+              .padding(.vertical, 1)   // 给 chip 的 hover 缩放留一点余量
             }
             Spacer(minLength: 2)
             Toggle(isOn: $vm.onlyProblems) { Text("仅问题").font(fm.font(11)) }
