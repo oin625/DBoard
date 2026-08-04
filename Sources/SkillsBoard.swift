@@ -24,6 +24,7 @@ struct SkillItem: Identifiable {
     var problems: [String] = []    // 硬性问题(影响加载)
     var hints: [String] = []       // 软性提示
     var missingCLI: [String] = []  // 依赖但未安装的命令
+    var origin: String = "启用"      // 启用 / 已禁用 / 已归档 / 分享版
     var external: Bool = false     // 第三方插件(marketplace 安装), 描述由上游维护, 本地改动会被覆盖
     var manualOnly: Bool = false   // frontmatter 声明 disable-model-invocation: 只能手动唤起
     var hardRefs: [String] = []    // 硬依赖我的 skill(写死了我的路径, 禁用即崩)
@@ -50,6 +51,10 @@ final class SkillsViewModel: ObservableObject {
 
     static let root = NSHomeDirectory() + "/.claude/skills"
     static let disabledRoot = NSHomeDirectory() + "/.claude/skills-disabled"
+    /// 归档区: 确认不再使用, 移出扫描范围但保留可恢复
+    static let archiveRoot = NSHomeDirectory() + "/.claude/skills-archive"
+    /// 分享区: 对外分发的副本, 不参与本机路由(避免与自用版描述撞车)
+    static let sharedRoot = NSHomeDirectory() + "/.claude/skills-shared"
 
     var categories: [(String, Int)] {
         var c: [String: Int] = [:]
@@ -120,12 +125,21 @@ final class SkillsViewModel: ObservableObject {
         if let ds = try? fm.contentsOfDirectory(atPath: disabledRoot) {
             for d in ds where isDir(disabledRoot + "/" + d) { dirs.append((d, disabledRoot + "/" + d, false)) }
         }
+        // 归档区 / 分享区同样纳入展示, 但都标记为未启用(不参与本机路由)
+        for extraRoot in [archiveRoot, sharedRoot] {
+            if let ds = try? fm.contentsOfDirectory(atPath: extraRoot) {
+                for d in ds where isDir(extraRoot + "/" + d) { dirs.append((d, extraRoot + "/" + d, false)) }
+            }
+        }
 
         // 第一轮: 解析元数据
         var texts: [String: String] = [:]
         for (d, p, en) in dirs {
             var it = SkillItem(dir: d, path: p)
             it.enabled = en
+            if p.hasPrefix(Self.archiveRoot)       { it.origin = "已归档" }
+            else if p.hasPrefix(Self.sharedRoot)   { it.origin = "分享版" }
+            else if p.hasPrefix(Self.disabledRoot) { it.origin = "已禁用" }
             let sk = p + "/SKILL.md"
 
             if let attrs = try? fm.attributesOfItem(atPath: p) {
@@ -184,7 +198,7 @@ final class SkillsViewModel: ObservableObject {
 
             // ===== 软性检查 =====
             // 第三方插件的 description 由上游维护, 本地改了会被插件更新覆盖, 不提示。
-            if !it.desc.isEmpty && !it.external {
+            if !it.desc.isEmpty && !it.external && it.origin == "启用" {
                 if it.desc.count < 40 {
                     it.hints.append("description 仅 \(it.desc.count) 字, 过短会导致 Qoder 匹配不准")
                 }
@@ -200,7 +214,8 @@ final class SkillsViewModel: ObservableObject {
                 it.hints.append("半年以上未更新, 确认是否仍需要")
             }
 
-            it.category = categorize(d)
+            // 归档/分享/禁用的单独成类, 不混进业务分类
+            it.category = it.origin == "启用" ? categorize(d) : it.origin
             if let ex = cronRefs[d] { it.externalRefs.append(ex) }
             if let ex = launchRefs[d] { it.externalRefs.append(ex) }
 

@@ -227,11 +227,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         let color: NSColor = severe ? .systemRed : (mild ? .systemOrange : .systemGreen)
 
-        // 流畅: 模板图像(随菜单栏明暗自动反色, 不设 tint)
-        // 亮灯: 才给 tint 着色 —— contentTintColor 会切断模板反色, 所以只在需要时设
+        // 始终保持 isTemplate = true:
+        //   流畅: contentTintColor = nil → 系统自动按菜单栏明暗给白/黑
+        //   亮灯: contentTintColor = 红/橙 → 直接在模板图像上着色(不用关 isTemplate)
         sb.attributedTitle = NSAttributedString(string: "")
         sb.contentTintColor = (severe || mild) ? color : nil
-        sb.image?.isTemplate = !(severe || mild)
         sb.toolTip = severe || mild
             ? String(format: "卡顿: 负载 %.1f/核, 换页 %.0f页/秒", lpc, rate)
             : String(format: "流畅: 负载 %.1f/核, 零换页", lpc)
