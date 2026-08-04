@@ -24,6 +24,9 @@ struct SkillItem: Identifiable {
     var problems: [String] = []    // 硬性问题(影响加载)
     var hints: [String] = []       // 软性提示
     var missingCLI: [String] = []  // 依赖但未安装的命令
+    /// 实战验证状态: 取自 SKILL.md 正文的「## 实战验证」段 —— 用来区分
+    /// "装了但没用过"(未验证) 与 "真跑通过"(已验证), 避免把摆设当能力。
+    var verify: String = ""          // 已验证 / 部分验证 / 未验证 / 空(未标注)
     var origin: String = "启用"      // 启用 / 已禁用 / 已归档 / 分享版
     var external: Bool = false     // 第三方插件(marketplace 安装), 描述由上游维护, 本地改动会被覆盖
     var manualOnly: Bool = false   // frontmatter 声明 disable-model-invocation: 只能手动唤起
@@ -318,6 +321,10 @@ final class SkillsViewModel: ObservableObject {
             // 仅手动调用的 skill(disable-model-invocation)不参与"触发词"检查 ——
             // 它本就不该被自动唤起, 没触发词是设计意图而非缺陷。
             it.manualOnly = front.contains("disable-model-invocation: true")
+            for v in ["已验证", "部分验证", "未验证"] where txt.contains("状态：**\(v)**") {
+                it.verify = v
+                break
+            }
             it.external = Self.isExternalPlugin(d)
 
             // ===== 软性检查 =====
@@ -765,6 +772,11 @@ struct SkillsBoardView: View {
                 if !item.missingCLI.isEmpty {
                     miniBadge(nil, "exclamationmark.triangle.fill", Color(hex: "#d94f4f"))
                 }
+                // 只给"未验证"打标 —— 已验证是期望状态, 满屏打勾等于没有信息量
+                if item.verify == "未验证" && item.origin == "启用" {
+                    miniBadge(nil, "questionmark.circle", Color(hex: "#8a8f98"))
+                        .help("已安装但尚未在真实任务中用过")
+                }
             }
 
             // 描述: 固定 2 行, 卡片等高
@@ -920,6 +932,11 @@ struct SkillsBoardView: View {
 
                 HStack(spacing: 6) {
                     tag(item.category, theme.current.textMuted)
+                    if !item.verify.isEmpty {
+                        tag(item.verify, item.verify == "已验证" ? Color(hex: "#5aa86c")
+                                       : item.verify == "未验证" ? Color(hex: "#8a8f98")
+                                       : Color(hex: "#c8863c"))
+                    }
                     if !item.hardRefs.isEmpty {
                         tag("\(item.hardRefs.count) 个硬依赖", Color(hex: "#8b6fb8"))
                     }
