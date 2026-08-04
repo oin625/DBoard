@@ -49,6 +49,106 @@ final class SkillsViewModel: ObservableObject {
     @Published var lastScan: Date? = nil
     @Published var actionMsg = ""
 
+    /// 用户自定义分类覆盖表: 目录名 -> 分类名。
+    /// **只存在这个独立 JSON 里, 绝不写入 SKILL.md** —— frontmatter 是 AI 路由的依据,
+    /// 动它会影响 skill 实际行为; 分类纯属面板视图组织, 二者必须解耦。
+    @Published var overrides: [String: String] = [:]
+    /// 用户新建但暂时还没有成员的分类(保证空分类也能出现在菜单里)
+    @Published var customCategories: [String] = []
+
+    static let overrideFile = NSHomeDirectory() + "/.claude/skills-categories.json"
+
+    private struct OverrideStore: Codable {
+        var overrides: [String: String]
+        var customCategories: [String]
+    }
+
+    func loadOverrides() {
+        guard let d = FileManager.default.contents(atPath: Self.overrideFile),
+              let st = try? JSONDecoder().decode(OverrideStore.self, from: d) else { return }
+        overrides = st.overrides
+        customCategories = st.customCategories
+    }
+
+    private func saveOverrides() {
+        let st = OverrideStore(overrides: overrides, customCategories: customCategories)
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let d = try? enc.encode(st) else { return }
+        try? d.write(to: URL(fileURLWithPath: Self.overrideFile))
+    }
+
+    /// 全部可选分类 = 内置分类 + 当前已用分类 + 用户新建的; 尾部三类不可作为目标
+    var assignableCategories: [String] {
+        let builtin = ["TMYC", "钉钉", "Luban", "设计/动画", "开发方法论",
+                       "开发工具", "信息获取", "浏览器", "个人效率", "知识库", "元技能", "其他"]
+        var all = builtin
+        for i in items where !Self.tailCategories.contains(i.category) {
+            if !all.contains(i.category) { all.append(i.category) }
+        }
+        for c in customCategories where !all.contains(c) { all.append(c) }
+        return all
+    }
+
+    /// 改某个 skill 的分类。仅写覆盖表, 不触碰 skill 目录与文件。
+    func assign(_ item: SkillItem, to category: String) {
+        overrides[item.dir] = category
+        saveOverrides()
+        applyOverridesInPlace()
+        actionMsg = "\(item.dir) → \(category)"
+    }
+
+    /// 恢复某个 skill 为内置规则判定的分类
+    func resetCategory(_ item: SkillItem) {
+        overrides.removeValue(forKey: item.dir)
+        saveOverrides()
+        scan()
+        actionMsg = "\(item.dir) 已恢复默认分类"
+    }
+
+    func addCategory(_ name: String) {
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !n.isEmpty, !assignableCategories.contains(n) else { return }
+        customCategories.append(n)
+        saveOverrides()
+        actionMsg = "已新建分类「\(n)」"
+    }
+
+    /// 重命名分类: 同步改写所有指向它的覆盖项
+    func renameCategory(_ old: String, to new: String) {
+        let n = new.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !n.isEmpty, n != old, !Self.tailCategories.contains(old) else { return }
+        // 原本靠内置规则落在 old 的 skill, 也要显式钉到新名字, 否则会弹回旧分类
+        for i in items where i.category == old { overrides[i.dir] = n }
+        for (k, v) in overrides where v == old { overrides[k] = n }
+        customCategories.removeAll { $0 == old }
+        if !customCategories.contains(n) && !assignableCategories.contains(n) {
+            customCategories.append(n)
+        }
+        saveOverrides()
+        applyOverridesInPlace()
+        actionMsg = "「\(old)」已改名为「\(n)」"
+    }
+
+    /// 删除分类: 只清映射, 成员回落到内置规则判定的分类。skill 本身不受任何影响。
+    func deleteCategory(_ name: String) {
+        guard !Self.tailCategories.contains(name) else { return }
+        for (k, v) in overrides where v == name { overrides.removeValue(forKey: k) }
+        customCategories.removeAll { $0 == name }
+        saveOverrides()
+        scan()
+        actionMsg = "已删除分类「\(name)」, 成员回落到默认分类"
+    }
+
+    /// 不重扫磁盘, 直接按覆盖表刷新内存里的 category(改分类是纯视图操作, 无需 IO)
+    private func applyOverridesInPlace() {
+        for idx in items.indices {
+            let it = items[idx]
+            guard !Self.tailCategories.contains(it.origin) || it.origin == "启用" else { continue }
+            if it.origin == "启用", let c = overrides[it.dir] { items[idx].category = c }
+        }
+    }
+
     static let root = NSHomeDirectory() + "/.claude/skills"
     static let disabledRoot = NSHomeDirectory() + "/.claude/skills-disabled"
     /// 归档区: 确认不再使用, 移出扫描范围但保留可恢复
@@ -107,9 +207,14 @@ final class SkillsViewModel: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = Self.performScan()
             DispatchQueue.main.async {
-                self?.items = result
-                self?.loading = false
-                self?.lastScan = Date()
+                guard let self = self else { return }
+                // 覆盖表只作用于启用中的 skill; 归档/分享/禁用保持来源分类不被改写
+                self.items = result.map { it -> SkillItem in
+                    guard it.origin == "启用", let c = self.overrides[it.dir] else { return it }
+                    var m = it; m.category = c; return m
+                }
+                self.loading = false
+                self.lastScan = Date()
             }
         }
     }
@@ -532,6 +637,10 @@ struct SkillsBoardView: View {
     @State private var detailItem: SkillItem? = nil     // 点击卡片 -> 右侧详情
     @State private var confirmDisable: String? = nil
     @State private var hovered: String? = nil
+    @State private var newCategoryFor: SkillItem? = nil   // 触发"新建分类并移入"的 skill
+    @State private var newCategoryName = ""
+    @State private var renamingCategory: String? = nil    // 正在重命名的分类
+    @State private var renameText = ""
 
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: popoverMode ? 208 : 236,
@@ -556,7 +665,38 @@ struct SkillsBoardView: View {
         .frame(minWidth: popoverMode ? 0 : 700, minHeight: popoverMode ? 0 : 540)
         .focusEffectDisabled()
         .background(theme.current.background.ignoresSafeArea())
-        .onAppear { if vm.items.isEmpty { vm.scan() } }
+        .onAppear {
+            if vm.items.isEmpty { vm.loadOverrides(); vm.scan() }
+        }
+        // 新建分类并把该 skill 移入
+        .alert("新建分类", isPresented: Binding(
+            get: { newCategoryFor != nil },
+            set: { if !$0 { newCategoryFor = nil } })) {
+            TextField("分类名", text: $newCategoryName)
+            Button("创建并移入") {
+                if let it = newCategoryFor {
+                    let n = newCategoryName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !n.isEmpty { vm.addCategory(n); vm.assign(it, to: n) }
+                }
+                newCategoryFor = nil
+            }
+            Button("取消", role: .cancel) { newCategoryFor = nil }
+        } message: {
+            Text(newCategoryFor.map { "把「\($0.dir)」移入新分类" } ?? "")
+        }
+        // 重命名分类
+        .alert("重命名分类", isPresented: Binding(
+            get: { renamingCategory != nil },
+            set: { if !$0 { renamingCategory = nil } })) {
+            TextField("新名称", text: $renameText)
+            Button("确定") {
+                if let old = renamingCategory { vm.renameCategory(old, to: renameText) }
+                renamingCategory = nil
+            }
+            Button("取消", role: .cancel) { renamingCategory = nil }
+        } message: {
+            Text(renamingCategory.map { "「\($0)」下的所有 skill 会一起改到新名称" } ?? "")
+        }
     }
 
     private var gridArea: some View {
@@ -682,6 +822,36 @@ struct SkillsBoardView: View {
             }
         }
         .onHover { hovered = $0 ? item.dir : (hovered == item.dir ? nil : hovered) }
+        .contextMenu { categoryMenu(item) }
+    }
+
+    /// 右键菜单: 改分类。仅写外置覆盖表, 不动 SKILL.md, 因此不影响 skill 实际可用性。
+    @ViewBuilder
+    private func categoryMenu(_ item: SkillItem) -> some View {
+        if item.origin == "启用" {
+            Text("当前: \(item.category)")
+            Divider()
+            ForEach(vm.assignableCategories, id: \.self) { c in
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 1.0)) {
+                        vm.assign(item, to: c)
+                    }
+                } label: {
+                    // 勾选当前分类, 避免误点重复设置
+                    Text(c == item.category ? "✓ \(c)" : "   \(c)")
+                }
+            }
+            Divider()
+            Button("新建分类并移入…") { newCategoryFor = item; newCategoryName = "" }
+            if vm.overrides[item.dir] != nil {
+                Button("恢复默认分类") { vm.resetCategory(item) }
+            }
+        } else {
+            Text("\(item.origin) 的 skill 不参与分类调整")
+        }
+        Divider()
+        Button("打开 SKILL.md") { vm.openSkillMD(item) }
+        Button("在 Finder 中显示") { vm.revealInFinder(item) }
     }
 
     private func cardFill(_ item: SkillItem, isHover: Bool, isSel: Bool) -> Color {
@@ -932,6 +1102,22 @@ struct SkillsBoardView: View {
             Spacer()
         }
         .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 7)
+        .contentShape(Rectangle())
+        .contextMenu { sectionMenu(title) }
+    }
+
+    /// 分组标题右键: 就地改名/删除分类, 免得再去别处找入口。
+    /// 删除只清覆盖映射 —— 成员回落到内置规则判定的分类, skill 文件一律不动。
+    @ViewBuilder
+    private func sectionMenu(_ title: String) -> some View {
+        if title == "需要处理" || SkillsViewModel.tailCategories.contains(title) {
+            Text("「\(title)」是系统分组, 不可改名或删除")
+        } else {
+            Button("重命名「\(title)」…") { renamingCategory = title; renameText = title }
+            Button("删除「\(title)」") { vm.deleteCategory(title) }
+            Divider()
+            Text("删除仅解除分类归属, 不会删除任何 skill")
+        }
     }
 
     // MARK: 复用组件
