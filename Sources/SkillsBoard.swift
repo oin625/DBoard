@@ -300,8 +300,12 @@ final class SkillsViewModel: ObservableObject {
         if d.hasPrefix("luban-") { return "Luban" }
         if d.contains("animation") || d.contains("design") || d.contains("canvas")
             || d == "prototype" || d == "pick-ui-library" { return "设计/动画" }
-        if d.hasPrefix("superpowers-") || d.contains("skill") || d.contains("plugin")
-            || d.contains("subagent") { return "元技能" }
+        // 元技能 = 管理 skill/agent 本身的技能。用白名单而非 contains("skill"),
+        // 否则 playwright-skill 这类"名字带 skill 但实际是工具"的会被误分类。
+        let meta: Set<String> = ["create-skill", "create-skill-ui", "create-plugin",
+                                 "create-subagent", "skills-gallery", "luban-skill-router",
+                                 "local-skills-bridge", "dingtalk-skill", "better-harness"]
+        if meta.contains(d) || d.hasPrefix("superpowers-") { return "元技能" }
         if d.contains("obsidian") || d.contains("wiki") || d.contains("memory") { return "知识库" }
         return "其他"
     }

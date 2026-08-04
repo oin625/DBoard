@@ -578,11 +578,48 @@ struct SysMonView: View {
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(theme.current.textMuted)
             }
-            if !ev.culprits.isEmpty {
+            // B: 当时在干什么 —— 比进程名更能唤起记忆
+            if !ev.frontApp.isEmpty {
+                HStack(spacing: 4) {
+                    Image(systemName: "macwindow").font(.system(size: 9))
+                    Text(ev.frontTitle.isEmpty
+                         ? "当时在 " + ev.frontApp
+                         : "当时在 " + ev.frontApp + " — " + ev.frontTitle)
+                        .font(fm.font(11))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(theme.current.textSecondary)
+                .padding(.leading, 14)
+            }
+            // A: 什么变了 —— 相对60秒前基线涨得最多的进程
+            if !ev.deltas.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(ev.deltas) { d in
+                        if !d.text.isEmpty {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.up.right")
+                                    .font(.system(size: 8, weight: .bold))
+                                Text(d.text)
+                                    .font(.system(size: 11))
+                                    .lineLimit(1)
+                            }
+                            .foregroundStyle(Color(hex: "#c8863c"))
+                        }
+                    }
+                }
+                .textSelection(.enabled)
+                .padding(.leading, 14)
+            } else if !ev.culprits.isEmpty {
+                // 兼容旧数据
                 Text("当时占用: " + ev.culprits)
                     .font(fm.font(11))
-                    .foregroundStyle(theme.current.textSecondary.opacity(0.9))
-                    .textSelection(.enabled)
+                    .foregroundStyle(theme.current.textMuted)
+                    .lineLimit(2)
+                    .padding(.leading, 14)
+            } else if ev.frontApp.isEmpty {
+                Text("未抓到变化(卡顿太短或刚启动无基线)")
+                    .font(fm.font(10))
+                    .foregroundStyle(theme.current.textMuted)
                     .padding(.leading, 14)
             }
         }
