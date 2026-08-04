@@ -183,8 +183,12 @@ final class SkillsViewModel: ObservableObject {
                 it.health = .broken
                 it.problems.append("frontmatter 缺 name 字段")
             } else if it.name != d {
-                it.health = min(it.health, .broken)
-                it.problems.append("name「\(it.name)」与目录名不符, 加载会错乱")
+                // 归档/分享副本只是同一份 skill 的另一份拷贝, 目录名可以不同,
+                // 它们不参与本机路由, 不构成"加载会错乱"的问题。
+                if it.origin == "启用" {
+                    it.health = min(it.health, .broken)
+                    it.problems.append("name「\(it.name)」与目录名不符, 加载会错乱")
+                }
             }
             if it.desc.isEmpty {
                 it.health = .broken
@@ -379,9 +383,22 @@ final class SkillsViewModel: ObservableObject {
     }
 
     private static var cliCache: [String: Bool] = [:]
+    /// GUI App 继承的是 launchd 的最小 PATH, 不含 ~/.zshrc 里 export 的目录 ——
+    /// 直接 /bin/sh -c "command -v x" 会把 brew / ~/.local/bin / ~/.qoderwork/bin
+    /// 里的命令全判成"未安装"。故显式补齐常见安装位置, 并兜底走一次登录 shell。
     private static func commandExists(_ c: String) -> Bool {
         if let v = cliCache[c] { return v }
-        let out = runCmd("/bin/sh", ["-c", "command -v \(c) 2>/dev/null || ls ~/.local/bin/\(c) 2>/dev/null"])
+        let home = NSHomeDirectory()
+        let extraDirs = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin",
+                         home + "/.local/bin", home + "/.qoderwork/bin",
+                         home + "/.nvm/versions/node/v16.20.2/bin"]
+        // ① 直接看文件是否存在(最快, 无需起 shell)
+        for d in extraDirs where FileManager.default.isExecutableFile(atPath: d + "/" + c) {
+            cliCache[c] = true
+            return true
+        }
+        // ② 兜底: 用登录 shell 查一次, 覆盖 .zshrc 里自定义的 PATH
+        let out = runCmd("/bin/zsh", ["-lic", "command -v \(c) 2>/dev/null"])
         let exists = !out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         cliCache[c] = exists
         return exists
