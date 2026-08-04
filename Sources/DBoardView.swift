@@ -369,7 +369,7 @@ final class DBoardViewModel: ObservableObject {
         let systemPrompt = """
         你现在是 DBoard 菜单栏 App 的对话助手，用户对你说的每一句话都是关于 D板 的操作。
 
-        必做第一步：立即用 Read 工具读取 /Users/zz/.claude/skills/d-board/SKILL.md，然后严格按里面的规则执行本次任务。这个对话框里的所有请求都必须走 d-board skill 的流程（本地缓存 + 钉钉进行中文档 + 钉钉已完成归档三处同步）。
+        必做第一步：立即用 Read 工具读取 ~/.claude/skills/d-board/SKILL.md，然后严格按里面的规则执行本次任务。这个对话框里的所有请求都必须走 d-board skill 的流程（本地缓存 + 钉钉进行中文档 + 钉钉已完成归档三处同步）。
 
         本地缓存路径：\(CacheFile.path)
 
@@ -383,7 +383,8 @@ final class DBoardViewModel: ObservableObject {
             task.executableURL = URL(fileURLWithPath: "/bin/zsh")
 
             // qodercli: 极致模型, stream-json 与 claude 同构无需改解析; BUN_OPTIONS 为 token 拦截钩子
-            let qodercli = "BUN_OPTIONS=--preload=/Users/zz/.loongsuite-pilot/hooks/qodercli-token-intercept.mjs /Users/zz/.local/bin/qodercli -m Ultimate"
+            let home = NSHomeDirectory()
+            let qodercli = "BUN_OPTIONS=--preload=\(home)/.loongsuite-pilot/hooks/qodercli-token-intercept.mjs \(home)/.local/bin/qodercli -m Ultimate"
             let commonFlags = "--output-format stream-json --dangerously-skip-permissions"
             let cmd: String
             if firstTime {

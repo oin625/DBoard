@@ -138,11 +138,11 @@ final class SysMonViewModel: ObservableObject {
 
     private static func aiText(_ prompt: String) -> String? {
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/Users/zz/.local/bin/qodercli")
+        proc.executableURL = URL(fileURLWithPath: NSHomeDirectory() + "/.local/bin/qodercli")
         proc.arguments = ["-m", "Efficient", "--tools", "", "-p", prompt]
         var env = ProcessInfo.processInfo.environment
-        env["BUN_OPTIONS"] = "--preload=/Users/zz/.loongsuite-pilot/hooks/qodercli-token-intercept.mjs"
-        env["PATH"] = (env["PATH"] ?? "") + ":/Users/zz/.local/bin:/opt/homebrew/bin"
+        env["BUN_OPTIONS"] = "--preload=" + NSHomeDirectory() + "/.loongsuite-pilot/hooks/qodercli-token-intercept.mjs"
+        env["PATH"] = (env["PATH"] ?? "") + ":" + NSHomeDirectory() + "/.local/bin:/opt/homebrew/bin"
         proc.environment = env
         let pipe = Pipe()
         proc.standardOutput = pipe
@@ -353,6 +353,7 @@ final class SysMonViewModel: ObservableObject {
 
 struct SysMonView: View {
     var compactHeader: Bool = false   // popover 模式: 无红绿灯, 头部不留位
+    var popoverMode: Bool = false     // popover: 高度自适应内容, 不撑 minHeight
     @State private var confirmKillPid: Int? = nil
     @State private var showDetail = false
     @State private var confirmClear = false
@@ -396,7 +397,7 @@ struct SysMonView: View {
                 .padding(14)
             }
         }
-        .frame(minWidth: 560, minHeight: 420)
+        .frame(minWidth: popoverMode ? 0 : 560, minHeight: popoverMode ? 0 : 420)
         .focusEffectDisabled()
         .background(theme.current.background.ignoresSafeArea())
         .onChange(of: vm.level) { _, new in
@@ -793,29 +794,67 @@ final class SysMonWindowController {
     static let shared = SysMonWindowController()
     private var window: NSWindow?
     private var popover: NSPopover?
+    private var clickMonitor: Any?
+    private var keyMonitor: Any?
     private let vm = SysMonViewModel()
 
     /// 菜单栏入口: 图标正下方展开, 点外部自动收起
+    /// 高度自适应内容(不写死), 宽度 560 —— 720 太宽且内容撑不满会留大片空白
     func togglePopover(relativeTo button: NSStatusBarButton) {
         if let pop = popover, pop.isShown {
-            pop.performClose(nil)
+            closePopover()
             return
         }
         vm.start()
         let pop = NSPopover()
         pop.behavior = .transient
-        pop.contentSize = NSSize(width: 720, height: 620)
-        pop.contentViewController = NSHostingController(rootView:
-            SysMonView(compactHeader: true)
+        pop.animates = true
+        // 高度上限 = 屏幕可用高度的 72%, 内容超出由内部 ScrollView 滚动
+        // (不能用 sizingOptions=.preferredContentSize: 展开归因后 popover 会长到屏幕外,
+        //  ScrollView 永远拿不到"超出可视区"状态 -> 完全滚不动)
+        let screenH = (button.window?.screen ?? NSScreen.main)?.visibleFrame.height ?? 900
+        let popH = min(max(screenH * 0.72, 420), 860)
+        let host = NSHostingController(rootView:
+            SysMonView(compactHeader: true, popoverMode: true)
                 .environmentObject(vm)
                 .environmentObject(ThemeManager.shared)
                 .environmentObject(FontManager.shared)
-                .frame(width: 720, height: 620))
+                .frame(width: 560, height: popH))
+        pop.contentSize = NSSize(width: 560, height: popH)
+        pop.contentViewController = host
         pop.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover = pop
-        NotificationCenter.default.addObserver(forName: NSPopover.didCloseNotification, object: pop, queue: .main) { [weak self] _ in
-            self?.vm.pause()   // 收起即停采样(窗口若开着会由窗口路径重新start)
+
+        // .transient 在 ScrollView 抢焦点后可能失效 —— 显式监听全局点击兜底
+        clickMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            guard let self = self, let p = self.popover, p.isShown else { return }
+            DispatchQueue.main.async { self.closePopover() }
         }
+        // Esc 也收起
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            if e.keyCode == 53, let p = self?.popover, p.isShown {
+                self?.closePopover()
+                return nil
+            }
+            return e
+        }
+        NotificationCenter.default.addObserver(forName: NSPopover.didCloseNotification, object: pop, queue: .main) { [weak self] _ in
+            self?.teardownMonitors()
+            self?.vm.pause()   // 收起即停采样
+        }
+    }
+
+    private func closePopover() {
+        popover?.performClose(nil)
+        popover = nil
+        teardownMonitors()
+        vm.pause()
+    }
+
+    private func teardownMonitors() {
+        if let m = clickMonitor { NSEvent.removeMonitor(m); clickMonitor = nil }
+        if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
     }
 
     func show() {

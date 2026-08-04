@@ -698,11 +698,11 @@ struct TechScoutCard: View {
     /// 单次 qodercli 纯文本调用(Efficient, 禁工具), 失败返回 nil
     private static func aiText(_ prompt: String) -> String? {
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/Users/zz/.local/bin/qodercli")
+        proc.executableURL = URL(fileURLWithPath: NSHomeDirectory() + "/.local/bin/qodercli")
         proc.arguments = ["-m", "Efficient", "--tools", "", "-p", prompt]
         var env = ProcessInfo.processInfo.environment
-        env["BUN_OPTIONS"] = "--preload=/Users/zz/.loongsuite-pilot/hooks/qodercli-token-intercept.mjs"
-        env["PATH"] = (env["PATH"] ?? "") + ":/Users/zz/.local/bin:/opt/homebrew/bin"
+        env["BUN_OPTIONS"] = "--preload=" + NSHomeDirectory() + "/.loongsuite-pilot/hooks/qodercli-token-intercept.mjs"
+        env["PATH"] = (env["PATH"] ?? "") + ":" + NSHomeDirectory() + "/.local/bin:/opt/homebrew/bin"
         proc.environment = env
         let pipe = Pipe()
         proc.standardOutput = pipe
