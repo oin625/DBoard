@@ -24,6 +24,7 @@ struct SkillItem: Identifiable {
     var problems: [String] = []    // 硬性问题(影响加载)
     var hints: [String] = []       // 软性提示
     var missingCLI: [String] = []  // 依赖但未安装的命令
+    var external: Bool = false     // 第三方插件(marketplace 安装), 描述由上游维护, 本地改动会被覆盖
     var manualOnly: Bool = false   // frontmatter 声明 disable-model-invocation: 只能手动唤起
     var hardRefs: [String] = []    // 硬依赖我的 skill(写死了我的路径, 禁用即崩)
     var mentionCount: Int = 0      // 仅正文提及我的次数(参考值, 不作风险依据)
@@ -179,9 +180,11 @@ final class SkillsViewModel: ObservableObject {
             // 仅手动调用的 skill(disable-model-invocation)不参与"触发词"检查 ——
             // 它本就不该被自动唤起, 没触发词是设计意图而非缺陷。
             it.manualOnly = front.contains("disable-model-invocation: true")
+            it.external = Self.isExternalPlugin(d)
 
             // ===== 软性检查 =====
-            if !it.desc.isEmpty {
+            // 第三方插件的 description 由上游维护, 本地改了会被插件更新覆盖, 不提示。
+            if !it.desc.isEmpty && !it.external {
                 if it.desc.count < 40 {
                     it.hints.append("description 仅 \(it.desc.count) 字, 过短会导致 Qoder 匹配不准")
                 }
@@ -323,6 +326,28 @@ final class SkillsViewModel: ObservableObject {
         let exists = !out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         cliCache[c] = exists
         return exists
+    }
+
+    /// 第三方插件: 由 marketplace 安装并在 plugins/cache 下有同名副本 ——
+    /// 其 description 属上游资产, 本地修改会在插件升级时丢失, 因此不做描述质量检查。
+    private static func isExternalPlugin(_ dir: String) -> Bool {
+        let fm = FileManager.default
+        let cacheRoot = NSHomeDirectory() + "/.claude/plugins/cache"
+        guard let markets = try? fm.contentsOfDirectory(atPath: cacheRoot) else { return false }
+        for market in markets {
+            let marketPath = cacheRoot + "/" + market
+            guard let plugins = try? fm.contentsOfDirectory(atPath: marketPath) else { continue }
+            for plugin in plugins {
+                let base = marketPath + "/" + plugin
+                guard let versions = try? fm.contentsOfDirectory(atPath: base) else { continue }
+                for v in versions {
+                    if fm.fileExists(atPath: base + "/" + v + "/skills/" + dir + "/SKILL.md") {
+                        return true
+                    }
+                }
+            }
+        }
+        return false
     }
 
     /// 是否声明了触发条件。除英文 Use when / 中文"当用户说"外,

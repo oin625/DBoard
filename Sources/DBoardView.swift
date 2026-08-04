@@ -714,12 +714,6 @@ struct HeaderView: View {
                     .foregroundStyle(theme.current.textTertiary)
                     .contentTransition(.numericText())
             }
-            HeaderIconButton(icon: "wand.and.stars", help: "Skills 看板") {
-                NotificationCenter.default.post(name: .init("openSkillsBoard"), object: nil)
-            }
-            HeaderIconButton(icon: "gauge.with.needle", help: "系统监控") {
-                NotificationCenter.default.post(name: .init("openSysMon"), object: nil)
-            }
             HeaderIconButton(icon: "chart.line.uptrend.xyaxis", help: "A股行情") {
                 NotificationCenter.default.post(name: .init("openETF"), object: nil)
             }

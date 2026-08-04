@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var sysStatusItem: NSStatusItem!
     private var sysMonTimer: Timer?
     private var prevSysSwap: (ins: UInt64, outs: UInt64, at: Date)?
+    private var skillsStatusItem: NSStatusItem!
     private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -55,6 +56,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 sb.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
                 sb.target = self
                 sb.action = #selector(openSysMonFromStatusBar)
+            }
+            // Skills 看板独立菜单栏入口
+            skillsStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+            if let kb = skillsStatusItem.button {
+                kb.image = NSImage(systemSymbolName: "wand.and.stars", accessibilityDescription: "Skills 看板")
+                kb.imagePosition = .imageOnly
+                kb.toolTip = "Skills 看板"
+                kb.target = self
+                kb.action = #selector(openSkillsFromStatusBar)
             }
             let smt = Timer(timeInterval: 5, repeats: true) { [weak self] _ in self?.updateSysStatusTitle() }
             RunLoop.main.add(smt, forMode: .common)
@@ -146,6 +156,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    @objc private func openSkillsFromStatusBar() {
+        hidePanelWindow()
+        SkillsBoardWindowController.shared.show()
+    }
+
     @objc private func openSysMonFromStatusBar() {
         guard let btn = sysStatusItem?.button else { return }
         SysMonWindowController.shared.togglePopover(relativeTo: btn)
@@ -206,16 +221,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         SysHistoryStore.shared.record(level: severe ? 2 : (mild ? 1 : 0),
                                       rate: rate, lpc: lpc, freePct: freePct, swapGB: swapGB)
 
-        let dot: String
-        let color: NSColor
-        if severe { dot = "●"; color = .systemRed }
-        else if mild { dot = "●"; color = .systemOrange }
-        else { dot = "●"; color = .systemGreen }
+        let color: NSColor = severe ? .systemRed : (mild ? .systemOrange : .systemGreen)
 
-        sb.attributedTitle = NSAttributedString(string: " \(dot)", attributes: [
-            .foregroundColor: color,
-            .font: NSFont.systemFont(ofSize: 9, weight: .bold),
-        ])
+        // 不显示绿点: 流畅时保持素净, 只在亮灯时给图标本身着色
+        sb.attributedTitle = NSAttributedString(string: "")
+        if severe || mild {
+            sb.contentTintColor = color
+        } else {
+            sb.contentTintColor = nil    // 恢复系统默认(随明暗主题)
+        }
         sb.toolTip = severe || mild
             ? String(format: "卡顿: 负载 %.1f/核, 换页 %.0f页/秒", lpc, rate)
             : String(format: "流畅: 负载 %.1f/核, 零换页", lpc)
