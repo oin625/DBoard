@@ -667,6 +667,10 @@ struct SkillsBoardView: View {
     @State private var renamingCategory: String? = nil    // 正在重命名的分类
     @State private var renameText = ""
     @State private var tearProgress: CGFloat = 0          // popover 下拉撕出窗口的进度 0~1
+    /// 归档组默认折叠 —— 它有十几个成员却几乎不看, 展开会把常用分类挤到屏幕外
+    @State private var archiveExpanded = false
+
+    static let archiveSection = "已归档 / 分享版"
 
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: popoverMode ? 208 : 236,
@@ -730,12 +734,22 @@ struct SkillsBoardView: View {
             VStack(alignment: .leading, spacing: 0) {
                 if vm.loading && vm.items.isEmpty { loadingState }
                 ForEach(grouped, id: \.0) { g in
-                    sectionHeader(g.0, g.1.count)
-                    LazyVGrid(columns: columns, spacing: 10) {
-                        ForEach(g.1) { item in card(item) }
+                    let isArchive = g.0 == Self.archiveSection
+                    // 用筛选条主动筛到归档/分享时视为"就是要看它", 强制展开,
+                    // 否则会出现"点了分类却一片空白"
+                    let forced = SkillsViewModel.tailCategories.contains(vm.categoryFilter)
+                    if isArchive {
+                        collapsibleHeader(g.0, g.1.count)
+                    } else {
+                        sectionHeader(g.0, g.1.count)
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 16)
+                    if !isArchive || archiveExpanded || forced {
+                        LazyVGrid(columns: columns, spacing: 10) {
+                            ForEach(g.1) { item in card(item) }
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 16)
+                    }
                 }
                 if !vm.loading && vm.filtered.isEmpty && !vm.items.isEmpty { emptyState }
             }
@@ -750,20 +764,27 @@ struct SkillsBoardView: View {
         var map: [String: [SkillItem]] = [:]
         let bad = items.filter { $0.health != .healthy }
         if !bad.isEmpty { order.append("需要处理"); map["需要处理"] = bad }
-        var tail: [String] = []
+        // 归档与分享合并成一组: 二者都是"移出使用范围、留档备查", 没必要分两栏各占一屏
+        var archived: [SkillItem] = []
         for i in items where i.health == .healthy {
-            let isTail = SkillsViewModel.tailCategories.contains(i.category)
-            if map[i.category] == nil {
-                if isTail { tail.append(i.category) } else { order.append(i.category) }
+            if SkillsViewModel.tailCategories.contains(i.category) {
+                archived.append(i)
+                continue
             }
+            if map[i.category] == nil { order.append(i.category) }
             map[i.category, default: []].append(i)
         }
-        // 已归档 / 分享版 沉到列表末尾, 保持与筛选条一致的固定次序
-        tail.sort {
-            (SkillsViewModel.tailCategories.firstIndex(of: $0) ?? 99)
-                < (SkillsViewModel.tailCategories.firstIndex(of: $1) ?? 99)
+        var result = order.map { ($0, map[$0] ?? []) }
+        if !archived.isEmpty {
+            // 分享版排在归档前面(数量少、更可能要找)，其余按名字稳定排序
+            archived.sort {
+                let ra = $0.origin == "分享版" ? 0 : 1
+                let rb = $1.origin == "分享版" ? 0 : 1
+                return ra != rb ? ra < rb : $0.dir < $1.dir
+            }
+            result.append((Self.archiveSection, archived))
         }
-        return (order + tail).map { ($0, map[$0] ?? []) }
+        return result
     }
 
     // MARK: 卡片
@@ -1174,6 +1195,34 @@ struct SkillsBoardView: View {
         .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 7)
         .contentShape(Rectangle())
         .contextMenu { sectionMenu(title) }
+    }
+
+    /// 归档组标题: 整行可点, 箭头随状态旋转 —— 折叠态也要让人一眼看出"里面有东西"
+    private func collapsibleHeader(_ title: String, _ n: Int) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(theme.current.textMuted.opacity(0.7))
+                .rotationEffect(.degrees(archiveExpanded ? 90 : 0))
+            Text(title)
+                .font(.system(size: 10, weight: .semibold)).tracking(0.6)
+                .foregroundStyle(theme.current.textMuted)
+            Text("\(n)")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(theme.current.textMuted.opacity(0.7))
+            if !archiveExpanded {
+                Text("已折叠").font(fm.font(9))
+                    .foregroundStyle(theme.current.textMuted.opacity(0.5))
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 7)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.spring(response: 0.3, dampingFraction: 1.0)) {
+                archiveExpanded.toggle()
+            }
+        }
     }
 
     /// 分组标题右键: 就地改名/删除分类, 免得再去别处找入口。
