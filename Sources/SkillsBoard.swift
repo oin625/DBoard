@@ -641,6 +641,7 @@ struct SkillsBoardView: View {
     @State private var newCategoryName = ""
     @State private var renamingCategory: String? = nil    // 正在重命名的分类
     @State private var renameText = ""
+    @State private var tearProgress: CGFloat = 0          // popover 下拉撕出窗口的进度 0~1
 
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: popoverMode ? 208 : 236,
@@ -1029,6 +1030,36 @@ struct SkillsBoardView: View {
         }
         .padding(.leading, popoverMode ? 16 : 84).padding(.trailing, 16)
         .padding(.top, popoverMode ? 12 : 8).padding(.bottom, 10)
+        .contentShape(Rectangle())
+        // popover 顶部往下拖 => 撕成独立窗口。阈值 32pt: 小于它的位移多半是误触/手抖,
+        // 且只认向下(dy>0) —— 向上拖没有语义, 避免与内容滚动抢手势。
+        .gesture(popoverMode
+            ? DragGesture(minimumDistance: 12)
+                .onChanged { g in
+                    tearProgress = max(0, min(1, g.translation.height / 32))
+                }
+                .onEnded { g in
+                    if g.translation.height > 32 {
+                        NotificationCenter.default.post(name: .init("tearOffSkillsBoard"), object: nil)
+                    }
+                    tearProgress = 0
+                }
+            : nil)
+        // 拖拽中给出可见反馈: 顶部渐显一条提示, 让人知道"松手会变窗口"
+        .overlay(alignment: .bottom) {
+            if tearProgress > 0.05 {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.down.left.and.arrow.up.right")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text(tearProgress >= 1 ? "松手变为独立窗口" : "继续下拉…")
+                        .font(fm.font(10))
+                }
+                .foregroundStyle(theme.current.accentPrimary)
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(Capsule().fill(theme.current.accentPrimary.opacity(0.12)))
+                .opacity(Double(tearProgress))
+            }
+        }
     }
 
     private func statChip(_ n: String, _ label: String, _ c: Color) -> some View {
@@ -1270,6 +1301,20 @@ final class SkillsBoardWindowController {
         }
         NotificationCenter.default.addObserver(forName: NSPopover.didCloseNotification, object: pop, queue: .main) { [weak self] _ in
             self?.teardownMonitors()
+        }
+        installTearOffObserver()
+    }
+
+    /// 下拉撕出独立窗口: 复用同一个 vm, 搜索词/分类筛选/已展开的详情全部保留,
+    /// 用户感知上就是"同一个面板换了个容器", 不是重新打开。
+    private var tearObserver: Any?
+    private func installTearOffObserver() {
+        guard tearObserver == nil else { return }
+        tearObserver = NotificationCenter.default.addObserver(
+            forName: .init("tearOffSkillsBoard"), object: nil, queue: .main) { [weak self] _ in
+            guard let self = self else { return }
+            self.closePopover()
+            self.show()
         }
     }
 

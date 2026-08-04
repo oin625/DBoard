@@ -225,16 +225,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         SysHistoryStore.shared.record(level: severe ? 2 : (mild ? 1 : 0),
                                       rate: rate, lpc: lpc, freePct: freePct, swapGB: swapGB)
 
-        let color: NSColor = severe ? .systemRed : (mild ? .systemOrange : .systemGreen)
+        // severe/mild 仅用于 tooltip 和历史采样, 不再影响图标颜色
 
-        // 始终保持 isTemplate = true:
-        //   流畅: contentTintColor = nil → 系统自动按菜单栏明暗给白/黑
-        //   亮灯: contentTintColor = 红/橙 → 直接在模板图像上着色(不用关 isTemplate)
+        // 图标始终白色(模板图像 + 不设 tint), 不变色
         sb.attributedTitle = NSAttributedString(string: "")
-        sb.contentTintColor = (severe || mild) ? color : nil
         sb.toolTip = severe || mild
             ? String(format: "卡顿: 负载 %.1f/核, 换页 %.0f页/秒", lpc, rate)
-            : String(format: "流畅: 负载 %.1f/核, 零换页", lpc)
+            : String(format: "流畅: 负载 %.1f/核", lpc)
     }
 
     private func showETFWindow() {
