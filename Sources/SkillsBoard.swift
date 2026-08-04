@@ -27,7 +27,7 @@ struct SkillItem: Identifiable {
     /// 实战验证状态: 取自 SKILL.md 正文的「## 实战验证」段 —— 用来区分
     /// "装了但没用过"(未验证) 与 "真跑通过"(已验证), 避免把摆设当能力。
     var verify: String = ""          // 已验证 / 部分验证 / 未验证 / 空(未标注)
-    var origin: String = "启用"      // 启用 / 已禁用 / 已归档 / 分享版
+    var origin: String = "启用"      // 启用 / 已归档 / 分享版
     var external: Bool = false     // 第三方插件(marketplace 安装), 描述由上游维护, 本地改动会被覆盖
     var manualOnly: Bool = false   // frontmatter 声明 disable-model-invocation: 只能手动唤起
     var hardRefs: [String] = []    // 硬依赖我的 skill(写死了我的路径, 禁用即崩)
@@ -159,9 +159,9 @@ final class SkillsViewModel: ObservableObject {
     /// 分享区: 对外分发的副本, 不参与本机路由(避免与自用版描述撞车)
     static let sharedRoot = NSHomeDirectory() + "/.claude/skills-shared"
 
-    /// 非启用态的分类(已归档/分享版/已禁用)不是日常关注对象, 固定排在最后,
+    /// 非启用态的分类(已归档/分享版)不是日常关注对象, 固定排在最后,
     /// 否则会因数量大而挤到筛选条前排, 把常用业务分类推到"更多"里。
-    static let tailCategories = ["已禁用", "分享版", "已归档"]
+    static let tailCategories = ["分享版", "已归档"]
 
     var categories: [(String, Int)] {
         var c: [String: Int] = [:]
@@ -260,9 +260,12 @@ final class SkillsViewModel: ObservableObject {
         for (d, p, en) in dirs {
             var it = SkillItem(dir: d, path: p)
             it.enabled = en
-            if p.hasPrefix(Self.archiveRoot)       { it.origin = "已归档" }
-            else if p.hasPrefix(Self.sharedRoot)   { it.origin = "分享版" }
-            else if p.hasPrefix(Self.disabledRoot) { it.origin = "已禁用" }
+            // skills-disabled 是历史遗留目录, 仍扫描以免漏掉, 但归口显示为"已归档"
+            if p.hasPrefix(Self.archiveRoot) || p.hasPrefix(Self.disabledRoot) {
+                it.origin = "已归档"
+            } else if p.hasPrefix(Self.sharedRoot) {
+                it.origin = "分享版"
+            }
             let sk = p + "/SKILL.md"
 
             if let attrs = try? fm.attributesOfItem(atPath: p) {
@@ -381,17 +384,20 @@ final class SkillsViewModel: ObservableObject {
     // MARK: 动作
 
     /// 禁用: 移到 skills-disabled (可逆, 彻底移出扫描范围)
+    /// 禁用即归档: 统一落到 skills-archive。
+    /// "已禁用"和"已归档"对使用者是同一件事(移出扫描范围、可恢复), 分成两个目录
+    /// 只会让分类多一层无意义的区分。
     func disable(_ item: SkillItem) {
         let fm = FileManager.default
-        try? fm.createDirectory(atPath: Self.disabledRoot, withIntermediateDirectories: true)
-        let dst = Self.disabledRoot + "/" + item.dir
+        try? fm.createDirectory(atPath: Self.archiveRoot, withIntermediateDirectories: true)
+        let dst = Self.archiveRoot + "/" + item.dir
         do {
             if fm.fileExists(atPath: dst) { try fm.removeItem(atPath: dst) }
             try fm.moveItem(atPath: item.path, toPath: dst)
-            actionMsg = "已禁用 \(item.dir)"
+            actionMsg = "已归档 \(item.dir)"
             scan()
         } catch {
-            actionMsg = "禁用失败: \(error.localizedDescription)"
+            actionMsg = "归档失败: \(error.localizedDescription)"
         }
     }
 
@@ -740,7 +746,7 @@ struct SkillsBoardView: View {
             }
             map[i.category, default: []].append(i)
         }
-        // 已归档 / 分享版 / 已禁用 沉到列表末尾, 保持与筛选条一致的固定次序
+        // 已归档 / 分享版 沉到列表末尾, 保持与筛选条一致的固定次序
         tail.sort {
             (SkillsViewModel.tailCategories.firstIndex(of: $0) ?? 99)
                 < (SkillsViewModel.tailCategories.firstIndex(of: $1) ?? 99)
@@ -803,7 +809,7 @@ struct SkillsBoardView: View {
                     }
                     Text("\(item.fileCount) 文件").font(.system(size: 9))
                     if !item.enabled {
-                        Text("已禁用").font(.system(size: 9, weight: .medium))
+                        Text("已归档").font(.system(size: 9, weight: .medium))
                             .foregroundStyle(theme.current.textMuted)
                     }
                     Spacer()
@@ -943,7 +949,7 @@ struct SkillsBoardView: View {
                     if item.mentionCount > 0 {
                         tag("\(item.mentionCount) 处提及", Color(hex: "#8b6fb8").opacity(0.65))
                     }
-                    if !item.enabled { tag("已禁用", theme.current.textMuted) }
+                    if !item.enabled { tag(item.origin, theme.current.textMuted) }
                     Spacer()
                 }
 
@@ -1029,7 +1035,7 @@ struct SkillsBoardView: View {
                 .foregroundStyle(Color(hex: "#5aa86c"))
             }
             if s.disabled > 0 {
-                Text("\(s.disabled) 已禁用").font(fm.font(11)).foregroundStyle(theme.current.textMuted)
+                Text("\(s.disabled) 已归档").font(fm.font(11)).foregroundStyle(theme.current.textMuted)
             }
             Button(action: { vm.scan() }) {
                 Image(systemName: "arrow.clockwise")
@@ -1224,7 +1230,7 @@ struct SkillsBoardView: View {
                     }
                 }
             }) {
-                Text(pending ? "确认禁用" : "禁用")
+                Text(pending ? "确认归档" : "归档")
                     .font(fm.font(11))
                     .foregroundStyle(pending ? .white : Color(hex: "#d94f4f").opacity(0.85))
                     .padding(.horizontal, 9).padding(.vertical, 3.5)
