@@ -294,19 +294,59 @@ final class SkillsViewModel: ObservableObject {
         return nil
     }
 
+    /// 分类：显式白名单优先于前缀/模糊匹配 —— contains("skill")/hasPrefix("superpowers-")
+    /// 这类规则会把"名字像但实际不是"的 skill 归错（如 playwright-skill 是工具、
+    /// superpowers-using-git-worktrees 是开发流程而非元技能）。
     private static func categorize(_ d: String) -> String {
+        // ① 天猫养车业务：除 tmyc- 前缀外, 公司内部平台工具也属此类
+        let tmyc: Set<String> = ["ultra-pre-probe", "dubbo-pre-invoke",
+                                 "gateway-auto-register", "gateway-auto-register-shared",
+                                 "auth-center-menu-export", "prd-login", "yunxiao-bug-fixer"]
+        if d.hasPrefix("tmyc-") || tmyc.contains(d) { return "TMYC" }
+
+        // ② 钉钉 / Luban 插件
         if d.hasPrefix("dingtalk-") || d == "dws" || d == "dws-shared" || d == "mono" { return "钉钉" }
-        if d.hasPrefix("tmyc-") || d == "ultra-pre-probe" || d == "dubbo-pre-invoke" { return "TMYC" }
         if d.hasPrefix("luban-") { return "Luban" }
-        if d.contains("animation") || d.contains("design") || d.contains("canvas")
-            || d == "prototype" || d == "pick-ui-library" { return "设计/动画" }
-        // 元技能 = 管理 skill/agent 本身的技能。用白名单而非 contains("skill"),
-        // 否则 playwright-skill 这类"名字带 skill 但实际是工具"的会被误分类。
+
+        // ③ 元技能 = 管理 skill/agent 资产本身
         let meta: Set<String> = ["create-skill", "create-skill-ui", "create-plugin",
-                                 "create-subagent", "skills-gallery", "luban-skill-router",
-                                 "local-skills-bridge", "dingtalk-skill", "better-harness"]
-        if meta.contains(d) || d.hasPrefix("superpowers-") { return "元技能" }
+                                 "create-subagent", "skills-gallery", "local-skills-bridge",
+                                 "superpowers-writing-skills", "better-harness"]
+        if meta.contains(d) { return "元技能" }
+
+        // ④ 开发方法论 = 怎么做事的规范/流程, 不产出具体产物
+        let method: Set<String> = ["code-discipline", "systematic-debugging", "grill-me",
+                                   "superpowers-receiving-code-review",
+                                   "superpowers-using-git-worktrees",
+                                   "superpowers-finishing-a-development-branch"]
+        if method.contains(d) { return "开发方法论" }
+
+        // ⑤ 开发工具 = 具体的构建/调试/定位工具
+        let devtool: Set<String> = ["ai-java-debugger", "maven-local-environment",
+                                    "codemap-plus", "port-mapping", "vercel-deploy"]
+        if devtool.contains(d) { return "开发工具" }
+
+        // ⑥ 设计/动画
+        if d.contains("animation") || d.contains("design") || d.contains("canvas")
+            || d == "prototype" || d == "pick-ui-library"
+            || d == "tech-architecture-visualizer" { return "设计/动画" }
+
+        // ⑦ 信息获取 = 抓取/调研外部信息
+        let info: Set<String> = ["tech-scout", "last30days", "defuddle", "open"]
+        if info.contains(d) { return "信息获取" }
+
+        // ⑧ 浏览器自动化
+        if d == "ego-browser" || d == "playwright-skill" || d == "trace" || d == "skill" {
+            return "浏览器"
+        }
+
+        // ⑨ 个人效率
+        let personal: Set<String> = ["d-board", "dogfooding", "i-have-adhd", "schedule"]
+        if personal.contains(d) { return "个人效率" }
+
+        // ⑩ 知识库
         if d.contains("obsidian") || d.contains("wiki") || d.contains("memory") { return "知识库" }
+
         return "其他"
     }
 
@@ -441,11 +481,15 @@ struct SkillsBoardView: View {
     @EnvironmentObject var vm: SkillsViewModel
     @EnvironmentObject var theme: ThemeManager
     @EnvironmentObject var fm: FontManager
+    var popoverMode: Bool = false                      // popover: 不撑最小尺寸, 详情面板收窄
     @State private var detailItem: SkillItem? = nil     // 点击卡片 -> 右侧详情
     @State private var confirmDisable: String? = nil
     @State private var hovered: String? = nil
 
-    private let columns = [GridItem(.adaptive(minimum: 236, maximum: 340), spacing: 10)]
+    private var columns: [GridItem] {
+        [GridItem(.adaptive(minimum: popoverMode ? 208 : 236,
+                            maximum: popoverMode ? 300 : 340), spacing: 10)]
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -457,12 +501,12 @@ struct SkillsBoardView: View {
                 if let d = detailItem {
                     Divider().opacity(0.4)
                     detailPane(d)
-                        .frame(width: 300)
+                        .frame(width: popoverMode ? 262 : 300)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
         }
-        .frame(minWidth: 700, minHeight: 540)
+        .frame(minWidth: popoverMode ? 0 : 700, minHeight: popoverMode ? 0 : 540)
         .focusEffectDisabled()
         .background(theme.current.background.ignoresSafeArea())
         .onAppear { if vm.items.isEmpty { vm.scan() } }
@@ -757,8 +801,8 @@ struct SkillsBoardView: View {
             .disabled(vm.loading)
             .help("重新扫描")
         }
-        .padding(.leading, 84).padding(.trailing, 16)
-        .padding(.top, 8).padding(.bottom, 10)
+        .padding(.leading, popoverMode ? 16 : 84).padding(.trailing, 16)
+        .padding(.top, popoverMode ? 12 : 8).padding(.bottom, 10)
     }
 
     private func statChip(_ n: String, _ label: String, _ c: Color) -> some View {
@@ -939,7 +983,64 @@ struct SkillsBoardView: View {
 final class SkillsBoardWindowController {
     static let shared = SkillsBoardWindowController()
     private var window: NSWindow?
+    private var popover: NSPopover?
+    private var clickMonitor: Any?
+    private var keyMonitor: Any?
     private let vm = SkillsViewModel()
+
+    /// 菜单栏入口: 图标正下方展开, 点外部/Esc 自动收起(与系统监控同一套模式)
+    /// 高度给上限而非自适应 —— 自适应会让内容长到屏幕外, ScrollView 拿不到超出状态就滚不动
+    func togglePopover(relativeTo button: NSStatusBarButton) {
+        if let pop = popover, pop.isShown {
+            closePopover()
+            return
+        }
+        let screenH = (button.window?.screen ?? NSScreen.main)?.visibleFrame.height ?? 900
+        let popH = min(max(screenH * 0.72, 420), 860)
+        let popW: CGFloat = 660    // 网格(2列) + 详情面板 262 都能容下
+
+        let pop = NSPopover()
+        pop.behavior = .transient
+        pop.animates = true
+        let host = NSHostingController(rootView:
+            SkillsBoardView(popoverMode: true)
+                .environmentObject(vm)
+                .environmentObject(ThemeManager.shared)
+                .environmentObject(FontManager.shared)
+                .frame(width: popW, height: popH))
+        pop.contentSize = NSSize(width: popW, height: popH)
+        pop.contentViewController = host
+        pop.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover = pop
+        vm.scan()
+
+        clickMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            guard let self = self, let p = self.popover, p.isShown else { return }
+            DispatchQueue.main.async { self.closePopover() }
+        }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            if e.keyCode == 53, let p = self?.popover, p.isShown {
+                self?.closePopover()
+                return nil
+            }
+            return e
+        }
+        NotificationCenter.default.addObserver(forName: NSPopover.didCloseNotification, object: pop, queue: .main) { [weak self] _ in
+            self?.teardownMonitors()
+        }
+    }
+
+    private func closePopover() {
+        popover?.performClose(nil)
+        popover = nil
+        teardownMonitors()
+    }
+
+    private func teardownMonitors() {
+        if let m = clickMonitor { NSEvent.removeMonitor(m); clickMonitor = nil }
+        if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
+    }
 
     func show() {
         if let w = window {

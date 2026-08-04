@@ -51,7 +51,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             // 系统监控独立菜单栏入口: 图标+实时CPU%, 点击直开监控窗口
             sysStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
             if let sb = sysStatusItem.button {
-                sb.image = NSImage(systemSymbolName: "gauge.with.needle", accessibilityDescription: "系统监控")
+                let img = NSImage(systemSymbolName: "gauge.with.needle", accessibilityDescription: "系统监控")
+                img?.isTemplate = true   // 模板图像: 自动随菜单栏明暗反色
+                sb.image = img
                 sb.imagePosition = .imageLeft
                 sb.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
                 sb.target = self
@@ -60,7 +62,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             // Skills 看板独立菜单栏入口
             skillsStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
             if let kb = skillsStatusItem.button {
-                kb.image = NSImage(systemSymbolName: "wand.and.stars", accessibilityDescription: "Skills 看板")
+                let kimg = NSImage(systemSymbolName: "wand.and.stars", accessibilityDescription: "Skills 看板")
+                kimg?.isTemplate = true
+                kb.image = kimg
                 kb.imagePosition = .imageOnly
                 kb.toolTip = "Skills 看板"
                 kb.target = self
@@ -157,8 +161,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @objc private func openSkillsFromStatusBar() {
-        hidePanelWindow()
-        SkillsBoardWindowController.shared.show()
+        guard let btn = skillsStatusItem?.button else { return }
+        SkillsBoardWindowController.shared.togglePopover(relativeTo: btn)
     }
 
     @objc private func openSysMonFromStatusBar() {
@@ -223,13 +227,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         let color: NSColor = severe ? .systemRed : (mild ? .systemOrange : .systemGreen)
 
-        // 不显示绿点: 流畅时保持素净, 只在亮灯时给图标本身着色
+        // 流畅: 模板图像(随菜单栏明暗自动反色, 不设 tint)
+        // 亮灯: 才给 tint 着色 —— contentTintColor 会切断模板反色, 所以只在需要时设
         sb.attributedTitle = NSAttributedString(string: "")
-        if severe || mild {
-            sb.contentTintColor = color
-        } else {
-            sb.contentTintColor = nil    // 恢复系统默认(随明暗主题)
-        }
+        sb.contentTintColor = (severe || mild) ? color : nil
+        sb.image?.isTemplate = !(severe || mild)
         sb.toolTip = severe || mild
             ? String(format: "卡顿: 负载 %.1f/核, 换页 %.0f页/秒", lpc, rate)
             : String(format: "流畅: 负载 %.1f/核, 零换页", lpc)
