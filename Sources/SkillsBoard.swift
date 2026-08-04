@@ -24,6 +24,7 @@ struct SkillItem: Identifiable {
     var problems: [String] = []    // 硬性问题(影响加载)
     var hints: [String] = []       // 软性提示
     var missingCLI: [String] = []  // 依赖但未安装的命令
+    var manualOnly: Bool = false   // frontmatter 声明 disable-model-invocation: 只能手动唤起
     var hardRefs: [String] = []    // 硬依赖我的 skill(写死了我的路径, 禁用即崩)
     var mentionCount: Int = 0      // 仅正文提及我的次数(参考值, 不作风险依据)
     var externalRefs: [String] = [] // 被 crontab/LaunchAgent 引用
@@ -175,16 +176,17 @@ final class SkillsViewModel: ObservableObject {
                 it.problems.append("frontmatter 缺 description, Qoder 无法判断何时触发")
             }
 
+            // 仅手动调用的 skill(disable-model-invocation)不参与"触发词"检查 ——
+            // 它本就不该被自动唤起, 没触发词是设计意图而非缺陷。
+            it.manualOnly = front.contains("disable-model-invocation: true")
+
             // ===== 软性检查 =====
             if !it.desc.isEmpty {
                 if it.desc.count < 40 {
                     it.hints.append("description 仅 \(it.desc.count) 字, 过短会导致 Qoder 匹配不准")
                 }
-                let hasTrigger = it.desc.contains("when") || it.desc.contains("Use ")
-                    || it.desc.contains("当用户") || it.desc.contains("触发")
-                    || it.desc.contains("时使用") || it.desc.contains("用户说")
-                if !hasTrigger {
-                    it.hints.append("description 没写触发条件(如\"当用户说…\"), 可能不会被自动唤起")
+                if !it.manualOnly && !Self.declaresTrigger(desc: it.desc, front: front) {
+                    it.hints.append("description 没写触发条件(如\"当用户说…\"/\"Use when…\"), 可能不会被自动唤起")
                 }
             }
             it.missingCLI = missingCommands(in: txt)
@@ -321,6 +323,18 @@ final class SkillsViewModel: ObservableObject {
         let exists = !out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         cliCache[c] = exists
         return exists
+    }
+
+    /// 是否声明了触发条件。除英文 Use when / 中文"当用户说"外,
+    /// 也认"适用于/用于/场景"这类中文写法, 以及 argument-hint 显式声明调用形式。
+    private static func declaresTrigger(desc: String, front: String) -> Bool {
+        let phrases = ["when", "Use ", "use this skill", "Triggers",
+                       "当用户", "用户说", "用户提到", "触发", "时使用",
+                       "适用于", "用于", "场景", "命令前缀"]
+        for p in phrases where desc.localizedCaseInsensitiveContains(p) { return true }
+        // argument-hint 给出了调用示例, 等同于声明了唤起方式
+        if front.contains("argument-hint") { return true }
+        return false
     }
 
     /// 硬依赖: 正文把目标 skill 的**路径**或**专属环境变量**写死了 —— 禁用后调用方直接失败。
