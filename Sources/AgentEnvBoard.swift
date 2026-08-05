@@ -225,6 +225,17 @@ struct McpBoardView: View {
     @ObservedObject var env: AgentEnvViewModel
     @EnvironmentObject var theme: ThemeManager
     @EnvironmentObject var fm: FontManager
+    @State private var expanded: Set<String> = []
+
+    /// 每个已知 MCP Server 的白话说明 —— 面板的价值就是让人不用去翻文档
+    private static let desc: [String: String] = [
+        "browser-use": "Qoder 内置的浏览器自动化：AI 可以打开网页、点击、填表、截图、看网络请求和控制台。之前抓 GitHub 趋势榜就是它干的。与 ego-browser 的区别：这个是临时浏览器实例，ego 复用你本人的登录态。",
+        "genui": "对话内弹交互式 UI 面板：show_widget 渲染 HTML 小组件（表单/确认框/数据展示），load_guidelines 加载组件规范。",
+        "schedule": "定时任务引擎：让 AI 在指定时间自动执行任务。tech-scout 每天 10 点/14 点的资讯抓取就挂在它上面。",
+        "utools": "你自己配的 uTools 集成（本机 3501 端口）：二维码生成/解码、待办管理、笔记。绿点 = uTools 客户端正在运行。",
+        "computer-use": "桌面 App 自动化：点击/键盘/滚动本地应用程序（非浏览器）。Qoder 在别的项目里注入的，与 ego-browser 互补——ego 管网页，它管桌面。",
+        "codegraph": "Qoder 在代码仓库项目（muse/tesla）里自动注入的代码图谱查询，仅 codegraph_explore 一个工具。与你手动装的 codegraph CLI 同名但相互独立。",
+    ]
 
     var body: some View {
         ScrollView {
@@ -232,7 +243,7 @@ struct McpBoardView: View {
                 Text("MCP Server 由 Qoder 注入或 ~/.qoder/mcp.json 自配, 提供对话内可调用的工具。内置项跨项目聚合(不同项目注入的 server 不同)")
                     .font(fm.font(10)).foregroundStyle(theme.current.textMuted)
                     .padding(.horizontal, 2)
-                Text("● 绿 = HTTP 端点在线 · ● 红 = 探测失败 · ● 灰 = 按会话注入无常驻端口, 无法探测(不代表没用)")
+                Text("● 绿 = HTTP 端点在线 · ● 红 = 探测失败 · ● 灰 = 按会话注入无常驻端口, 无法探测(不代表没用) · 点卡片看说明")
                     .font(fm.font(10)).foregroundStyle(theme.current.textMuted)
                     .padding(.horizontal, 2)
                 ForEach(env.mcps) { m in card(m) }
@@ -247,7 +258,8 @@ struct McpBoardView: View {
     }
 
     private func card(_ m: McpServerItem) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
+        let isOpen = expanded.contains(m.name)
+        return VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 6) {
                 Circle()
                     .fill(m.alive == false ? Color(hex: "#d94f4f")
@@ -263,12 +275,27 @@ struct McpBoardView: View {
                 Spacer()
                 Text("\(m.toolCount) 工具").font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(theme.current.textSecondary)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(theme.current.textMuted.opacity(0.6))
+                    .rotationEffect(.degrees(isOpen ? 180 : 0))
             }
             if !m.endpoint.isEmpty {
                 Text(m.endpoint).font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(theme.current.textMuted).lineLimit(1).truncationMode(.middle)
             }
-            if !m.tools.isEmpty {
+            if isOpen {
+                if let d = Self.desc[m.name] {
+                    Text(d).font(fm.font(11))
+                        .foregroundStyle(theme.current.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 2)
+                }
+                // 展开态给全量工具清单
+                Text(m.tools.joined(separator: " · "))
+                    .font(fm.font(10)).foregroundStyle(theme.current.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if !m.tools.isEmpty {
                 Text(m.tools.prefix(8).joined(separator: " · ") + (m.tools.count > 8 ? " …" : ""))
                     .font(fm.font(10)).foregroundStyle(theme.current.textTertiary)
                     .lineLimit(2)
@@ -277,6 +304,12 @@ struct McpBoardView: View {
         .padding(11)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 9).fill(theme.current.cardFill.opacity(theme.current.cardFillOpacity * 0.82)))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.spring(response: 0.25, dampingFraction: 1.0)) {
+                if isOpen { expanded.remove(m.name) } else { expanded.insert(m.name) }
+            }
+        }
     }
 }
 
@@ -286,6 +319,7 @@ struct HooksBoardView: View {
     @ObservedObject var env: AgentEnvViewModel
     @EnvironmentObject var theme: ThemeManager
     @EnvironmentObject var fm: FontManager
+    @State private var expandedIDs: Set<UUID> = []
 
     /// 事件的中文说明, 让人一眼知道"什么时候触发"
     private static let eventDesc: [String: String] = [
@@ -300,10 +334,25 @@ struct HooksBoardView: View {
         "SessionEnd": "会话结束时",
     ]
 
+    /// 按脚本名给出白话解释 —— 关键词匹配 command
+    private static func explain(_ h: HookItem) -> String {
+        let c = h.command
+        if c.contains("feedback-intercept") { return "反馈调查：拦截你发的每条消息, 判断是否该弹满意度问卷。" }
+        if c.contains("feedback-prompt")    { return "反馈调查：AI 回答结束后决定是否弹问卷。" }
+        if c.contains("feedback-env") || c.contains("feedback-session") {
+            return "反馈调查：记录会话环境与起止时间, 用于公司 AI 使用调研。" }
+        if c.contains("report-event")  { return "Luban 埋点：把事件(发消息/调工具等)异步上报到公司统计, 不影响对话。" }
+        if c.contains("check-update")  { return "Luban：启动时检查插件有没有新版本。" }
+        if c.contains("check-emp-id")  { return "Luban：校验本机的工号绑定。" }
+        if c.contains(".r2c/")         { return "R2C 安全审计：把每条 Bash 命令上报审计(调用前/后/失败各拦一次), 公司安全合规组件, 与 luban 同属'公司要求'性质。" }
+        if c.contains("loongsuite")    { return "LoongSuite 可观测试点：上报会话与子 Agent 的生命周期事件。注意它还在 .zshrc 里包了 qodercli/claude 一层拦截, 单删钩子卸不干净。" }
+        return "未知脚本, 展开看完整命令自行判断。"
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Hook 在对话生命周期的固定时机自动执行脚本 —— 当前全部来自公司预置(埋点/调查/监控)")
+                Text("Hook 在对话生命周期的固定时机自动执行脚本 —— 当前全部来自公司预置(埋点/审计/监控)。点条目看解释")
                     .font(fm.font(10)).foregroundStyle(theme.current.textMuted)
                     .padding(.horizontal, 2)
                 ForEach(env.hooksByEvent, id: \.0) { ev, items in
@@ -328,24 +377,48 @@ struct HooksBoardView: View {
     }
 
     private func row(_ h: HookItem) -> some View {
-        HStack(spacing: 7) {
-            Image(systemName: h.scriptExists ? "circle.fill" : "exclamationmark.triangle.fill")
-                .font(.system(size: h.scriptExists ? 5 : 9))
-                .foregroundStyle(h.scriptExists ? Color(hex: "#5aa86c") : Color(hex: "#d94f4f"))
-            Text(h.source).font(fm.font(10))
-                .padding(.horizontal, 5).padding(.vertical, 1)
-                .background(Capsule().fill(theme.current.textTertiary.opacity(0.1)))
-                .foregroundStyle(theme.current.textSecondary)
-            if h.matcher != "*" {
-                Text(h.matcher).font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(theme.current.accentPrimary.opacity(0.8))
+        let isOpen = expandedIDs.contains(h.id)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 7) {
+                Image(systemName: h.scriptExists ? "circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: h.scriptExists ? 5 : 9))
+                    .foregroundStyle(h.scriptExists ? Color(hex: "#5aa86c") : Color(hex: "#d94f4f"))
+                Text(h.source).font(fm.font(10))
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Capsule().fill(theme.current.textTertiary.opacity(0.1)))
+                    .foregroundStyle(theme.current.textSecondary)
+                if h.matcher != "*" {
+                    Text(h.matcher).font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(theme.current.accentPrimary.opacity(0.8))
+                }
+                Text((h.scriptPath.isEmpty ? h.command : h.scriptPath) as String)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(h.scriptExists ? theme.current.textMuted : Color(hex: "#d94f4f"))
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(theme.current.textMuted.opacity(0.5))
+                    .rotationEffect(.degrees(isOpen ? 180 : 0))
             }
-            Text((h.scriptPath.isEmpty ? h.command : h.scriptPath) as String)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(h.scriptExists ? theme.current.textMuted : Color(hex: "#d94f4f"))
-                .lineLimit(1).truncationMode(.middle)
-                .help(h.command)
-            Spacer(minLength: 0)
+            if isOpen {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(Self.explain(h)).font(fm.font(11))
+                        .foregroundStyle(theme.current.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(h.command).font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(theme.current.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                .padding(.leading, 14).padding(.top, 1)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.spring(response: 0.25, dampingFraction: 1.0)) {
+                if isOpen { expandedIDs.remove(h.id) } else { expandedIDs.insert(h.id) }
+            }
         }
     }
 }
