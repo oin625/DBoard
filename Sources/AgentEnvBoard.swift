@@ -88,6 +88,19 @@ final class AgentEnvViewModel: ObservableObject {
         }
     }
 
+    /// 物理删除自建 agent 文件（用户明确要求直接删, 不做隔离区）。
+    /// 仅允许删 origin==自建 且路径在 agents 目录下的文件, 内置项无文件不可删。
+    func deleteAgent(_ a: AgentItem) {
+        guard a.origin == "自建", !a.path.isEmpty,
+              a.path.contains("/agents/") else { return }
+        do {
+            try FileManager.default.removeItem(atPath: a.path)
+            agents.removeAll { $0.id == a.id }
+        } catch {
+            // 删除失败保持原样, 下次刷新还能看到
+        }
+    }
+
     // MARK: Agents 扫描
 
     private static func scanAgents() -> [AgentItem] {
@@ -553,6 +566,8 @@ struct AgentsBoardView: View {
     @ObservedObject var env: AgentEnvViewModel
     @EnvironmentObject var theme: ThemeManager
     @EnvironmentObject var fm: FontManager
+    /// 两段式删除确认: 存待确认的 agent 名, 点第二次才真删
+    @State private var confirmDelete: String? = nil
 
     var body: some View {
         ScrollView {
@@ -585,6 +600,29 @@ struct AgentsBoardView: View {
                             .foregroundStyle(theme.current.textSecondary)
                     }
                     .buttonStyle(.plain).help(a.path)
+                }
+                // 自建才能删; 物理删除, 两段式确认防误触
+                if a.origin == "自建" {
+                    if confirmDelete == a.name {
+                        Button(action: { env.deleteAgent(a); confirmDelete = nil }) {
+                            Text("确认删除").font(fm.font(10))
+                                .padding(.horizontal, 7).padding(.vertical, 2)
+                                .background(Capsule().fill(Color(hex: "#d94f4f")))
+                                .foregroundStyle(.white)
+                        }
+                        .buttonStyle(.plain)
+                        Button(action: { confirmDelete = nil }) {
+                            Text("取消").font(fm.font(10))
+                                .foregroundStyle(theme.current.textMuted)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Button(action: { confirmDelete = a.name }) {
+                            Image(systemName: "trash").font(.system(size: 10))
+                                .foregroundStyle(Color(hex: "#d94f4f").opacity(0.75))
+                        }
+                        .buttonStyle(.plain).help("物理删除该 agent 文件（不可恢复）")
+                    }
                 }
             }
             if !a.desc.isEmpty {
