@@ -674,9 +674,30 @@ struct MemoryBoardView: View {
                 Text("长期记忆按「打开的项目目录」隔离: 只有在该项目干活时才注入; 全局组则任何会话都注入。每行是一个项目, 点行展开(分类分节), 点条目就地预览正文, 行尾 ↗ 才是打开文件")
                     .font(fm.font(10)).foregroundStyle(theme.current.textMuted)
                     .padding(.horizontal, 2)
-                TextField("搜标题…", text: $search)
-                    .textFieldStyle(.roundedBorder).font(fm.font(11))
-                    .frame(maxWidth: 260)
+                HStack(spacing: 8) {
+                    TextField("搜标题…", text: $search)
+                        .textFieldStyle(.roundedBorder).font(fm.font(11))
+                        .frame(maxWidth: 260)
+                    // 一键收起: 展开过东西才出现, 组和条目一起收
+                    if !expandedGroups.isEmpty || !expandedEntries.isEmpty {
+                        Button(action: {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 1.0)) {
+                                expandedGroups.removeAll()
+                                expandedEntries.removeAll()
+                            }
+                        }) {
+                            HStack(spacing: 3) {
+                                Image(systemName: "arrow.down.right.and.arrow.up.left")
+                                    .font(.system(size: 9, weight: .semibold))
+                                Text("全部收起").font(fm.font(11))
+                            }
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(Capsule().fill(theme.current.textTertiary.opacity(0.1)))
+                            .foregroundStyle(theme.current.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
                 let ranked = Dictionary(grouping: env.memGroups,
                                         by: { AgentEnvViewModel.sectionRank($0.name) })
                 ForEach(ranked.keys.sorted(), id: \.self) { r in
