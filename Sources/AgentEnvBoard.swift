@@ -649,6 +649,9 @@ struct MemoryBoardView: View {
     @EnvironmentObject var fm: FontManager
     @State private var expandedGroups: Set<String> = []
     @State private var search = ""
+    /// 原地展开的记忆条目及其正文缓存 —— 点击不再跳编辑器, 就地预览
+    @State private var expandedEntries: Set<UUID> = []
+    @State private var contentCache: [UUID: String] = [:]
 
     /// 分类名 -> 中文
     private static let catZh: [String: String] = [
@@ -668,7 +671,7 @@ struct MemoryBoardView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                Text("长期记忆按「打开的项目目录」隔离: 只有在该项目干活时才注入; 全局组则任何会话都注入。每行是一个项目, 点行展开(分类分节), 点条目打开原文")
+                Text("长期记忆按「打开的项目目录」隔离: 只有在该项目干活时才注入; 全局组则任何会话都注入。每行是一个项目, 点行展开(分类分节), 点条目就地预览正文, 行尾 ↗ 才是打开文件")
                     .font(fm.font(10)).foregroundStyle(theme.current.textMuted)
                     .padding(.horizontal, 2)
                 TextField("搜标题…", text: $search)
@@ -691,6 +694,63 @@ struct MemoryBoardView: View {
     private func filtered(_ g: MemoryGroup) -> [MemoryEntry] {
         search.isEmpty ? g.entries
             : g.entries.filter { $0.title.localizedCaseInsensitiveContains(search) }
+    }
+
+    /// 单条记忆: 点击原地展开正文预览(去 frontmatter, 可滚动可复制), 行尾图标才是外跳
+    private func entryRow(_ e: MemoryEntry) -> some View {
+        let isOpen = expandedEntries.contains(e.id)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 6, weight: .bold))
+                    .foregroundStyle(theme.current.textMuted.opacity(0.6))
+                    .rotationEffect(.degrees(isOpen ? 90 : 0))
+                Text(e.title).font(fm.font(11))
+                    .foregroundStyle(isOpen ? theme.current.textPrimary : theme.current.textSecondary)
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 0)
+                Button(action: { NSWorkspace.shared.open(URL(fileURLWithPath: e.path)) }) {
+                    Image(systemName: "arrow.up.forward.square")
+                        .font(.system(size: 9))
+                        .foregroundStyle(theme.current.textMuted.opacity(0.7))
+                }
+                .buttonStyle(.plain).help("用默认编辑器打开原文件")
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.spring(response: 0.25, dampingFraction: 1.0)) {
+                    if isOpen { expandedEntries.remove(e.id) }
+                    else {
+                        expandedEntries.insert(e.id)
+                        if contentCache[e.id] == nil {
+                            var t = (try? String(contentsOfFile: e.path, encoding: .utf8)) ?? "(读取失败)"
+                            // 去掉 frontmatter, 只留正文
+                            if t.hasPrefix("---"),
+                               let r = t.range(of: "---", range: t.index(t.startIndex, offsetBy: 3)..<t.endIndex) {
+                                t = String(t[r.upperBound...])
+                            }
+                            contentCache[e.id] = t.trimmingCharacters(in: .whitespacesAndNewlines)
+                        }
+                    }
+                }
+            }
+            if isOpen {
+                ScrollView {
+                    Text(contentCache[e.id] ?? "")
+                        .font(fm.font(11))
+                        .foregroundStyle(theme.current.textSecondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                }
+                .frame(maxHeight: 200)   // 长文在框内滚动, 不撑爆列表
+                .background(RoundedRectangle(cornerRadius: 6)
+                    .fill(theme.current.textTertiary.opacity(0.06)))
+                .padding(.leading, 12)
+            }
+        }
+        .padding(.leading, 20)
     }
 
     private func groupCard(_ g: MemoryGroup) -> some View {
@@ -736,20 +796,7 @@ struct MemoryBoardView: View {
                         Rectangle().fill(theme.current.textTertiary.opacity(0.15)).frame(height: 1)
                     }
                     .padding(.leading, 14).padding(.top, 5)
-                    ForEach(list) { e in
-                        HStack(spacing: 6) {
-                            Circle().fill(theme.current.textMuted.opacity(0.35))
-                                .frame(width: 3, height: 3)
-                            Text(e.title).font(fm.font(11))
-                                .foregroundStyle(theme.current.textSecondary)
-                                .lineLimit(1).truncationMode(.middle)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.leading, 20)
-                        .contentShape(Rectangle())
-                        .onTapGesture { NSWorkspace.shared.open(URL(fileURLWithPath: e.path)) }
-                        .help(e.path)
-                    }
+                    ForEach(list) { e in entryRow(e) }
                 }
             }
         }
