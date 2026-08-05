@@ -669,6 +669,13 @@ struct SkillsBoardView: View {
     @State private var tearProgress: CGFloat = 0          // popover 下拉撕出窗口的进度 0~1
     /// 归档组默认折叠 —— 它有十几个成员却几乎不看, 展开会把常用分类挤到屏幕外
     @State private var archiveExpanded = false
+    /// 顶部 Tab: Skills 之外再暴露 MCP 与 Hooks —— 它们同样影响每次对话行为, 却一直不可见
+    @State private var boardTab: BoardTab = .skills
+    @StateObject private var envVM = AgentEnvViewModel()
+
+    enum BoardTab: String, CaseIterable {
+        case skills = "Skills", mcp = "MCP", hooks = "Hooks"
+    }
 
     static let archiveSection = "已归档 / 分享版"
 
@@ -680,23 +687,31 @@ struct SkillsBoardView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            toolbar
+            if boardTab == .skills { toolbar }
             Divider().opacity(0.4)
-            HStack(spacing: 0) {
-                gridArea
-                if let d = detailItem {
-                    Divider().opacity(0.4)
-                    detailPane(d)
-                        .frame(width: popoverMode ? 262 : 300)
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
+            switch boardTab {
+            case .skills:
+                HStack(spacing: 0) {
+                    gridArea
+                    if let d = detailItem {
+                        Divider().opacity(0.4)
+                        detailPane(d)
+                            .frame(width: popoverMode ? 262 : 300)
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                    }
                 }
+            case .mcp:
+                McpBoardView(env: envVM)
+            case .hooks:
+                HooksBoardView(env: envVM)
             }
         }
         .frame(minWidth: popoverMode ? 0 : 700, minHeight: popoverMode ? 0 : 540)
         .focusEffectDisabled()
-        .background(theme.current.background.ignoresSafeArea())
+        .background(ThemeBackground().environmentObject(theme).environmentObject(ThemeManager.shared))
         .onAppear {
             if vm.items.isEmpty { vm.loadOverrides(); vm.scan() }
+            if envVM.mcps.isEmpty { envVM.scan() }
         }
         // 新建分类并把该 skill 移入
         .alert("新建分类", isPresented: Binding(
@@ -1054,23 +1069,47 @@ struct SkillsBoardView: View {
     private var header: some View {
         let s = vm.stats
         return HStack(alignment: .firstTextBaseline, spacing: 9) {
-            Text("Skills").font(fm.font(19)).foregroundStyle(theme.current.accentGradient)
-            Text("\(s.total)").font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundStyle(theme.current.textMuted)
-            Spacer()
-            if s.broken > 0 { statChip("\(s.broken)", "加载不到", Color(hex: "#d94f4f")) }
-            if s.warn > 0 { statChip("\(s.warn)", "待优化", Color(hex: "#c8863c")) }
-            if s.broken == 0 && s.warn == 0 {
-                HStack(spacing: 4) {
-                    Image(systemName: "checkmark.circle.fill").font(.system(size: 10))
-                    Text("全部就绪").font(fm.font(11))
+            // Tab 切换: Skills / MCP / Hooks。当前 Tab 用主题渐变高亮 + 数量角标
+            ForEach(BoardTab.allCases, id: \.self) { t in
+                let n: Int = t == .skills ? s.total
+                           : t == .mcp ? envVM.mcps.count : envVM.hooks.count
+                Button(action: { withAnimation(.spring(response: 0.25, dampingFraction: 1.0)) { boardTab = t } }) {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        if boardTab == t {
+                            Text(t.rawValue).font(fm.font(19))
+                                .foregroundStyle(theme.current.accentGradient)
+                        } else {
+                            Text(t.rawValue).font(fm.font(14))
+                                .foregroundStyle(theme.current.textMuted)
+                        }
+                        Text("\(n)").font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(theme.current.textMuted.opacity(boardTab == t ? 1 : 0.6))
+                        // Hooks 有失效脚本时, 未选中也要有红点提醒
+                        if t == .hooks && envVM.brokenHooks > 0 {
+                            Circle().fill(Color(hex: "#d94f4f")).frame(width: 5, height: 5)
+                        }
+                    }
                 }
-                .foregroundStyle(Color(hex: "#5aa86c"))
+                .buttonStyle(.plain)
             }
-            if s.disabled > 0 {
-                Text("\(s.disabled) 已归档").font(fm.font(11)).foregroundStyle(theme.current.textMuted)
+            Spacer()
+            if boardTab == .skills {
+                if s.broken > 0 { statChip("\(s.broken)", "加载不到", Color(hex: "#d94f4f")) }
+                if s.warn > 0 { statChip("\(s.warn)", "待优化", Color(hex: "#c8863c")) }
+                if s.broken == 0 && s.warn == 0 {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill").font(.system(size: 10))
+                        Text("全部就绪").font(fm.font(11))
+                    }
+                    .foregroundStyle(Color(hex: "#5aa86c"))
+                }
+                if s.disabled > 0 {
+                    Text("\(s.disabled) 已归档").font(fm.font(11)).foregroundStyle(theme.current.textMuted)
+                }
+            } else if boardTab == .hooks && envVM.brokenHooks > 0 {
+                statChip("\(envVM.brokenHooks)", "脚本失效", Color(hex: "#d94f4f"))
             }
-            Button(action: { vm.scan() }) {
+            Button(action: { vm.scan(); envVM.scan() }) {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(theme.current.textSecondary)
