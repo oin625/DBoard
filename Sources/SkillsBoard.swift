@@ -675,6 +675,7 @@ struct SkillsBoardView: View {
 
     enum BoardTab: String, CaseIterable {
         case skills = "Skills", mcp = "MCP", hooks = "Hooks"
+        case agents = "Agents", memory = "Memory"
     }
 
     static let archiveSection = "已归档 / 分享版"
@@ -704,6 +705,10 @@ struct SkillsBoardView: View {
                 McpBoardView(env: envVM)
             case .hooks:
                 HooksBoardView(env: envVM)
+            case .agents:
+                AgentsBoardView(env: envVM)
+            case .memory:
+                MemoryBoardView(env: envVM)
             }
         }
         .frame(minWidth: popoverMode ? 0 : 700, minHeight: popoverMode ? 0 : 540)
@@ -1072,7 +1077,9 @@ struct SkillsBoardView: View {
             // Tab 切换: Skills / MCP / Hooks。当前 Tab 用主题渐变高亮 + 数量角标
             ForEach(BoardTab.allCases, id: \.self) { t in
                 let n: Int = t == .skills ? s.total
-                           : t == .mcp ? envVM.mcps.count : envVM.hooks.count
+                           : t == .mcp ? envVM.mcps.count
+                           : t == .hooks ? envVM.hooks.count
+                           : t == .agents ? envVM.agents.count : envVM.memTotal
                 Button(action: { withAnimation(.spring(response: 0.25, dampingFraction: 1.0)) { boardTab = t } }) {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         if boardTab == t {
