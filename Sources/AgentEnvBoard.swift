@@ -162,7 +162,22 @@ final class AgentEnvViewModel: ObservableObject {
             }
         }
         return groups.map { MemoryGroup(name: $0.key, entries: $0.value.sorted { $0.category < $1.category }) }
-            .sorted { $0.entries.count > $1.entries.count }
+            .sorted { a, b in
+                let (ra, rb) = (Self.sectionRank(a.name), Self.sectionRank(b.name))
+                return ra != rb ? ra < rb : a.entries.count > b.entries.count
+            }
+    }
+
+    /// 分区次序: 全局 > 代码项目 > 文档项目 > 临时会话
+    static func sectionRank(_ name: String) -> Int {
+        if name == "全局" { return 0 }
+        if name.hasPrefix("work-code-") { return 1 }
+        if name.hasPrefix("Documents-one-") { return 2 }
+        return 3   // Documents-Qoder-* / Qoder-Chats 等临时会话
+    }
+
+    static func sectionName(_ rank: Int) -> String {
+        ["📌 全局（任何会话都注入）", "💼 代码项目", "�� 文档项目", "💬 临时会话（chat 工作区）"][rank]
     }
 
     // MARK: MCP 扫描
@@ -621,7 +636,15 @@ struct MemoryBoardView: View {
                 TextField("搜标题…", text: $search)
                     .textFieldStyle(.roundedBorder).font(fm.font(11))
                     .frame(maxWidth: 260)
-                ForEach(env.memGroups) { g in groupCard(g) }
+                let ranked = Dictionary(grouping: env.memGroups,
+                                        by: { AgentEnvViewModel.sectionRank($0.name) })
+                ForEach(ranked.keys.sorted(), id: \.self) { r in
+                    Text(AgentEnvViewModel.sectionName(r))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(theme.current.textMuted)
+                        .padding(.top, r == 0 ? 0 : 8)
+                    ForEach(ranked[r] ?? []) { g in groupCard(g) }
+                }
             }
             .padding(14)
         }
@@ -641,7 +664,11 @@ struct MemoryBoardView: View {
                     .font(.system(size: 8, weight: .bold))
                     .foregroundStyle(theme.current.textMuted.opacity(0.7))
                     .rotationEffect(.degrees(isOpen ? 90 : 0))
-                Text(g.name).font(.system(size: 12, weight: .semibold, design: .monospaced))
+                Text(g.name
+                        .replacingOccurrences(of: "work-code-", with: "")
+                        .replacingOccurrences(of: "Documents-one-projects-", with: "")
+                        .replacingOccurrences(of: "Documents-Qoder-", with: ""))
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
                     .foregroundStyle(g.name == "全局" ? theme.current.accentPrimary : theme.current.textPrimary)
                 Spacer()
                 Text("\(items.count)\(search.isEmpty ? "" : "/\(g.entries.count)")")
