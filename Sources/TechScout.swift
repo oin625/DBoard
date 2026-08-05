@@ -65,7 +65,7 @@ final class TechScoutViewModel: ObservableObject {
     private var fileMonitor: DispatchSourceFileSystemObject?
     private var fileDescriptor: Int32 = -1
     private var lastNotifyTime: TimeInterval = 0  // 0 表示从未通知过
-    private let notifyDebounce: TimeInterval = 30  // 30 秒防抖（测试用，生产环境改为 300）
+    private let notifyDebounce: TimeInterval = 300  // 5 分钟防抖, 同一批资讯分片写入时只弹一次通知
     private var lastProcessedTimestamp: Double = 0  // 记录上次处理的 pending.json 时间戳
 
     private static let pendingPath: String = {
