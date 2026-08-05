@@ -1632,31 +1632,10 @@ struct FooterView: View {
     @EnvironmentObject var vm: DBoardViewModel
     @EnvironmentObject var theme: ThemeManager
     @EnvironmentObject var fm: FontManager
-    @State private var syncPulse = false
-    var syncColor: Color {
-        switch vm.syncKind {
-        case .idle: return theme.current.textMuted
-        case .pending: return theme.current.accentSecondary
-        case .syncing: return theme.current.accentPrimary
-        case .done: return Color(hex: "#34c759")
-        case .fail: return .orange
-        }
-    }
     var body: some View {
         HStack(spacing: 6) {
-            HStack(spacing: 5) {
-                Circle().fill(syncColor).frame(width: 5, height: 5)
-                    .scaleEffect(syncPulse ? 1.5 : 1.0)
-                    .opacity(syncPulse ? 0.6 : 1.0)
-                    .onChange(of: vm.syncKind) { kind in
-                        if kind == .syncing {
-                            withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { syncPulse = true }
-                        } else {
-                            withAnimation(.easeOut(duration: 0.3)) { syncPulse = false }
-                        }
-                    }
-                Text(vm.syncText).font(.system(size: 9)).foregroundStyle(syncColor)
-            }
+            // 引擎心跳: 值守/资讯/同步 三个 daemon 的死活 + 同步动作反馈
+            EngineStrip()
             Spacer()
             FooterButton(vm.viewMode == .project ? "按项目" : "按优先级") { vm.setViewMode(vm.viewMode == .project ? .priority : .project) }
             FooterButton(vm.expandedIDs.isEmpty ? "展开" : "折叠") {
