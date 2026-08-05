@@ -615,7 +615,7 @@ struct MemoryBoardView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                Text("长期记忆(明文 Markdown, ~/.qoder/memories): AI 跨会话记住的项目事实/规范/踩坑/决策。点组展开, 点条目用默认编辑器打开原文")
+                Text("长期记忆按「打开的项目目录」隔离: 只有在该项目干活时才注入; 全局组则任何会话都注入。每行是一个项目, 点行展开(分类分节), 点条目打开原文")
                     .font(fm.font(10)).foregroundStyle(theme.current.textMuted)
                     .padding(.horizontal, 2)
                 TextField("搜标题…", text: $search)
@@ -656,22 +656,35 @@ struct MemoryBoardView: View {
                 }
             }
             if isOpen && !items.isEmpty {
-                ForEach(items) { e in
-                    HStack(spacing: 6) {
-                        Text(Self.catZh[e.category] ?? e.category)
-                            .font(fm.font(9))
-                            .padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Capsule().fill(theme.current.textTertiary.opacity(0.1)))
+                // 大项目上千条平铺没法看 —— 按分类分节, 节头带计数, 条目只留标题
+                let byCat = Dictionary(grouping: items, by: { $0.category })
+                    .sorted { $0.value.count != $1.value.count
+                              ? $0.value.count > $1.value.count : $0.key < $1.key }
+                ForEach(byCat, id: \.key) { cat, list in
+                    HStack(spacing: 5) {
+                        Text(Self.catZh[cat] ?? cat)
+                            .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(theme.current.textSecondary)
-                        Text(e.title).font(fm.font(11))
-                            .foregroundStyle(theme.current.textSecondary)
-                            .lineLimit(1).truncationMode(.middle)
-                        Spacer(minLength: 0)
+                        Text("\(list.count)")
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(theme.current.textMuted)
+                        Rectangle().fill(theme.current.textTertiary.opacity(0.15)).frame(height: 1)
                     }
-                    .padding(.leading, 14)
-                    .contentShape(Rectangle())
-                    .onTapGesture { NSWorkspace.shared.open(URL(fileURLWithPath: e.path)) }
-                    .help(e.path)
+                    .padding(.leading, 14).padding(.top, 5)
+                    ForEach(list) { e in
+                        HStack(spacing: 6) {
+                            Circle().fill(theme.current.textMuted.opacity(0.35))
+                                .frame(width: 3, height: 3)
+                            Text(e.title).font(fm.font(11))
+                                .foregroundStyle(theme.current.textSecondary)
+                                .lineLimit(1).truncationMode(.middle)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.leading, 20)
+                        .contentShape(Rectangle())
+                        .onTapGesture { NSWorkspace.shared.open(URL(fileURLWithPath: e.path)) }
+                        .help(e.path)
+                    }
                 }
             }
         }
