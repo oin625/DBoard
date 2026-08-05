@@ -1,15 +1,26 @@
-# DBoard — Mac 菜单栏 D板看板
+# DBoard — Mac 菜单栏个人 Agent 驾驶舱
 
-Mac 菜单栏常驻插件，直接读取 `~/.claude/demand-center-cache.md`，一键查看个人工作看板。
+Mac 菜单栏常驻应用。最初是读 `~/.claude/demand-center-cache.md` 的 D板任务看板，
+现已演化为个人 AI agent 工作系统的驾驶舱：后台一队 agent（值守回复、资讯抓取、
+文档同步）在干活，DBoard 让这一切可见、可控。
 
-## 功能
+## 模块总览
 
-- 📋 菜单栏图标，点击弹出 D 板概览
-- 🔴 按优先级分组显示所有条目
-- ⏰ 截止日期倒计时，紧急条目高亮
-- 📝 今日零碎清单，显示完成进度
-- 🔄 实时监听文件变更，自动刷新
-- 🚀 开机自启，常驻菜单栏
+菜单栏三个图标：D板主面板、系统监控（实时 CPU%）、Skills 看板。
+
+| 模块 | 功能 | 数据源 |
+|------|------|--------|
+| D板看板 | 需求/零碎清单，优先级分组，截止倒计时，双写钉钉 | `~/.claude/demand-center-cache.md`（d-board skill 维护） |
+| 引擎心跳 | Footer 三点状态条：值守/资讯/同步三个 daemon 的死活，点开看判定依据与修复命令 | launchctl + 各数据文件时间戳 |
+| Reply Inbox | 钉钉待回复人工审批台：AI 起草 → 人批准 → 发送，支持配方沉淀 | `~/.dws/reply-pending.json`（reply-daemon） |
+| Tech Scout | AI 精翻科技资讯流，历史留存 30 天 | `~/.claude/tech-scout-*.json`（tech-scout 定时任务） |
+| Skills 看板 | agent 技能库治理：健康度、启停、归档、分类、实战验证状态 | 扫描 `~/.claude/skills*` |
+| Agent Env | MCP / Hooks / Agents / Memory 全景可视 | 扫描 Qoder/Claude 配置 |
+| SysMon | CPU/内存/温度/进程监控，AI 卡顿诊断 | 本机采样 + qodercli |
+| MarketMap | 大盘 Treemap（拖拽/缩放/聚焦） | 东方财富 + 腾讯行情 API |
+
+交互：全局快捷键 Ctrl+D 呼出主面板，⌘K 命令面板，popover 可撕成独立窗口。
+皮肤系统 5 套主题（含 NSVisualEffectView 原生毛玻璃）+ 7 种字体。
 
 ## 安装
 
@@ -18,17 +29,19 @@ cd /Users/zz/work/code/other/DBoard
 ./install.sh
 ```
 
-一键搞定：构建 → 打包 .app → 安装到 ~/Applications → 配置开机自启 → 立即启动。
+一键：构建 → 打包 .app → 安装到 ~/Applications → 开机自启 → 立即启动。
 
 ## 要求
 
 - macOS 13.0+
 - Swift 5.9+（Xcode Command Line Tools）
+- 各模块依赖对应的后台 daemon，缺了不影响其他模块（Footer 心跳条会标灰/标红）
 
-## 数据源
+## 开发约定
 
-读取 `~/.claude/demand-center-cache.md`，这个文件由 Claude D板 skill 维护。
-文件变更时 UI 自动刷新，无需手动操作。
+- N=1 个人工具：硬编码本机路径是刻意决策，不做通用化
+- 代码评审标准见 [REVIEW.md](REVIEW.md)，重要提交派独立 CodeReview subagent 按此评审
+- 产品定位与路线见个人 Wiki：`~/Documents/one/projects/DBoard/`
 
 ## 卸载
 
