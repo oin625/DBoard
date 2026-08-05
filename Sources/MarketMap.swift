@@ -406,7 +406,7 @@ struct MarketMapView: View {
         }
         .frame(minWidth: 900, minHeight: 620)
         .focusEffectDisabled()
-        .background(theme.current.background.ignoresSafeArea())
+        .background(ThemeBackground().environmentObject(theme).environmentObject(ThemeManager.shared))
         .onChange(of: vm.lastUpdate) { _, _ in relayout() }
     }
 

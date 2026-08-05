@@ -24,6 +24,14 @@ struct DBoardTheme: Identifiable, Equatable {
     let chrome: Color
     let separator: Color
 
+    // 新增: 皮肤系统(背景图 + 毛玻璃 + 氛围)
+    let backgroundImage: String?      // bundle 图片名, nil=纯色
+    let backgroundBlur: CGFloat       // 背景图模糊度 0~20
+    let cardMaterial: Bool            // true=系统毛玻璃 Material
+    let overlayOpacity: Double        // 遮罩层透明度(暗化/亮化)
+    let overlayColor: Color           // 遮罩颜色(暗皮肤用黑, 亮皮肤用白)
+    let glowEnabled: Bool             // 是否开启 orb 光球
+
     var accentGradient: LinearGradient {
         LinearGradient(colors: [accentPrimary, accentSecondary], startPoint: .leading, endPoint: .trailing)
     }
@@ -33,51 +41,7 @@ struct DBoardTheme: Identifiable, Equatable {
 
 // MARK: - Presets
 extension DBoardTheme {
-    static let colorful = DBoardTheme(
-        id: "colorful", name: "炫彩", icon: "paintpalette",
-        background: Color(hex: "#f8f9ff"),
-        orbA: Color(hex: "#c084fc"), orbB: Color(hex: "#60a5fa"), orbC: Color(hex: "#fb923c"),
-        cardFill: .white, cardFillOpacity: 0.7,
-        accentPrimary: Color(hex: "#6366f1"), accentSecondary: Color(hex: "#ec4899"),
-        textPrimary: Color(hex: "#1e293b"), textSecondary: Color(hex: "#334155"),
-        textTertiary: Color(hex: "#64748b"), textMuted: Color(hex: "#94a3b8"),
-        chrome: Color(hex: "#cbd5e1"), separator: Color(hex: "#e2e8f0")
-    )
-
-    static let ocean = DBoardTheme(
-        id: "ocean", name: "海洋", icon: "drop",
-        background: Color(hex: "#f0f9ff"),
-        orbA: Color(hex: "#06b6d4"), orbB: Color(hex: "#3b82f6"), orbC: Color(hex: "#8b5cf6"),
-        cardFill: .white, cardFillOpacity: 0.65,
-        accentPrimary: Color(hex: "#0891b2"), accentSecondary: Color(hex: "#2563eb"),
-        textPrimary: Color(hex: "#0c4a6e"), textSecondary: Color(hex: "#155e75"),
-        textTertiary: Color(hex: "#0e7490"), textMuted: Color(hex: "#67e8f9"),
-        chrome: Color(hex: "#a5f3fc"), separator: Color(hex: "#cffafe")
-    )
-
-    static let sunset = DBoardTheme(
-        id: "sunset", name: "日落", icon: "sun.horizon",
-        background: Color(hex: "#fffbf5"),
-        orbA: Color(hex: "#f97316"), orbB: Color(hex: "#ef4444"), orbC: Color(hex: "#eab308"),
-        cardFill: .white, cardFillOpacity: 0.7,
-        accentPrimary: Color(hex: "#ea580c"), accentSecondary: Color(hex: "#dc2626"),
-        textPrimary: Color(hex: "#292524"), textSecondary: Color(hex: "#44403c"),
-        textTertiary: Color(hex: "#78716c"), textMuted: Color(hex: "#a8a29e"),
-        chrome: Color(hex: "#d6d3d1"), separator: Color(hex: "#e7e5e4")
-    )
-
-    static let forest = DBoardTheme(
-        id: "forest", name: "森林", icon: "leaf",
-        background: Color(hex: "#f0fdf4"),
-        orbA: Color(hex: "#22c55e"), orbB: Color(hex: "#10b981"), orbC: Color(hex: "#84cc16"),
-        cardFill: .white, cardFillOpacity: 0.68,
-        accentPrimary: Color(hex: "#16a34a"), accentSecondary: Color(hex: "#059669"),
-        textPrimary: Color(hex: "#14532d"), textSecondary: Color(hex: "#166534"),
-        textTertiary: Color(hex: "#15803d"), textMuted: Color(hex: "#86efac"),
-        chrome: Color(hex: "#bbf7d0"), separator: Color(hex: "#dcfce7")
-    )
-
-    // 手绘风主题
+    // 牛皮纸: 手绘暖色(保留, 无背景图)
     static let kraft = DBoardTheme(
         id: "kraft", name: "牛皮纸", icon: "doc.plaintext",
         background: Color(hex: "#f5e6d3"),
@@ -86,32 +50,68 @@ extension DBoardTheme {
         accentPrimary: Color(hex: "#8b5e3c"), accentSecondary: Color(hex: "#c4734f"),
         textPrimary: Color(hex: "#3d2b1f"), textSecondary: Color(hex: "#5c4033"),
         textTertiary: Color(hex: "#8b6f47"), textMuted: Color(hex: "#b89b7a"),
-        chrome: Color(hex: "#d4b896"), separator: Color(hex: "#e8d5b7")
+        chrome: Color(hex: "#d4b896"), separator: Color(hex: "#e8d5b7"),
+        backgroundImage: nil, backgroundBlur: 0, cardMaterial: false,
+        overlayOpacity: 0, overlayColor: .clear, glowEnabled: true
     )
 
-    static let chalkboard = DBoardTheme(
-        id: "chalkboard", name: "黑板", icon: "pencil.and.ruler",
-        background: Color(hex: "#2d4a3e"),
-        orbA: Color(hex: "#4a7c6a"), orbB: Color(hex: "#3d6b5a"), orbC: Color(hex: "#5a8f7a"),
-        cardFill: Color(hex: "#3a5f50"), cardFillOpacity: 0.85,
-        accentPrimary: Color(hex: "#f0e68c"), accentSecondary: Color(hex: "#ffa07a"),
-        textPrimary: Color(hex: "#f5f5e8"), textSecondary: Color(hex: "#dcdcc8"),
-        textTertiary: Color(hex: "#b8b8a0"), textMuted: Color(hex: "#8a8a72"),
-        chrome: Color(hex: "#6b7a5a"), separator: Color(hex: "#4f6b5a")
+    // 赛博朋克: 霓虹城市夜景 + 暗色毛玻璃
+    static let cyberpunk = DBoardTheme(
+        id: "cyberpunk", name: "赛博朋克", icon: "bolt.horizontal.circle",
+        background: Color(hex: "#0a0a1a"),
+        orbA: Color(hex: "#ff006e"), orbB: Color(hex: "#00f5d4"), orbC: Color(hex: "#8338ec"),
+        cardFill: Color(hex: "#1a1a2e"), cardFillOpacity: 0.65,
+        accentPrimary: Color(hex: "#00f5d4"), accentSecondary: Color(hex: "#ff006e"),
+        textPrimary: Color(hex: "#eaf2f8"), textSecondary: Color(hex: "#b0c4de"),
+        textTertiary: Color(hex: "#6c8ebf"), textMuted: Color(hex: "#3d5a80"),
+        chrome: Color(hex: "#2a2a4a"), separator: Color(hex: "#1f1f3a"),
+        backgroundImage: "bg-cyberpunk", backgroundBlur: 3, cardMaterial: true,
+        overlayOpacity: 0.55, overlayColor: .black, glowEnabled: false
     )
 
-    static let watercolor = DBoardTheme(
-        id: "watercolor", name: "水彩", icon: "drop.halffull",
-        background: Color(hex: "#fef7fb"),
-        orbA: Color(hex: "#f9a8d4"), orbB: Color(hex: "#c4b5fd"), orbC: Color(hex: "#93c5fd"),
-        cardFill: .white, cardFillOpacity: 0.75,
-        accentPrimary: Color(hex: "#e879a8"), accentSecondary: Color(hex: "#a78bfa"),
-        textPrimary: Color(hex: "#4a2040"), textSecondary: Color(hex: "#6b3a5c"),
-        textTertiary: Color(hex: "#9b6b8a"), textMuted: Color(hex: "#d4a5c0"),
-        chrome: Color(hex: "#e8c5d8"), separator: Color(hex: "#f5dce8")
+    // QQ经典: 蓝天白云 + 亮色毛玻璃(致敬2005-2010)
+    static let qqClassic = DBoardTheme(
+        id: "qqClassic", name: "QQ经典", icon: "bubble.left.fill",
+        background: Color(hex: "#e8f4fd"),
+        orbA: Color(hex: "#1e1e1e"), orbB: Color(hex: "#ffffff"), orbC: Color(hex: "#fe6d2e"),
+        cardFill: .white, cardFillOpacity: 0.78,
+        accentPrimary: Color(hex: "#12b7f5"), accentSecondary: Color(hex: "#fe6d2e"),
+        textPrimary: Color(hex: "#1a2b42"), textSecondary: Color(hex: "#2d4a6f"),
+        textTertiary: Color(hex: "#5a7a9a"), textMuted: Color(hex: "#7a8fa6"),
+        chrome: Color(hex: "#b8d4e8"), separator: Color(hex: "#d4eaf7"),
+        backgroundImage: "bg-qqsky", backgroundBlur: 2, cardMaterial: true,
+        overlayOpacity: 0.25, overlayColor: .white, glowEnabled: false
     )
 
-    static let all: [DBoardTheme] = [.colorful, .ocean, .sunset, .forest, .kraft, .chalkboard, .watercolor]
+    // 星空: 紫粉星云 + 暗色毛玻璃 + 淡光球
+    static let starfield = DBoardTheme(
+        id: "starfield", name: "星空", icon: "sparkles",
+        background: Color(hex: "#0f0a1e"),
+        orbA: Color(hex: "#7c3aed"), orbB: Color(hex: "#ec4899"), orbC: Color(hex: "#6366f1"),
+        cardFill: Color(hex: "#1e1040"), cardFillOpacity: 0.6,
+        accentPrimary: Color(hex: "#a78bfa"), accentSecondary: Color(hex: "#f472b6"),
+        textPrimary: Color(hex: "#f5f3ff"), textSecondary: Color(hex: "#ddd6fe"),
+        textTertiary: Color(hex: "#a78bfa"), textMuted: Color(hex: "#6d5aab"),
+        chrome: Color(hex: "#2e1f5e"), separator: Color(hex: "#1e1040"),
+        backgroundImage: "bg-starfield", backgroundBlur: 1, cardMaterial: true,
+        overlayOpacity: 0.5, overlayColor: .black, glowEnabled: true
+    )
+
+    // 毛玻璃: 抽象光斑 + 系统 Material + 彩色光球
+    static let glass = DBoardTheme(
+        id: "glass", name: "毛玻璃", icon: "rectangle.on.rectangle",
+        background: Color(hex: "#f0f2f5"),
+        orbA: Color(hex: "#60a5fa"), orbB: Color(hex: "#a78bfa"), orbC: Color(hex: "#f472b6"),
+        cardFill: .white, cardFillOpacity: 0.55,
+        accentPrimary: Color(hex: "#3b82f6"), accentSecondary: Color(hex: "#8b5cf6"),
+        textPrimary: Color(hex: "#1e293b"), textSecondary: Color(hex: "#334155"),
+        textTertiary: Color(hex: "#64748b"), textMuted: Color(hex: "#94a3b8"),
+        chrome: Color(hex: "#cbd5e1"), separator: Color(hex: "#e2e8f0"),
+        backgroundImage: "bg-glass", backgroundBlur: 8, cardMaterial: true,
+        overlayOpacity: 0.2, overlayColor: .white, glowEnabled: true
+    )
+
+    static let all: [DBoardTheme] = [.kraft, .cyberpunk, .qqClassic, .starfield, .glass]
 }
 
 // MARK: - Theme Manager
@@ -123,8 +123,8 @@ final class ThemeManager: ObservableObject {
     }
 
     private init() {
-        let savedID = UserDefaults.standard.string(forKey: "dboard_theme_id") ?? "colorful"
-        self.current = DBoardTheme.all.first { $0.id == savedID } ?? .colorful
+        let savedID = UserDefaults.standard.string(forKey: "dboard_theme_id") ?? "kraft"
+        self.current = DBoardTheme.all.first { $0.id == savedID } ?? .kraft
     }
 
     func cycle() {

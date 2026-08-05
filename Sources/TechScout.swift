@@ -361,7 +361,7 @@ struct TechScoutView: View {
         }
         .frame(minWidth: 520, minHeight: 600)
         .focusEffectDisabled()
-        .background(theme.current.background.ignoresSafeArea())
+        .background(ThemeBackground().environmentObject(theme).environmentObject(ThemeManager.shared))
     }
 
     private var currentDay: String {

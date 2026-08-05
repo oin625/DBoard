@@ -15,7 +15,10 @@ struct DBoardApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     private var statusItem: NSStatusItem!
-    private var panelWindow: NSWindow?
+    private var panelWindow: NSWindow?          // detach 后用的独立窗口
+    private var mainPopover: NSPopover?         // 默认 popover 下拉
+    private var mainClickMonitor: Any?
+    private var mainKeyMonitor: Any?
     private var viewModel: DBoardViewModel!
     private var focusObserver: NSObjectProtocol?
     private var techScoutVM: TechScoutViewModel!
@@ -248,110 +251,88 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         button.attributedTitle = NSAttributedString(string: "")
     }
 
+    // MARK: - 主面板交互 (popover 模式, 跟系统监控/Skills 同一套)
+
     @objc func togglePopover() {
         NSLog("DBoard: togglePopover called")
-        guard let win = panelWindow else { return }
         if isDetached {
-            // 已脱出: 点图标只做 显示/隐藏, 不改位置
-            if win.isVisible && win.isKeyWindow {
-                win.orderOut(nil)
-            } else {
-                win.makeKeyAndOrderFront(nil)
-                NSApp.activate(ignoringOtherApps: true)
+            // 已脱出为独立窗口
+            guard let win = panelWindow else { return }
+            if win.isVisible && win.isKeyWindow { win.orderOut(nil) }
+            else { win.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
+            return
+        }
+        // popover 模式
+        if let pop = mainPopover, pop.isShown {
+            closeMainPopover()
+            return
+        }
+        guard let btn = statusItem.button else { return }
+        viewModel.reload()
+
+        let screenH = (btn.window?.screen ?? NSScreen.main)?.visibleFrame.height ?? 900
+        let popH = min(max(screenH * 0.78, 480), 900)
+        let popW: CGFloat = 520
+
+        let pop = NSPopover()
+        pop.behavior = .transient
+        pop.animates = true
+        let rootView = DBoardRootView()
+            .environmentObject(viewModel)
+            .environmentObject(ThemeManager.shared)
+            .environmentObject(FontManager.shared)
+        let host = NSHostingController(rootView: rootView.frame(width: popW, height: popH))
+        pop.contentSize = NSSize(width: popW, height: popH)
+        pop.contentViewController = host
+        pop.show(relativeTo: btn.bounds, of: btn, preferredEdge: .minY)
+        mainPopover = pop
+
+        // 点外部收起(兜底 .transient 失效)
+        mainClickMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            guard let self = self, let p = self.mainPopover, p.isShown else { return }
+            DispatchQueue.main.async { self.closeMainPopover() }
+        }
+        mainKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            if e.keyCode == 53, let p = self?.mainPopover, p.isShown {
+                self?.closeMainPopover()
+                return nil
             }
-        } else {
-            if win.isVisible {
-                win.orderOut(nil)
-            } else {
-                showPopover()
-            }
+            return e
+        }
+        NotificationCenter.default.addObserver(forName: NSPopover.didCloseNotification, object: pop, queue: .main) { [weak self] _ in
+            self?.teardownMainMonitors()
         }
     }
 
-    /// 外部调用: 将面板脱出为独立窗口(降层级 + 显示标题栏)
-    func detachPanel() {
-        guard let win = panelWindow, !isDetached else { return }
-        isDetached = true
-        win.level = .normal                          // 不再置顶
-        win.titleVisibility = .visible               // 显示标题
-        win.titlebarAppearsTransparent = false       // 标题栏不透明(出现红绿灯)
-        win.isMovableByWindowBackground = false      // 用标准标题栏拖动
-        win.collectionBehavior = [.moveToActiveSpace, .fullScreenPrimary]
-        NSLog("DBoard: panel detached")
+    private func closeMainPopover() {
+        mainPopover?.performClose(nil)
+        mainPopover = nil
+        teardownMainMonitors()
     }
 
-    /// 收回面板: 恢复浮动模式
-    private func reattachPanel() {
-        guard let win = panelWindow, isDetached else { return }
-        isDetached = false
-        win.level = .floating
-        win.titleVisibility = .hidden
-        win.titlebarAppearsTransparent = true
-        win.isMovableByWindowBackground = true
-        win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        NSLog("DBoard: panel reattached")
+    private func teardownMainMonitors() {
+        if let m = mainClickMonitor { NSEvent.removeMonitor(m); mainClickMonitor = nil }
+        if let m = mainKeyMonitor { NSEvent.removeMonitor(m); mainKeyMonitor = nil }
+    }
+
+    /// 脱出: 关掉 popover, 用独立窗口打开
+    func detachPanel() {
+        closeMainPopover()
+        isDetached = true
+        guard let win = panelWindow else { return }
+        win.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        NSLog("DBoard: panel detached to window")
     }
 
     @objc private func hidePanelWindow() {
-        reattachPanel()    // 关窗 -> 回到浮动面板模式
-        panelWindow?.orderOut(nil)
-    }
-
-    private func showPopover() {
-        guard let win = panelWindow else { return }
-        viewModel.reload()
-
-        // 首次显示时把窗口定位到菜单栏图标下方
-        if !win.isVisible, let button = statusItem.button,
-           let btnWin = button.window {
-            let btnRectOnScreen = btnWin.convertToScreen(button.convert(button.bounds, to: nil))
-            let winSize = win.frame.size
-            let x = btnRectOnScreen.midX - winSize.width / 2
-            let y = btnRectOnScreen.minY - winSize.height - 6
-            // 若曾经手动移动过，保留上次位置（frameAutosaveName 处理）
-            if win.frameAutosaveName.isEmpty {
-                win.setFrameAutosaveName("DBoardMainWindow")
-            }
-            if !win.setFrameUsingName("DBoardMainWindow") {
-                win.setFrameOrigin(NSPoint(x: x, y: y))
-            }
+        if isDetached {
+            isDetached = false
+            panelWindow?.orderOut(nil)
+            NSLog("DBoard: panel reattached (closed window)")
+        } else {
+            panelWindow?.orderOut(nil)
         }
-
-        win.makeKeyAndOrderFront(nil)
-        NSApp.setActivationPolicy(.accessory)
-        NSApp.activate(ignoringOtherApps: true)
-
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            win.makeFirstResponder(nil)
-            if self.focusObserver == nil {
-                self.focusObserver = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: win, queue: .main) { [weak win] _ in
-                    win?.makeFirstResponder(nil)
-                }
-            }
-        }
-    }
-
-    // MARK: - UNUserNotificationCenterDelegate
-
-    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        // 即使 app 在前台也显示通知
-        completionHandler([.banner, .sound])
-    }
-
-    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
-        // 用户点击通知 → 打开 Tech Scout 窗口
-        NSLog("DBoard: didReceive notification response: \(response.notification.request.identifier)")
-        if response.notification.request.identifier.hasPrefix("tech-scout") {
-            DispatchQueue.main.async { [weak self] in
-                self?.techScoutVM.reload()
-                self?.techScoutWindow.show()
-            }
-        } else if response.notification.request.identifier.hasPrefix("reply-inbox") {
-            DispatchQueue.main.async { [weak self] in
-                self?.replyInboxWindow.show()
-            }
-        }
-        completionHandler()
     }
 }

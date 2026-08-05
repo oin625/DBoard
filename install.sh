@@ -37,6 +37,12 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$BUILD_PATH" "$MACOS_DIR/$APP_NAME"
 cp "$SCRIPT_DIR/Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns" 2>/dev/null || echo "⚠️  缺少 AppIcon.icns"
 
+# 皮肤背景图复制到 App bundle
+for bgf in "$SCRIPT_DIR"/Resources/bg-*; do
+    [ -f "$bgf" ] && cp "$bgf" "$RESOURCES_DIR/"
+done
+
+
 # Info.plist
 cat > "$CONTENTS_DIR/Info.plist" << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

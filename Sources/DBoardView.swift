@@ -1,6 +1,107 @@
 import SwiftUI
 import Cocoa
 
+// MARK: - 通用皮肤背景(背景图 + 遮罩 + 毛玻璃 + orb 光球)
+struct ThemeBackground: View {
+    @EnvironmentObject var theme: ThemeManager
+    var body: some View {
+        // 用 Color 铺底(保证自身不撑大布局), 所有装饰层用 overlay 叠加
+        theme.current.background
+            .overlay(backgroundImageLayer)
+            .overlay(overlayLayer)
+            .overlay(orbLayer)
+            .ignoresSafeArea()
+    }
+
+    @ViewBuilder
+    private var backgroundImageLayer: some View {
+        if let imgName = theme.current.backgroundImage,
+           let nsImg = Self.loadImage(imgName) {
+            GeometryReader { geo in
+                Image(nsImage: nsImg)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .clipped()
+                    .blur(radius: theme.current.backgroundBlur)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var overlayLayer: some View {
+        if theme.current.overlayOpacity > 0 {
+            theme.current.overlayColor
+                .opacity(theme.current.overlayOpacity)
+        }
+    }
+
+    @ViewBuilder
+    private var orbLayer: some View {
+        if theme.current.glowEnabled {
+            GeometryReader { g in
+                Circle()
+                    .fill(theme.current.orbA.opacity(0.25))
+                    .frame(width: g.size.width * 0.6)
+                    .blur(radius: 60)
+                    .offset(x: -g.size.width * 0.2, y: -g.size.height * 0.1)
+                Circle()
+                    .fill(theme.current.orbB.opacity(0.2))
+                    .frame(width: g.size.width * 0.5)
+                    .blur(radius: 50)
+                    .offset(x: g.size.width * 0.3, y: g.size.height * 0.4)
+                Circle()
+                    .fill(theme.current.orbC.opacity(0.15))
+                    .frame(width: g.size.width * 0.4)
+                    .blur(radius: 40)
+                    .offset(x: g.size.width * 0.1, y: g.size.height * 0.7)
+            }
+            .allowsHitTesting(false)
+        }
+    }
+
+    /// 从 App bundle Resources/ 加载图片
+    private static func loadImage(_ name: String) -> NSImage? {
+        // 先试 bundle named
+        if let img = NSImage(named: name) { return img }
+        // 再试 bundle path (Resources/ 目录)
+        let bundle = Bundle.main
+        for ext in ["png", "jpg", "jpeg"] {
+            if let path = bundle.path(forResource: name, ofType: ext) {
+                return NSImage(contentsOfFile: path)
+            }
+        }
+        // 最后试绝对路径(开发时)
+        let devPath = bundle.bundlePath + "/Contents/Resources/" + name
+        for ext in ["", ".png", ".jpg"] {
+            let p = devPath + ext
+            if let img = NSImage(contentsOfFile: p) { return img }
+        }
+        return nil
+    }
+}
+
+/// 卡片背景修饰器: 根据主题决定用纯色还是毛玻璃
+struct ThemeCardBackground: ViewModifier {
+    @EnvironmentObject var theme: ThemeManager
+    func body(content: Content) -> some View {
+        if theme.current.cardMaterial {
+            content
+                .background(.ultraThinMaterial)
+                .background(theme.current.cardFill.opacity(0.25))
+        } else {
+            content
+                .background(theme.current.cardFill.opacity(theme.current.cardFillOpacity))
+        }
+    }
+}
+
+extension View {
+    func themeCardBackground() -> some View {
+        self.modifier(ThemeCardBackground())
+    }
+}
+
 // MARK: - Color 扩展
 extension Color {
     init(hex: String) {
@@ -545,33 +646,12 @@ struct DBoardRootView: View {
     @EnvironmentObject var vm: DBoardViewModel
     @EnvironmentObject var theme: ThemeManager
     @State private var monitor: Any?
-    @State private var bgPhase: CGFloat = 0
 
     var body: some View {
         ZStack {
-            // 主题背景色
-            theme.current.background
-                .ignoresSafeArea()
-
-            // Single soft gradient blob at top
-            GeometryReader { geo in
-                EllipticalGradient(
-                    colors: [
-                        theme.current.accentPrimary.opacity(0.18 + 0.02 * sin(Double(bgPhase) * Double.pi)),
-                        theme.current.accentSecondary.opacity(0.12 + 0.02 * cos(Double(bgPhase) * Double.pi)),
-                        Color.clear
-                    ],
-                    center: UnitPoint(x: 0.5 + 0.05 * sin(Double(bgPhase) * Double.pi), y: 0.0),
-                    startRadiusFraction: 0.0,
-                    endRadiusFraction: 0.7
-                )
-                .frame(height: geo.size.height * 0.32)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            }
-            .ignoresSafeArea()
-            .onAppear {
-                withAnimation(.easeInOut(duration: 12).repeatForever(autoreverses: true)) { bgPhase = 1 }
-            }
+            // 皮肤背景(背景图 + 遮罩 + orb 光球)
+            ThemeBackground()
+                .environmentObject(theme)
 
             VStack(spacing: 0) {
                 HeaderView()
@@ -696,20 +776,22 @@ struct HeaderView: View {
     @EnvironmentObject var vm: DBoardViewModel
     @EnvironmentObject var theme: ThemeManager
     @EnvironmentObject var fm: FontManager
-    @State private var dragOffset: CGSize = .zero
     @State private var showHandle = false
 
     var body: some View {
         HStack(spacing: 10) {
-            // 拖动把手: hover 时出现, 暗示可拖出为独立窗口
-            Image(systemName: "line.3.horizontal")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(theme.current.textMuted.opacity(showHandle ? 0.6 : 0))
+            // 双击标题可脱出为独立窗口, hover 时显示提示图标
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(theme.current.textMuted.opacity(showHandle ? 0.5 : 0))
                 .frame(width: 14)
                 .animation(.easeInOut(duration: 0.2), value: showHandle)
+                .help("双击标题栏可脱出为独立窗口")
             Text("我的需求看板")
-                .font(fm.font(28))
+                .font(fm.font(22))
                 .foregroundStyle(theme.current.accentGradient)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
             Spacer()
             if vm.urgentCount > 0 {
                 Text("\(vm.urgentCount) 紧急").font(fm.font(13))
@@ -736,19 +818,12 @@ struct HeaderView: View {
         .padding(.horizontal, 20).padding(.vertical, 20)
         .contentShape(Rectangle())
         .onHover { showHandle = $0 }
-        .gesture(
-            DragGesture(minimumDistance: 20)
-                .onChanged { v in dragOffset = v.translation }
-                .onEnded { v in
-                    dragOffset = .zero
-                    // 拖动超过 20pt -> 触发脱出
-                    if abs(v.translation.width) > 20 || abs(v.translation.height) > 20 {
-                        if let app = NSApp.delegate as? AppDelegate {
-                            app.detachPanel()
-                        }
-                    }
-                }
-        )
+        .onTapGesture(count: 2) {
+            // 双击标题区 -> 脱出为独立窗口
+            if let app = NSApp.delegate as? AppDelegate {
+                app.detachPanel()
+            }
+        }
     }
 }
 

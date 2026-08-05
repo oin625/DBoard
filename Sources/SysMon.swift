@@ -399,7 +399,7 @@ struct SysMonView: View {
         }
         .frame(minWidth: popoverMode ? 0 : 560, minHeight: popoverMode ? 0 : 420)
         .focusEffectDisabled()
-        .background(theme.current.background.ignoresSafeArea())
+        .background(ThemeBackground().environmentObject(theme).environmentObject(ThemeManager.shared))
         .onChange(of: vm.level) { _, new in
             // 亮灯时自动拉归因数据
             if new != .smooth && !vm.detailLoaded { vm.loadDetail() }

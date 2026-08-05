@@ -343,7 +343,7 @@ struct ReplyInboxView: View {
 
     var body: some View {
         ZStack {
-            theme.current.background.ignoresSafeArea()
+            ThemeBackground().environmentObject(theme).environmentObject(ThemeManager.shared)
             GeometryReader { geo in
                 EllipticalGradient(
                     colors: [
