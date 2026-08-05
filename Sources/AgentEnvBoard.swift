@@ -229,7 +229,10 @@ struct McpBoardView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                Text("MCP Server 由 Qoder 注入或 ~/.qoder/mcp.json 自配, 提供对话内可调用的工具")
+                Text("MCP Server 由 Qoder 注入或 ~/.qoder/mcp.json 自配, 提供对话内可调用的工具。内置项跨项目聚合(不同项目注入的 server 不同)")
+                    .font(fm.font(10)).foregroundStyle(theme.current.textMuted)
+                    .padding(.horizontal, 2)
+                Text("● 绿 = HTTP 端点在线 · ● 红 = 探测失败 · ● 灰 = 按会话注入无常驻端口, 无法探测(不代表没用)")
                     .font(fm.font(10)).foregroundStyle(theme.current.textMuted)
                     .padding(.horizontal, 2)
                 ForEach(env.mcps) { m in card(m) }
