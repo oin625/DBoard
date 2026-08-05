@@ -652,6 +652,8 @@ struct MemoryBoardView: View {
     /// 原地展开的记忆条目及其正文缓存 —— 点击不再跳编辑器, 就地预览
     @State private var expandedEntries: Set<UUID> = []
     @State private var contentCache: [UUID: String] = [:]
+    /// 已"显示全部"的分类节(组名|分类名) —— 大节默认只渲染前 15 条, 控制视图数量
+    @State private var fullCats: Set<String> = []
 
     /// 分类名 -> 中文
     private static let catZh: [String: String] = [
@@ -670,7 +672,8 @@ struct MemoryBoardView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
+            // Lazy: 只构建滚入可视区的行 —— 全量 VStack 在 tesla(993条)展开时会一次建近千个视图
+            LazyVStack(alignment: .leading, spacing: 10) {
                 Text("长期记忆按「打开的项目目录」隔离: 只有在该项目干活时才注入; 全局组则任何会话都注入。每行是一个项目, 点行展开(分类分节), 点条目就地预览正文, 行尾 ↗ 才是打开文件")
                     .font(fm.font(10)).foregroundStyle(theme.current.textMuted)
                     .padding(.horizontal, 2)
@@ -684,6 +687,7 @@ struct MemoryBoardView: View {
                             withAnimation(.spring(response: 0.3, dampingFraction: 1.0)) {
                                 expandedGroups.removeAll()
                                 expandedEntries.removeAll()
+                                fullCats.removeAll()
                             }
                         }) {
                             HStack(spacing: 3) {
@@ -817,7 +821,18 @@ struct MemoryBoardView: View {
                         Rectangle().fill(theme.current.textTertiary.opacity(0.15)).frame(height: 1)
                     }
                     .padding(.leading, 14).padding(.top, 5)
-                    ForEach(list) { e in entryRow(e) }
+                    let capKey = g.name + "|" + cat
+                    let showAll = fullCats.contains(capKey) || !search.isEmpty
+                    ForEach(showAll ? list : Array(list.prefix(15))) { e in entryRow(e) }
+                    if !showAll && list.count > 15 {
+                        Button(action: { fullCats.insert(capKey) }) {
+                            Text("… 展开其余 \(list.count - 15) 条")
+                                .font(fm.font(10))
+                                .foregroundStyle(theme.current.accentPrimary.opacity(0.85))
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.leading, 20)
+                    }
                 }
             }
         }
