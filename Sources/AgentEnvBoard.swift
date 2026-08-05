@@ -135,29 +135,65 @@ final class AgentEnvViewModel: ObservableObject {
         var out: [HookItem] = []
         let fm = FileManager.default
         let home = NSHomeDirectory()
-        // settings.json 为主, settings.local.json 补充
+
+        // 来源 1: settings.json / settings.local.json 里手工注册的钩子
         for file in ["/.claude/settings.json", "/.claude/settings.local.json"] {
             guard let d = fm.contents(atPath: home + file),
                   let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                   let hooks = j["hooks"] as? [String: Any] else { continue }
-            for (event, v) in hooks {
-                guard let arr = v as? [[String: Any]] else { continue }
-                for entry in arr {
-                    let matcher = (entry["matcher"] as? String) ?? "*"
-                    for hk in (entry["hooks"] as? [[String: Any]]) ?? [] {
-                        let cmd = (hk["command"] as? String) ?? ""
-                        guard !cmd.isEmpty else { continue }
-                        let script = extractScript(cmd)
-                        out.append(HookItem(
-                            event: event, matcher: matcher, command: cmd,
-                            scriptPath: script,
-                            scriptExists: script.isEmpty ? true : fm.fileExists(atPath: script),
-                            source: classify(cmd)))
-                    }
+            appendHooks(hooks, into: &out, sourceSuffix: "", pluginRoot: nil)
+        }
+
+        // 来源 2: 已安装插件自带的 hooks/hooks.json —— 由插件体系自动加载,
+        // 不出现在 settings.json 里。之前面板漏了这块, 导致"只看得到 1.0.6 的死钩子,
+        // 看不到 1.1.3 正在跑的新钩子"。
+        // installed_plugins.json 记录了每个插件实际加载的 installPath。
+        if let d = fm.contents(atPath: home + "/.claude/plugins/installed_plugins.json"),
+           let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+           let plugins = j["plugins"] as? [String: Any] {
+            for (name, v) in plugins {
+                guard let installs = v as? [[String: Any]] else { continue }
+                for inst in installs {
+                    guard let root = inst["installPath"] as? String else { continue }
+                    let ver = (inst["version"] as? String) ?? "?"
+                    guard let hd = fm.contents(atPath: root + "/hooks/hooks.json"),
+                          let hj = try? JSONSerialization.jsonObject(with: hd) as? [String: Any],
+                          let hooks = (hj["hooks"] as? [String: Any]) ?? (hj as [String: Any]?) else { continue }
+                    let short = name.split(separator: "@").first.map(String.init) ?? name
+                    appendHooks(hooks, into: &out,
+                                sourceSuffix: "\(short) \(ver)(插件自带)",
+                                pluginRoot: root)
                 }
             }
         }
         return out
+    }
+
+    /// 解析一段 hooks 配置(事件 -> [{matcher, hooks:[{command}]}]) 并追加到结果。
+    /// pluginRoot 非空时展开 ${CLAUDE_PLUGIN_ROOT} 变量。
+    private static func appendHooks(_ hooks: [String: Any], into out: inout [HookItem],
+                                    sourceSuffix: String, pluginRoot: String?) {
+        let fm = FileManager.default
+        for (event, v) in hooks {
+            guard let arr = v as? [[String: Any]] else { continue }
+            for entry in arr {
+                let matcher = (entry["matcher"] as? String) ?? "*"
+                for hk in (entry["hooks"] as? [[String: Any]]) ?? [] {
+                    var cmd = (hk["command"] as? String) ?? ""
+                    guard !cmd.isEmpty else { continue }
+                    if let root = pluginRoot {
+                        cmd = cmd.replacingOccurrences(of: "${CLAUDE_PLUGIN_ROOT}", with: root)
+                        cmd = cmd.replacingOccurrences(of: "\"", with: "")
+                    }
+                    let script = extractScript(cmd)
+                    out.append(HookItem(
+                        event: event, matcher: matcher, command: cmd,
+                        scriptPath: script,
+                        scriptExists: script.isEmpty ? true : fm.fileExists(atPath: script),
+                        source: sourceSuffix.isEmpty ? classify(cmd) : sourceSuffix))
+                }
+            }
+        }
     }
 
     /// 从 "node /path/x.js arg" / "bash /path/y.sh" / "/path/z.sh stop" 里抽脚本路径
