@@ -912,6 +912,9 @@ final class SysMonWindowController {
         win.titlebarAppearsTransparent = true
         win.styleMask = [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView]
         win.isReleasedWhenClosed = false
+        // 原生毛玻璃需要窗口透明才能透出桌面壁纸
+        win.isOpaque = false
+        win.backgroundColor = .clear
         win.collectionBehavior = [.moveToActiveSpace, .fullScreenPrimary]
         // 缩放范围: 下限跟随内容最小值, 上限放开到屏幕
         win.contentMinSize = NSSize(width: 560, height: 380)

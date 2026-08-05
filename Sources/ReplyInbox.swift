@@ -320,6 +320,9 @@ final class ReplyInboxWindowController {
         win.isMovableByWindowBackground = true
         win.center()
         win.isReleasedWhenClosed = false
+        // 原生毛玻璃需要窗口透明才能透出桌面壁纸
+        win.isOpaque = false
+        win.backgroundColor = .clear
         win.contentMinSize = NSSize(width: 420, height: 380)
         win.contentMaxSize = NSSize(width: 2600, height: 2200)
         win.setFrameAutosaveName("DBoardReplyInboxWindow")

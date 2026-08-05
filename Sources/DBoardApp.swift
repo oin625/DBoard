@@ -108,6 +108,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         win.level = .floating
         win.hidesOnDeactivate = false
         win.isReleasedWhenClosed = false
+        // 原生毛玻璃需要窗口透明才能透出桌面壁纸
+        win.isOpaque = false
+        win.backgroundColor = .clear
         win.contentViewController = hosting
         win.minSize = NSSize(width: 380, height: 480)
         win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]

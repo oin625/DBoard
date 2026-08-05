@@ -659,6 +659,9 @@ final class MarketMapWindowController {
         win.setContentSize(NSSize(width: 1280, height: 800))
         win.styleMask = [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView]
         win.isReleasedWhenClosed = false
+        // 原生毛玻璃需要窗口透明才能透出桌面壁纸
+        win.isOpaque = false
+        win.backgroundColor = .clear
         win.contentMinSize = NSSize(width: 720, height: 500)
         win.contentMaxSize = NSSize(width: 2600, height: 2200)
         win.setFrameAutosaveName("DBoardMarketMapWindow")

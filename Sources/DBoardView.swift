@@ -1,16 +1,42 @@
 import SwiftUI
 import Cocoa
 
+/// 原生毛玻璃: NSVisualEffectView 透出桌面壁纸
+struct NativeBlurView: NSViewRepresentable {
+    var material: NSVisualEffectView.Material = .hudWindow
+    var blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material = material
+        v.blendingMode = blendingMode
+        v.state = .active
+        v.isEmphasized = true
+        return v
+    }
+
+    func updateNSView(_ v: NSVisualEffectView, context: Context) {
+        v.material = material
+        v.blendingMode = blendingMode
+    }
+}
+
 // MARK: - 通用皮肤背景(背景图 + 遮罩 + 毛玻璃 + orb 光球)
 struct ThemeBackground: View {
     @EnvironmentObject var theme: ThemeManager
     var body: some View {
-        // 用 Color 铺底(保证自身不撑大布局), 所有装饰层用 overlay 叠加
-        theme.current.background
-            .overlay(backgroundImageLayer)
-            .overlay(overlayLayer)
-            .overlay(orbLayer)
-            .ignoresSafeArea()
+        if theme.current.nativeBlur {
+            // 原生毛玻璃: 直接透出桌面壁纸, 不加任何自己的颜色
+            NativeBlurView()
+                .ignoresSafeArea()
+        } else {
+            // 用 Color 铺底(保证自身不撑大布局), 所有装饰层用 overlay 叠加
+            theme.current.background
+                .overlay(backgroundImageLayer)
+                .overlay(overlayLayer)
+                .overlay(orbLayer)
+                .ignoresSafeArea()
+        }
     }
 
     @ViewBuilder

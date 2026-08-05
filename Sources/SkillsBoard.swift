@@ -687,8 +687,12 @@ struct SkillsBoardView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            if boardTab == .skills { toolbar }
+            // 顶部 chrome: 半透明材质带 —— 文字不能裸贴在桌面壁纸上, 否则对比度不可控
+            VStack(spacing: 0) {
+                header
+                if boardTab == .skills { toolbar }
+            }
+            .background(theme.current.cardFill.opacity(theme.current.cardFillOpacity * 0.75))
             Divider().opacity(0.4)
             switch boardTab {
             case .skills:
@@ -842,7 +846,7 @@ struct SkillsBoardView: View {
             Text(item.desc.isEmpty ? "（无描述）" : item.desc)
                 .font(fm.font(11))
                 .lineSpacing(2.5)
-                .foregroundStyle(theme.current.textSecondary.opacity(0.85))
+                .foregroundStyle(theme.current.textSecondary)
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, minHeight: 30, alignment: .topLeading)
                 .multilineTextAlignment(.leading)
@@ -867,7 +871,7 @@ struct SkillsBoardView: View {
                     }
                     Spacer()
                 }
-                .foregroundStyle(theme.current.textMuted.opacity(0.8))
+                .foregroundStyle(theme.current.textMuted)
             }
         }
         .padding(11)
@@ -926,10 +930,15 @@ struct SkillsBoardView: View {
         Button("在 Finder 中显示") { vm.revealInFinder(item) }
     }
 
+    /// 卡片底色。半透明主题(毛玻璃)下不再叠 0.82 折扣 —— 那会让白底掉到 0.41,
+    /// 桌面壁纸的彩色直接透到文字后面, 对比度崩掉。
+    /// 选中/异常态只做描边和角标区分, 底色始终保持同一厚度。
     private func cardFill(_ item: SkillItem, isHover: Bool, isSel: Bool) -> Color {
-        if isSel { return theme.current.accentPrimary.opacity(0.09) }
-        if item.health == .broken { return Color(hex: "#d94f4f").opacity(0.055) }
-        return theme.current.cardFill.opacity(theme.current.cardFillOpacity * (isHover ? 1.0 : 0.82))
+        let base = theme.current.cardFillOpacity
+        // 厚底(>=0.85)才允许 hover 时略微减淡; 薄底主题一律用满
+        let op = base >= 0.85 ? base * (isHover ? 1.0 : 0.94) : base
+        if isSel { return theme.current.cardFill.opacity(min(op + 0.05, 1.0)) }
+        return theme.current.cardFill.opacity(op)
     }
 
     private func accentColor(_ item: SkillItem) -> Color {
@@ -1232,10 +1241,15 @@ struct SkillsBoardView: View {
     private func sectionHeader(_ title: String, _ n: Int) -> some View {
         let urgent = title == "需要处理"
         return HStack(spacing: 6) {
-            Text(title).font(.system(size: 10, weight: .semibold)).tracking(0.6)
-                .foregroundStyle(urgent ? Color(hex: "#d94f4f") : theme.current.textMuted)
-            Text("\(n)").font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(theme.current.textMuted.opacity(0.7))
+            // 分组标题压在背景图上, 需要底衬 + 加重字重才读得出
+            HStack(spacing: 5) {
+                Text(title).font(.system(size: 10, weight: .bold)).tracking(0.6)
+                    .foregroundStyle(urgent ? Color(hex: "#c43a3a") : theme.current.textSecondary)
+                Text("\(n)").font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(theme.current.textTertiary)
+            }
+            .padding(.horizontal, 7).padding(.vertical, 3)
+            .background(Capsule().fill(theme.current.cardFill.opacity(theme.current.cardFillOpacity * 0.7)))
             Spacer()
         }
         .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 7)
@@ -1482,6 +1496,9 @@ final class SkillsBoardWindowController {
         win.setContentSize(NSSize(width: 780, height: 620))
         win.styleMask = [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView]
         win.isReleasedWhenClosed = false
+        // 原生毛玻璃需要窗口透明才能透出桌面壁纸
+        win.isOpaque = false
+        win.backgroundColor = .clear
         win.collectionBehavior = [.moveToActiveSpace, .fullScreenPrimary]
         win.contentMinSize = NSSize(width: 620, height: 440)
         win.contentMaxSize = NSSize(width: 2600, height: 2200)

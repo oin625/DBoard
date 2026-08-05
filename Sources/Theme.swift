@@ -31,6 +31,7 @@ struct DBoardTheme: Identifiable, Equatable {
     let overlayOpacity: Double        // 遮罩层透明度(暗化/亮化)
     let overlayColor: Color           // 遮罩颜色(暗皮肤用黑, 亮皮肤用白)
     let glowEnabled: Bool             // 是否开启 orb 光球
+    let nativeBlur: Bool              // true=用 NSVisualEffectView 透出桌面壁纸(原生毛玻璃)
 
     var accentGradient: LinearGradient {
         LinearGradient(colors: [accentPrimary, accentSecondary], startPoint: .leading, endPoint: .trailing)
@@ -52,7 +53,7 @@ extension DBoardTheme {
         textTertiary: Color(hex: "#8b6f47"), textMuted: Color(hex: "#b89b7a"),
         chrome: Color(hex: "#d4b896"), separator: Color(hex: "#e8d5b7"),
         backgroundImage: nil, backgroundBlur: 0, cardMaterial: false,
-        overlayOpacity: 0, overlayColor: .clear, glowEnabled: true
+        overlayOpacity: 0, overlayColor: .clear, glowEnabled: true, nativeBlur: false
     )
 
     // 赛博朋克: 霓虹城市夜景 + 暗色毛玻璃
@@ -66,7 +67,7 @@ extension DBoardTheme {
         textTertiary: Color(hex: "#6c8ebf"), textMuted: Color(hex: "#3d5a80"),
         chrome: Color(hex: "#2a2a4a"), separator: Color(hex: "#1f1f3a"),
         backgroundImage: "bg-cyberpunk", backgroundBlur: 3, cardMaterial: true,
-        overlayOpacity: 0.55, overlayColor: .black, glowEnabled: false
+        overlayOpacity: 0.55, overlayColor: .black, glowEnabled: false, nativeBlur: false
     )
 
     // QQ经典: 蓝天白云 + 亮色毛玻璃(致敬2005-2010)
@@ -80,7 +81,7 @@ extension DBoardTheme {
         textTertiary: Color(hex: "#5a7a9a"), textMuted: Color(hex: "#7a8fa6"),
         chrome: Color(hex: "#b8d4e8"), separator: Color(hex: "#d4eaf7"),
         backgroundImage: "bg-qqsky", backgroundBlur: 2, cardMaterial: true,
-        overlayOpacity: 0.25, overlayColor: .white, glowEnabled: false
+        overlayOpacity: 0.25, overlayColor: .white, glowEnabled: false, nativeBlur: false
     )
 
     // 星空: 紫粉星云 + 暗色毛玻璃 + 淡光球
@@ -94,21 +95,23 @@ extension DBoardTheme {
         textTertiary: Color(hex: "#a78bfa"), textMuted: Color(hex: "#6d5aab"),
         chrome: Color(hex: "#2e1f5e"), separator: Color(hex: "#1e1040"),
         backgroundImage: "bg-starfield", backgroundBlur: 1, cardMaterial: true,
-        overlayOpacity: 0.5, overlayColor: .black, glowEnabled: true
+        overlayOpacity: 0.5, overlayColor: .black, glowEnabled: true, nativeBlur: false
     )
 
     // 毛玻璃: 抽象光斑 + 系统 Material + 彩色光球
     static let glass = DBoardTheme(
         id: "glass", name: "毛玻璃", icon: "rectangle.on.rectangle",
-        background: Color(hex: "#f0f2f5"),
-        orbA: Color(hex: "#60a5fa"), orbB: Color(hex: "#a78bfa"), orbC: Color(hex: "#f472b6"),
-        cardFill: .white, cardFillOpacity: 0.55,
-        accentPrimary: Color(hex: "#3b82f6"), accentSecondary: Color(hex: "#8b5cf6"),
-        textPrimary: Color(hex: "#1e293b"), textSecondary: Color(hex: "#334155"),
-        textTertiary: Color(hex: "#64748b"), textMuted: Color(hex: "#94a3b8"),
-        chrome: Color(hex: "#cbd5e1"), separator: Color(hex: "#e2e8f0"),
-        backgroundImage: "bg-glass", backgroundBlur: 8, cardMaterial: true,
-        overlayOpacity: 0.2, overlayColor: .white, glowEnabled: true
+        background: .clear,
+        orbA: .clear, orbB: .clear, orbC: .clear,
+        // 卡片 0.9: 毛玻璃的"透"体现在窗口背景层, 卡片本身必须够厚才能保证文字可读
+        cardFill: .white, cardFillOpacity: 0.9,
+        accentPrimary: Color(hex: "#0058b0"), accentSecondary: Color(hex: "#0058b0"),
+        // vibrancy: 半透明层上的文字禁用浅灰, 全部收紧到高对比区间
+        textPrimary: Color(hex: "#0a0a0c"), textSecondary: Color(hex: "#2b2b30"),
+        textTertiary: Color(hex: "#4a4a52"), textMuted: Color(hex: "#63636d"),
+        chrome: Color(hex: "#b8b8c0"), separator: Color(hex: "#d0d0d8"),
+        backgroundImage: nil, backgroundBlur: 0, cardMaterial: true,
+        overlayOpacity: 0, overlayColor: .clear, glowEnabled: false, nativeBlur: true
     )
 
     static let all: [DBoardTheme] = [.kraft, .cyberpunk, .qqClassic, .starfield, .glass]
