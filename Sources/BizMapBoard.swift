@@ -65,6 +65,8 @@ struct BizMapCache: Codable {
 
 // MARK: - ViewModel
 
+enum BizPerspective { case services, requirements }
+
 final class BizMapViewModel: ObservableObject {
     @Published var cache: BizMapCache?
     @Published var query: String = ""
@@ -72,6 +74,7 @@ final class BizMapViewModel: ObservableObject {
     @Published var loadError: String?
     @Published var regenerating = false
     @Published var genError: String?   // 生成器失败不能静默: 老数据照常展示, 但 header 要亮警告
+    @Published var perspective: BizPerspective = .services   // 服务视角 / 需求视角
 
     private let cachePath = NSString(string: "~/.claude/bizmap-cache.json").expandingTildeInPath
     private let genScript = NSString(string: "~/Documents/one/projects/业务地图/gen_bizmap.py").expandingTildeInPath
@@ -144,6 +147,50 @@ final class BizMapViewModel: ObservableObject {
     var prdItems: [BizPRDItem] { cache?.prdItemsAll ?? [] }
     var prdUnrouted: [BizPRDItem] { prdItems.filter { $0.services.isEmpty } }
 
+    // MARK: 需求视角: 搜索框降级为筛选器(名称/编号/开发/服务/状态)
+    var filteredPRD: [BizPRDItem] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return prdItems }
+        return prdItems.filter { p in
+            p.name.lowercased().contains(q) || p.no.lowercased().contains(q)
+                || (p.dev ?? "").lowercased().contains(q)
+                || p.status.contains(q)
+                || p.services.contains { $0.lowercased().contains(q) }
+        }
+    }
+
+    /// 状态分组: 待接置顶(承接决策队列), 后续按生命周期推进, 暂停垫底
+    var prdSections: [(label: String, items: [BizPRDItem])] {
+        let order: [(codes: [String], label: String)] = [
+            (["SJWC"], "待接 · 方案设计完成"),
+            (["YTJ", "YJS"], "已提交 / 已接收"),
+            (["KFZ"], "开发中"),
+            (["CSZ"], "测试中"),
+            (["CSWC"], "测试完成"),
+            (["CPYSZ", "CPYSWC"], "承接人验收"),
+            (["ZT"], "暂停"),
+        ]
+        func rank(_ p: BizPRDItem) -> Int {
+            switch p.pri { case "P0": return 0; case "P1": return 1; case "P2": return 2; default: return 3 }
+        }
+        let sortFn: (BizPRDItem, BizPRDItem) -> Bool = { a, b in
+            rank(a) != rank(b) ? rank(a) < rank(b) : a.no > b.no
+        }
+        let src = filteredPRD
+        var used = Set<Int>()
+        var out: [(String, [BizPRDItem])] = []
+        for o in order {
+            let hit = src.filter { o.codes.contains($0.code) }.sorted(by: sortFn)
+            if !hit.isEmpty {
+                out.append((o.label, hit))
+                hit.forEach { used.insert($0.id) }
+            }
+        }
+        let rest = src.filter { !used.contains($0.id) }.sorted(by: sortFn)
+        if !rest.isEmpty { out.append(("其他", rest)) }
+        return out
+    }
+
     func service(_ name: String) -> BizService? {
         cache?.services.first { $0.name == name }
     }
@@ -198,6 +245,8 @@ struct BizMapBoardView: View {
             Divider().opacity(0.4)
             if let err = vm.loadError {
                 errorState(err)
+            } else if vm.perspective == .requirements {
+                requirementList
             } else {
                 HStack(spacing: 0) {
                     wall
@@ -218,7 +267,7 @@ struct BizMapBoardView: View {
     private var header: some View {
         HStack(spacing: 10) {
             Text("BizMap").font(fm.font(19).weight(.bold)).foregroundStyle(theme.current.accentPrimary)
-            Text("业务地图").font(fm.font(12)).foregroundStyle(theme.current.textMuted)
+            perspectiveToggle
             pill("服务", "\(vm.cache?.services.count ?? 0)")
             pill("L2", "\(vm.l2Count)")
             pill("D单", "\(vm.dCount)")
@@ -258,6 +307,28 @@ struct BizMapBoardView: View {
         .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 8)
     }
 
+    /// 视角切换: 服务卡片墙 / 需求集中列表
+    private var perspectiveToggle: some View {
+        HStack(spacing: 2) {
+            perspectiveBtn("服务", .services)
+            perspectiveBtn("需求", .requirements)
+        }
+        .padding(2)
+        .background(Capsule().fill(theme.current.cardFill.opacity(theme.current.cardFillOpacity * 0.6)))
+        .overlay(Capsule().stroke(theme.current.separator, lineWidth: 0.5))
+    }
+
+    private func perspectiveBtn(_ label: String, _ p: BizPerspective) -> some View {
+        let active = vm.perspective == p
+        return Button(action: { withAnimation(.easeInOut(duration: 0.15)) { vm.perspective = p } }) {
+            Text(label).font(fm.font(11).weight(active ? .bold : .regular))
+                .padding(.horizontal, 9).padding(.vertical, 3)
+                .background(Capsule().fill(active ? theme.current.accentPrimary.opacity(0.16) : Color.clear))
+                .foregroundStyle(active ? theme.current.accentPrimary : theme.current.textMuted)
+        }
+        .buttonStyle(.plain)
+    }
+
     private func pill(_ label: String, _ value: String) -> some View {
         HStack(spacing: 3) {
             Text(label).font(fm.font(10)).foregroundStyle(theme.current.textMuted)
@@ -274,7 +345,9 @@ struct BizMapBoardView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(theme.current.textMuted)
-                TextField("输入需求关键词做路由：验券 / 领券 / 企微群聊 / 售后退款 / 会员卡 / 下单 …", text: $vm.query)
+                TextField(vm.perspective == .requirements
+                          ? "筛选需求：名称 / 编号 / 服务 / 开发 / 状态 …"
+                          : "输入需求关键词做路由：验券 / 领券 / 企微群聊 / 售后退款 / 会员卡 / 下单 …", text: $vm.query)
                     .textFieldStyle(.plain).font(fm.font(12.5))
                     .focused($searchFocused)
                 if !vm.query.isEmpty {
@@ -293,7 +366,7 @@ struct BizMapBoardView: View {
 
     @ViewBuilder private var routeHint: some View {
         let hits = vm.routeHits
-        if !vm.query.trimmingCharacters(in: .whitespaces).isEmpty {
+        if vm.perspective == .services, !vm.query.trimmingCharacters(in: .whitespaces).isEmpty {
             if hits.primary.isEmpty && hits.secondary.isEmpty {
                 Text("无命中 —— 换个关键词，或该记入路由表（告诉 AI 补）")
                     .font(fm.font(11)).foregroundStyle(theme.current.textMuted)
@@ -517,6 +590,98 @@ struct BizMapBoardView: View {
             if clickable, let target = vm.service(name) { vm.selected = target }
         }
         .environmentObject(theme).environmentObject(fm)
+    }
+
+    // MARK: 需求视角 —— 集中看需求, 服务降为行内 chip(可点跳回服务视角)
+
+    private var requirementList: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 13) {
+                if vm.prdItems.isEmpty {
+                    VStack(spacing: 6) {
+                        Text("还没有 PRD 需求快照").font(fm.font(12)).foregroundStyle(theme.current.textMuted)
+                        Text("对 AI 说「刷新PRD」拉取并标注").font(fm.font(10.5)).foregroundStyle(theme.current.textMuted.opacity(0.7))
+                    }
+                    .frame(maxWidth: .infinity).padding(.top, 60)
+                } else if vm.filteredPRD.isEmpty {
+                    Text("无匹配需求 —— 换个筛选词").font(fm.font(11)).foregroundStyle(theme.current.textMuted)
+                        .frame(maxWidth: .infinity).padding(.top, 60)
+                } else {
+                    ForEach(vm.prdSections, id: \.label) { sec in
+                        VStack(alignment: .leading, spacing: 7) {
+                            HStack(spacing: 5) {
+                                Text(sec.label).font(fm.font(11.5).weight(.semibold))
+                                    .foregroundStyle(sec.label.hasPrefix("待接") ? hitPrimary : theme.current.textSecondary)
+                                Text("\(sec.items.count)").font(fm.font(9.5))
+                                    .padding(.horizontal, 5).padding(.vertical, 1)
+                                    .background(Capsule().fill(theme.current.separator.opacity(0.5)))
+                                    .foregroundStyle(theme.current.textMuted)
+                            }
+                            ForEach(sec.items) { p in prdRow(p) }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+        }
+    }
+
+    private func prdRow(_ p: BizPRDItem) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 5) {
+                Text(p.no).font(fm.font(9.5).weight(.bold)).foregroundStyle(prdBlue)
+                if let pri = p.pri {
+                    Text(pri).font(fm.font(9).weight(.bold))
+                        .foregroundStyle(pri == "P0" ? Color(hex: "#d94f4f") : theme.current.textMuted)
+                }
+                if p.scopes.contains("mine") {
+                    Text("我参与").font(fm.font(8.5))
+                        .padding(.horizontal, 4).padding(.vertical, 1)
+                        .background(Capsule().fill(prdBlue.opacity(0.14))).foregroundStyle(prdBlue)
+                }
+                if let dev = p.dev, !dev.isEmpty {
+                    Text("开发 \(dev)").font(fm.font(9)).foregroundStyle(theme.current.textMuted)
+                }
+                Spacer(minLength: 0)
+                Button("PRD明细") { vm.openURL(p.url) }
+                    .buttonStyle(.plain).font(fm.font(9).weight(.medium)).foregroundStyle(prdBlue)
+                if let doc = p.docs.first {
+                    Button("需求文档") { vm.openURL(doc) }
+                        .buttonStyle(.plain).font(fm.font(9).weight(.medium)).foregroundStyle(prdBlue)
+                }
+            }
+            Text(p.name).font(fm.font(12)).foregroundStyle(theme.current.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 4) {
+                if p.services.isEmpty {
+                    Text("未路由").font(fm.font(9))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().fill(hitPrimary.opacity(0.14))).foregroundStyle(hitPrimary)
+                        .help(p.note ?? "告诉 AI 这条该落哪个服务")
+                } else {
+                    ForEach(p.services, id: \.self) { name in
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                vm.perspective = .services
+                                vm.selected = vm.service(name)
+                            }
+                        }) {
+                            Text(name).font(fm.font(9.5))
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Capsule().fill(theme.current.accentPrimary.opacity(0.1)))
+                                .foregroundStyle(theme.current.accentPrimary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("跳到服务视角并选中 \(name)")
+                    }
+                }
+            }
+        }
+        .padding(9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 9).fill(theme.current.cardFill.opacity(theme.current.cardFillOpacity)))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(theme.current.separator, lineWidth: 0.5))
+        .help(p.note ?? "")
     }
 
     private func errorState(_ msg: String) -> some View {
