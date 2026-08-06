@@ -265,12 +265,11 @@ struct BizMapBoardView: View {
         .onAppear { vm.load(); searchFocused = true }
     }
 
-    // MARK: Header —— 双品牌字标即视角切换: 选中的点亮, 未选的压暗成影子
+    // MARK: Header —— 叠卡式视角切换: 当前字标在前, 待切的缩小压暗垫在右斜下方, 点影子换前台
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 18) {
-            wordmark("BizMap", "业务地图", .services)
-            wordmark("ReqFlow", "需求流", .requirements)
+        HStack(alignment: .top, spacing: 18) {
+            perspectiveStack
             Spacer()
             if let g = vm.cache?.generated {
                 Text(g).font(fm.font(10)).foregroundStyle(theme.current.textMuted)
@@ -297,18 +296,28 @@ struct BizMapBoardView: View {
         .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 8)
     }
 
-    /// 品牌字标式 Tab: 选中 = 主色重墨 + 下划标, 未选 = 压暗影子态, 点击整页切换
-    private func wordmark(_ en: String, _ zh: String, _ p: BizPerspective) -> some View {
+    /// 叠卡容器: 两张字标同栈, 谁 active 谁在前台原位, 另一张缩到影子位
+    private var perspectiveStack: some View {
+        ZStack(alignment: .topLeading) {
+            wordCard("BizMap", "业务地图", .services)
+            wordCard("ReqFlow", "需求流", .requirements)
+        }
+        .frame(width: 240, height: 48, alignment: .topLeading)
+    }
+
+    /// 字标卡: active = 前台原位重墨 + 下划标; 非 active = 右斜下影子位(缩小/压暗/微斜), 点击弹簧换位
+    private func wordCard(_ en: String, _ zh: String, _ p: BizPerspective) -> some View {
         let active = vm.perspective == p
         return Button(action: {
-            withAnimation(.easeInOut(duration: 0.18)) { vm.perspective = p }
+            guard !active else { return }
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) { vm.perspective = p }
         }) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(en).font(fm.font(19).weight(.heavy))
-                        .foregroundStyle(active ? theme.current.accentPrimary : theme.current.textMuted.opacity(0.38))
+                        .foregroundStyle(active ? theme.current.accentPrimary : theme.current.textMuted)
                     Text(zh).font(fm.font(10))
-                        .foregroundStyle(active ? theme.current.textSecondary : theme.current.textMuted.opacity(0.35))
+                        .foregroundStyle(active ? theme.current.textSecondary : theme.current.textMuted)
                 }
                 Capsule()
                     .fill(active ? theme.current.accentPrimary : Color.clear)
@@ -317,6 +326,12 @@ struct BizMapBoardView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(active)
+        .scaleEffect(active ? 1 : 0.78, anchor: .topLeading)
+        .rotationEffect(.degrees(active ? 0 : 2.5), anchor: .topLeading)
+        .offset(x: active ? 0 : 98, y: active ? 0 : 17)
+        .opacity(active ? 1 : 0.4)
+        .zIndex(active ? 1 : 0)
         .help(active ? "" : "切换到 \(en) \(zh)")
     }
 
