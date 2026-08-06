@@ -248,8 +248,12 @@ struct BizMapBoardView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            searchBar
+            // 顶部 chrome(字标+搜索)结成一条带底色的区: 文字不能裸贴在壁纸上
+            VStack(spacing: 0) {
+                header
+                searchBar
+            }
+            .background(theme.current.cardFill.opacity(theme.current.cardFillOpacity * 0.78))
             Divider().opacity(0.4)
             if let err = vm.loadError {
                 errorState(err)
@@ -261,12 +265,16 @@ struct BizMapBoardView: View {
                     if let sel = vm.selected {
                         Divider().opacity(0.4)
                         detailPane(sel).frame(width: 262)
+                            // 右侧详情区必须自带实底: 否则文字直接贴在壁纸/背景图上没法读
+                            .background(theme.current.cardFill.opacity(theme.current.cardFillOpacity * 0.92))
                     }
                 }
             }
             footer
         }
-        .background(theme.current.background.opacity(popoverMode ? 1 : 0.98))
+        // 底层走与 Skills Board 同一套 ThemeBackground: 毛玻璃皮肤下是 NSVisualEffectView 原生材质,
+        // 不能用裸主题色 opacity —— 半透主题叠透明窗口会成"几乎全透"
+        .background(ThemeBackground().environmentObject(theme))
         .onAppear { vm.load(); searchFocused = true }
     }
 
