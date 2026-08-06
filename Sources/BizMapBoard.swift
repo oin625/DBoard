@@ -67,6 +67,13 @@ struct BizMapCache: Codable {
 
 enum BizPerspective { case services, requirements }
 
+/// 需求流组内分栏: 一次只看一栏, 告别 27 条平铺
+enum ReqTab: String, CaseIterable {
+    case notStarted = "待开始"
+    case inProgress = "进行中"
+    case others = "其他"
+}
+
 final class BizMapViewModel: ObservableObject {
     @Published var cache: BizMapCache?
     @Published var query: String = ""
@@ -76,6 +83,7 @@ final class BizMapViewModel: ObservableObject {
     @Published var genError: String?   // 生成器失败不能静默: 老数据照常展示, 但 header 要亮警告
     @Published var perspective: BizPerspective = .services   // 服务视角 / 需求视角
     @Published var showUnroutedOnly = false                   // 需求视角: 只看未路由
+    @Published var reqTab: ReqTab = .notStarted                // 需求流当前分栏
 
     private let cachePath = NSString(string: "~/.claude/bizmap-cache.json").expandingTildeInPath
     private let genScript = NSString(string: "~/Documents/one/projects/业务地图/gen_bizmap.py").expandingTildeInPath
@@ -162,36 +170,33 @@ final class BizMapViewModel: ObservableObject {
         }
     }
 
-    /// 状态分组: 待接置顶(承接决策队列), 后续按生命周期推进, 暂停垫底
-    var prdSections: [(label: String, items: [BizPRDItem])] {
-        let order: [(codes: [String], label: String)] = [
-            (["SJWC"], "待接 · 方案设计完成"),
-            (["YTJ", "YJS"], "已提交 / 已接收"),
-            (["KFZ"], "开发中"),
-            (["CSZ"], "测试中"),
-            (["CSWC"], "测试完成"),
-            (["CPYSZ", "CPYSWC"], "承接人验收"),
-            (["ZT"], "暂停"),
-        ]
-        func rank(_ p: BizPRDItem) -> Int {
+    /// 我参与的(非终态) —— 需求流首屏英雄区, 永远置顶
+    var myActive: [BizPRDItem] { prdItems.filter { $0.scopes.contains("mine") }.sorted(by: Self.prdSort) }
+
+    /// 组内分栏(排除"我的"避免重复): 待开始 / 进行中 / 其他
+    func tabItems(_ t: ReqTab) -> [BizPRDItem] {
+        let rest = prdItems.filter { !$0.scopes.contains("mine") }
+        let notStarted: Set<String> = ["YTJ", "YJS", "SJWC"]
+        let inProgress: Set<String> = ["KFZ", "CSZ"]
+        var out: [BizPRDItem]
+        switch t {
+        case .notStarted: out = rest.filter { notStarted.contains($0.code) }
+        case .inProgress: out = rest.filter { inProgress.contains($0.code) }
+        case .others: out = rest.filter { !notStarted.contains($0.code) && !inProgress.contains($0.code) }
+        }
+        if showUnroutedOnly { out = out.filter { $0.services.isEmpty } }
+        return out.sorted(by: Self.prdSort)
+    }
+
+    /// 排序: 可行动优先(待接在前) → P0 → 新编号
+    static func prdSort(_ a: BizPRDItem, _ b: BizPRDItem) -> Bool {
+        func stateRank(_ p: BizPRDItem) -> Int { p.code == "SJWC" ? 0 : 1 }
+        func priRank(_ p: BizPRDItem) -> Int {
             switch p.pri { case "P0": return 0; case "P1": return 1; case "P2": return 2; default: return 3 }
         }
-        let sortFn: (BizPRDItem, BizPRDItem) -> Bool = { a, b in
-            rank(a) != rank(b) ? rank(a) < rank(b) : a.no > b.no
-        }
-        let src = filteredPRD
-        var used = Set<Int>()
-        var out: [(String, [BizPRDItem])] = []
-        for o in order {
-            let hit = src.filter { o.codes.contains($0.code) }.sorted(by: sortFn)
-            if !hit.isEmpty {
-                out.append((o.label, hit))
-                hit.forEach { used.insert($0.id) }
-            }
-        }
-        let rest = src.filter { !used.contains($0.id) }.sorted(by: sortFn)
-        if !rest.isEmpty { out.append(("其他", rest)) }
-        return out
+        if stateRank(a) != stateRank(b) { return stateRank(a) < stateRank(b) }
+        if priRank(a) != priRank(b) { return priRank(a) < priRank(b) }
+        return a.no > b.no
     }
 
     func service(_ name: String) -> BizService? {
@@ -356,7 +361,6 @@ struct BizMapBoardView: View {
             .overlay(RoundedRectangle(cornerRadius: 9).stroke(searchFocused ? theme.current.accentPrimary.opacity(0.6) : theme.current.separator, lineWidth: 1))
 
             routeHint
-            reqSummary
         }
         .padding(.horizontal, 14).padding(.bottom, 8)
     }
@@ -377,31 +381,6 @@ struct BizMapBoardView: View {
                             .font(fm.font(11)).foregroundStyle(hitSecondary)
                     }
                 }
-            }
-        }
-    }
-
-    /// 需求视角摘要行: 总数/待接 + 可点的未路由筛选器(取代原头部死 pill)
-    @ViewBuilder private var reqSummary: some View {
-        if vm.perspective == .requirements, !vm.prdItems.isEmpty {
-            let sjwc = vm.prdItems.filter { $0.code == "SJWC" }.count
-            HStack(spacing: 8) {
-                Text("共 \(vm.prdItems.count) 条 · 待接 \(sjwc)")
-                    .font(fm.font(10.5)).foregroundStyle(theme.current.textMuted)
-                if !vm.prdUnrouted.isEmpty {
-                    Button(action: { withAnimation(.easeInOut(duration: 0.15)) { vm.showUnroutedOnly.toggle() } }) {
-                        HStack(spacing: 3) {
-                            if vm.showUnroutedOnly { Image(systemName: "checkmark").font(.system(size: 8, weight: .bold)) }
-                            Text("未路由 \(vm.prdUnrouted.count)").font(fm.font(10))
-                        }
-                        .padding(.horizontal, 7).padding(.vertical, 2)
-                        .background(Capsule().fill(hitPrimary.opacity(vm.showUnroutedOnly ? 0.28 : 0.12)))
-                        .foregroundStyle(hitPrimary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("只看定不出目标服务的需求（告诉 AI 补标注）")
-                }
-                Spacer()
             }
         }
     }
@@ -614,33 +593,44 @@ struct BizMapBoardView: View {
         .environmentObject(theme).environmentObject(fm)
     }
 
-    // MARK: 需求视角 —— 集中看需求, 服务降为行内 chip(可点跳回服务视角)
+    // MARK: 需求流 —— 首屏英雄区(我的) + 组内分栏, 告别全量平铺
 
     private var requirementList: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 13) {
+            LazyVStack(alignment: .leading, spacing: 10) {
                 if vm.prdItems.isEmpty {
                     VStack(spacing: 6) {
                         Text("还没有 PRD 需求快照").font(fm.font(12)).foregroundStyle(theme.current.textMuted)
                         Text("对 AI 说「刷新PRD」拉取并标注").font(fm.font(10.5)).foregroundStyle(theme.current.textMuted.opacity(0.7))
                     }
                     .frame(maxWidth: .infinity).padding(.top, 60)
-                } else if vm.filteredPRD.isEmpty {
-                    Text("无匹配需求 —— 换个筛选词").font(fm.font(11)).foregroundStyle(theme.current.textMuted)
-                        .frame(maxWidth: .infinity).padding(.top, 60)
+                } else if !vm.query.trimmingCharacters(in: .whitespaces).isEmpty {
+                    // 搜索时直出全量命中, 不受分栏限制
+                    let hits = vm.filteredPRD
+                    if hits.isEmpty {
+                        Text("无匹配需求 —— 换个筛选词").font(fm.font(11)).foregroundStyle(theme.current.textMuted)
+                            .frame(maxWidth: .infinity).padding(.top, 60)
+                    } else {
+                        sectionLabel("搜索结果", hits.count, tint: prdBlue)
+                        ForEach(hits) { prdRow($0) }
+                    }
                 } else {
-                    ForEach(vm.prdSections, id: \.label) { sec in
-                        VStack(alignment: .leading, spacing: 7) {
-                            HStack(spacing: 5) {
-                                Text(sec.label).font(fm.font(11.5).weight(.semibold))
-                                    .foregroundStyle(sec.label.hasPrefix("待接") ? hitPrimary : theme.current.textSecondary)
-                                Text("\(sec.items.count)").font(fm.font(9.5))
-                                    .padding(.horizontal, 5).padding(.vertical, 1)
-                                    .background(Capsule().fill(theme.current.separator.opacity(0.5)))
-                                    .foregroundStyle(theme.current.textMuted)
-                            }
-                            ForEach(sec.items) { p in prdRow(p) }
-                        }
+                    // 英雄区: 我正在参与的
+                    sectionLabel("我的进行中", vm.myActive.count, tint: prdBlue)
+                    if vm.myActive.isEmpty {
+                        Text("暂无我参与的需求").font(fm.font(10.5)).foregroundStyle(theme.current.textMuted)
+                            .padding(.leading, 2)
+                    } else {
+                        ForEach(vm.myActive) { prdRow($0, hero: true) }
+                    }
+                    groupTabs.padding(.top, 8)
+                    let items = vm.tabItems(vm.reqTab)
+                    if items.isEmpty {
+                        Text(vm.showUnroutedOnly ? "这一栏没有未路由需求" : "这一栏是空的")
+                            .font(fm.font(10.5)).foregroundStyle(theme.current.textMuted)
+                            .frame(maxWidth: .infinity).padding(.top, 24)
+                    } else {
+                        ForEach(items) { prdRow($0) }
                     }
                 }
             }
@@ -648,7 +638,53 @@ struct BizMapBoardView: View {
         }
     }
 
-    private func prdRow(_ p: BizPRDItem) -> some View {
+    private func sectionLabel(_ title: String, _ n: Int, tint: Color) -> some View {
+        HStack(spacing: 5) {
+            Text(title).font(fm.font(11.5).weight(.semibold)).foregroundStyle(tint)
+            Text("\(n)").font(fm.font(9.5))
+                .padding(.horizontal, 5).padding(.vertical, 1)
+                .background(Capsule().fill(theme.current.separator.opacity(0.5)))
+                .foregroundStyle(theme.current.textMuted)
+        }
+    }
+
+    /// 组内分栏 Tab + 未路由筛选器
+    private var groupTabs: some View {
+        HStack(spacing: 6) {
+            Text("组内").font(fm.font(11.5).weight(.semibold)).foregroundStyle(theme.current.textSecondary)
+            ForEach(ReqTab.allCases, id: \.self) { t in
+                let active = vm.reqTab == t
+                Button(action: { withAnimation(.easeInOut(duration: 0.15)) { vm.reqTab = t } }) {
+                    HStack(spacing: 4) {
+                        Text(t.rawValue).font(fm.font(10.5).weight(active ? .bold : .regular))
+                        Text("\(vm.tabItems(t).count)").font(fm.font(9))
+                            .foregroundStyle(active ? theme.current.accentPrimary : theme.current.textMuted.opacity(0.7))
+                    }
+                    .padding(.horizontal, 9).padding(.vertical, 3.5)
+                    .background(Capsule().fill(active ? theme.current.accentPrimary.opacity(0.14) : theme.current.cardFill.opacity(theme.current.cardFillOpacity * 0.5)))
+                    .overlay(Capsule().stroke(active ? theme.current.accentPrimary.opacity(0.4) : theme.current.separator, lineWidth: 0.5))
+                    .foregroundStyle(active ? theme.current.accentPrimary : theme.current.textMuted)
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+            if !vm.prdUnrouted.isEmpty {
+                Button(action: { withAnimation(.easeInOut(duration: 0.15)) { vm.showUnroutedOnly.toggle() } }) {
+                    HStack(spacing: 3) {
+                        if vm.showUnroutedOnly { Image(systemName: "checkmark").font(.system(size: 8, weight: .bold)) }
+                        Text("未路由 \(vm.prdUnrouted.count)").font(fm.font(10))
+                    }
+                    .padding(.horizontal, 7).padding(.vertical, 2.5)
+                    .background(Capsule().fill(hitPrimary.opacity(vm.showUnroutedOnly ? 0.28 : 0.12)))
+                    .foregroundStyle(hitPrimary)
+                }
+                .buttonStyle(.plain)
+                .help("只看定不出目标服务的需求（告诉 AI 补标注）")
+            }
+        }
+    }
+
+    private func prdRow(_ p: BizPRDItem, hero: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 5) {
                 Text(p.no).font(fm.font(9.5).weight(.bold)).foregroundStyle(prdBlue)
@@ -656,11 +692,8 @@ struct BizMapBoardView: View {
                     Text(pri).font(fm.font(9).weight(.bold))
                         .foregroundStyle(pri == "P0" ? Color(hex: "#d94f4f") : theme.current.textMuted)
                 }
-                if p.scopes.contains("mine") {
-                    Text("我参与").font(fm.font(8.5))
-                        .padding(.horizontal, 4).padding(.vertical, 1)
-                        .background(Capsule().fill(prdBlue.opacity(0.14))).foregroundStyle(prdBlue)
-                }
+                Text(p.status).font(fm.font(9))
+                    .foregroundStyle(p.code == "SJWC" ? hitPrimary : (hero ? prdBlue : theme.current.textMuted))
                 if let dev = p.dev, !dev.isEmpty {
                     Text("开发 \(dev)").font(fm.font(9)).foregroundStyle(theme.current.textMuted)
                 }
@@ -672,7 +705,8 @@ struct BizMapBoardView: View {
                         .buttonStyle(.plain).font(fm.font(9).weight(.medium)).foregroundStyle(prdBlue)
                 }
             }
-            Text(p.name).font(fm.font(12)).foregroundStyle(theme.current.textPrimary)
+            Text(p.name).font(fm.font(hero ? 13 : 12).weight(hero ? .semibold : .regular))
+                .foregroundStyle(theme.current.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 4) {
                 if p.services.isEmpty {
@@ -699,10 +733,10 @@ struct BizMapBoardView: View {
                 }
             }
         }
-        .padding(9)
+        .padding(hero ? 11 : 9)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 9).fill(theme.current.cardFill.opacity(theme.current.cardFillOpacity)))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(theme.current.separator, lineWidth: 0.5))
+        .background(RoundedRectangle(cornerRadius: 9).fill(hero ? prdBlue.opacity(0.07) : theme.current.cardFill.opacity(theme.current.cardFillOpacity)))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(hero ? prdBlue.opacity(0.45) : theme.current.separator, lineWidth: hero ? 1.2 : 0.5))
         .help(p.note ?? "")
     }
 
