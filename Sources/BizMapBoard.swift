@@ -75,6 +75,7 @@ final class BizMapViewModel: ObservableObject {
     @Published var regenerating = false
     @Published var genError: String?   // 生成器失败不能静默: 老数据照常展示, 但 header 要亮警告
     @Published var perspective: BizPerspective = .services   // 服务视角 / 需求视角
+    @Published var showUnroutedOnly = false                   // 需求视角: 只看未路由
 
     private let cachePath = NSString(string: "~/.claude/bizmap-cache.json").expandingTildeInPath
     private let genScript = NSString(string: "~/Documents/one/projects/业务地图/gen_bizmap.py").expandingTildeInPath
@@ -149,9 +150,11 @@ final class BizMapViewModel: ObservableObject {
 
     // MARK: 需求视角: 搜索框降级为筛选器(名称/编号/开发/服务/状态)
     var filteredPRD: [BizPRDItem] {
+        var base = prdItems
+        if showUnroutedOnly { base = base.filter { $0.services.isEmpty } }
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return prdItems }
-        return prdItems.filter { p in
+        guard !q.isEmpty else { return base }
+        return base.filter { p in
             p.name.lowercased().contains(q) || p.no.lowercased().contains(q)
                 || (p.dev ?? "").lowercased().contains(q)
                 || p.status.contains(q)
@@ -262,25 +265,12 @@ struct BizMapBoardView: View {
         .onAppear { vm.load(); searchFocused = true }
     }
 
-    // MARK: Header
+    // MARK: Header —— 双品牌字标即视角切换: 选中的点亮, 未选的压暗成影子
 
     private var header: some View {
-        HStack(spacing: 10) {
-            Text("BizMap").font(fm.font(19).weight(.bold)).foregroundStyle(theme.current.accentPrimary)
-            perspectiveToggle
-            pill("服务", "\(vm.cache?.services.count ?? 0)")
-            pill("L2", "\(vm.l2Count)")
-            pill("D单", "\(vm.dCount)")
-            if !vm.prdItems.isEmpty {
-                pill("PRD", "\(vm.prdItems.count)")
-            }
-            if !vm.prdUnrouted.isEmpty {
-                Text("未路由 \(vm.prdUnrouted.count)")
-                    .font(fm.font(9.5)).foregroundStyle(hitPrimary)
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Capsule().fill(hitPrimary.opacity(0.12)))
-                    .help("语义标注定不出目标服务的 PRD 需求（告诉 AI 补）：\n" + vm.prdUnrouted.map { "\($0.no) \($0.name)" }.joined(separator: "\n"))
-            }
+        HStack(alignment: .firstTextBaseline, spacing: 18) {
+            wordmark("BizMap", "业务地图", .services)
+            wordmark("ReqFlow", "需求流", .requirements)
             Spacer()
             if let g = vm.cache?.generated {
                 Text(g).font(fm.font(10)).foregroundStyle(theme.current.textMuted)
@@ -307,36 +297,27 @@ struct BizMapBoardView: View {
         .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 8)
     }
 
-    /// 视角切换: 服务卡片墙 / 需求集中列表
-    private var perspectiveToggle: some View {
-        HStack(spacing: 2) {
-            perspectiveBtn("服务", .services)
-            perspectiveBtn("需求", .requirements)
-        }
-        .padding(2)
-        .background(Capsule().fill(theme.current.cardFill.opacity(theme.current.cardFillOpacity * 0.6)))
-        .overlay(Capsule().stroke(theme.current.separator, lineWidth: 0.5))
-    }
-
-    private func perspectiveBtn(_ label: String, _ p: BizPerspective) -> some View {
+    /// 品牌字标式 Tab: 选中 = 主色重墨 + 下划标, 未选 = 压暗影子态, 点击整页切换
+    private func wordmark(_ en: String, _ zh: String, _ p: BizPerspective) -> some View {
         let active = vm.perspective == p
-        return Button(action: { withAnimation(.easeInOut(duration: 0.15)) { vm.perspective = p } }) {
-            Text(label).font(fm.font(11).weight(active ? .bold : .regular))
-                .padding(.horizontal, 9).padding(.vertical, 3)
-                .background(Capsule().fill(active ? theme.current.accentPrimary.opacity(0.16) : Color.clear))
-                .foregroundStyle(active ? theme.current.accentPrimary : theme.current.textMuted)
+        return Button(action: {
+            withAnimation(.easeInOut(duration: 0.18)) { vm.perspective = p }
+        }) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(en).font(fm.font(19).weight(.heavy))
+                        .foregroundStyle(active ? theme.current.accentPrimary : theme.current.textMuted.opacity(0.38))
+                    Text(zh).font(fm.font(10))
+                        .foregroundStyle(active ? theme.current.textSecondary : theme.current.textMuted.opacity(0.35))
+                }
+                Capsule()
+                    .fill(active ? theme.current.accentPrimary : Color.clear)
+                    .frame(width: 28, height: 2.5)
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-
-    private func pill(_ label: String, _ value: String) -> some View {
-        HStack(spacing: 3) {
-            Text(label).font(fm.font(10)).foregroundStyle(theme.current.textMuted)
-            Text(value).font(fm.font(11).weight(.bold)).foregroundStyle(theme.current.textPrimary)
-        }
-        .padding(.horizontal, 8).padding(.vertical, 2)
-        .background(Capsule().fill(theme.current.cardFill.opacity(theme.current.cardFillOpacity * 0.7)))
-        .overlay(Capsule().stroke(theme.current.separator, lineWidth: 0.5))
+        .help(active ? "" : "切换到 \(en) \(zh)")
     }
 
     // MARK: Search / 路由
@@ -360,6 +341,7 @@ struct BizMapBoardView: View {
             .overlay(RoundedRectangle(cornerRadius: 9).stroke(searchFocused ? theme.current.accentPrimary.opacity(0.6) : theme.current.separator, lineWidth: 1))
 
             routeHint
+            reqSummary
         }
         .padding(.horizontal, 14).padding(.bottom, 8)
     }
@@ -380,6 +362,31 @@ struct BizMapBoardView: View {
                             .font(fm.font(11)).foregroundStyle(hitSecondary)
                     }
                 }
+            }
+        }
+    }
+
+    /// 需求视角摘要行: 总数/待接 + 可点的未路由筛选器(取代原头部死 pill)
+    @ViewBuilder private var reqSummary: some View {
+        if vm.perspective == .requirements, !vm.prdItems.isEmpty {
+            let sjwc = vm.prdItems.filter { $0.code == "SJWC" }.count
+            HStack(spacing: 8) {
+                Text("共 \(vm.prdItems.count) 条 · 待接 \(sjwc)")
+                    .font(fm.font(10.5)).foregroundStyle(theme.current.textMuted)
+                if !vm.prdUnrouted.isEmpty {
+                    Button(action: { withAnimation(.easeInOut(duration: 0.15)) { vm.showUnroutedOnly.toggle() } }) {
+                        HStack(spacing: 3) {
+                            if vm.showUnroutedOnly { Image(systemName: "checkmark").font(.system(size: 8, weight: .bold)) }
+                            Text("未路由 \(vm.prdUnrouted.count)").font(fm.font(10))
+                        }
+                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .background(Capsule().fill(hitPrimary.opacity(vm.showUnroutedOnly ? 0.28 : 0.12)))
+                        .foregroundStyle(hitPrimary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("只看定不出目标服务的需求（告诉 AI 补标注）")
+                }
+                Spacer()
             }
         }
     }
