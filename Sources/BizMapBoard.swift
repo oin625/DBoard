@@ -14,6 +14,21 @@ struct BizDItem: Codable, Identifiable {
     let status: String
 }
 
+struct BizPRDItem: Codable, Identifiable {
+    let id: Int             // PRD 系统 id
+    let no: String          // R2607030033
+    let name: String
+    let code: String        // SJWC / KFZ / CSZ …
+    let status: String      // 中文状态名
+    let pri: String?
+    let dev: String?
+    let scopes: [String]    // pending / mine / dept
+    let services: [String]  // AI 语义标注的目标服务, 空 = 未路由
+    let note: String?       // 标注依据
+    let docs: [String]      // 钉钉需求文档链接(交付物)
+    let url: String         // PRD 明细页
+}
+
 struct BizService: Codable, Identifiable {
     let name: String
     let tier: String
@@ -28,7 +43,9 @@ struct BizService: Codable, Identifiable {
     let div: String
     let doc: String
     let dItems: [BizDItem]
+    let pItems: [BizPRDItem]?   // 旧缓存无此字段, 可选保解码兼容
     var id: String { name }
+    var prds: [BizPRDItem] { pItems ?? [] }
 }
 
 struct BizGroup: Codable { let key: String; let label: String }
@@ -42,6 +59,8 @@ struct BizMapCache: Codable {
     let services: [BizService]
     let routes: [BizRoute]
     let dItemsAll: [BizDItem]
+    let prdGenerated: String?
+    let prdItemsAll: [BizPRDItem]?
 }
 
 // MARK: - ViewModel
@@ -122,9 +141,17 @@ final class BizMapViewModel: ObservableObject {
     var l2Count: Int { cache?.services.filter { $0.mapLevel == "L2" }.count ?? 0 }
     /// 关联 D 单总数(含待开始) —— 与卡片 D× 角标同口径, 避免同屏两个数字两套含义
     var dCount: Int { cache?.dItemsAll.count ?? 0 }
+    var prdItems: [BizPRDItem] { cache?.prdItemsAll ?? [] }
+    var prdUnrouted: [BizPRDItem] { prdItems.filter { $0.services.isEmpty } }
 
     func service(_ name: String) -> BizService? {
         cache?.services.first { $0.name == name }
+    }
+
+    /// 打开外部链接 (PRD 明细页 / 钉钉需求文档)
+    func openURL(_ s: String) {
+        guard let u = URL(string: s) else { return }
+        NSWorkspace.shared.open(u)
     }
 
     /// 打开作战地图文档 (Obsidian 优先, 失败落默认编辑器)
@@ -153,6 +180,7 @@ private func tierColor(_ tier: String) -> Color {
 
 private let hitPrimary = Color(hex: "#F59E0B")
 private let hitSecondary = Color(hex: "#A78BFA")
+private let prdBlue = Color(hex: "#2563EB")
 
 // MARK: - 主视图
 
@@ -194,6 +222,16 @@ struct BizMapBoardView: View {
             pill("服务", "\(vm.cache?.services.count ?? 0)")
             pill("L2", "\(vm.l2Count)")
             pill("D单", "\(vm.dCount)")
+            if !vm.prdItems.isEmpty {
+                pill("PRD", "\(vm.prdItems.count)")
+            }
+            if !vm.prdUnrouted.isEmpty {
+                Text("未路由 \(vm.prdUnrouted.count)")
+                    .font(fm.font(9.5)).foregroundStyle(hitPrimary)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Capsule().fill(hitPrimary.opacity(0.12)))
+                    .help("语义标注定不出目标服务的 PRD 需求（告诉 AI 补）：\n" + vm.prdUnrouted.map { "\($0.no) \($0.name)" }.joined(separator: "\n"))
+            }
             Spacer()
             if let g = vm.cache?.generated {
                 Text(g).font(fm.font(10)).foregroundStyle(theme.current.textMuted)
@@ -323,6 +361,11 @@ struct BizMapBoardView: View {
                         .padding(.horizontal, 5).padding(.vertical, 1)
                         .background(Capsule().fill(hitPrimary)).foregroundStyle(.white)
                 }
+                if !svc.prds.isEmpty {
+                    Text("P×\(svc.prds.count)").font(fm.font(9).weight(.bold))
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Capsule().fill(prdBlue)).foregroundStyle(.white)
+                }
             }
             Text(svc.desc).font(fm.font(10.5)).foregroundStyle(theme.current.textTertiary)
                 .lineLimit(2).frame(maxWidth: .infinity, minHeight: 26, alignment: .topLeading)
@@ -399,6 +442,49 @@ struct BizMapBoardView: View {
                                 .padding(6)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .background(RoundedRectangle(cornerRadius: 6).fill(theme.current.separator.opacity(0.3)))
+                            }
+                        }
+                    }
+                }
+                if !svc.prds.isEmpty {
+                    section("关联 PRD 需求 (\(svc.prds.count))") {
+                        VStack(alignment: .leading, spacing: 5) {
+                            ForEach(svc.prds) { p in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 4) {
+                                        Text(p.no).font(fm.font(9).weight(.bold)).foregroundStyle(prdBlue)
+                                        if let pri = p.pri {
+                                            Text(pri).font(fm.font(8.5).weight(.bold))
+                                                .foregroundStyle(pri == "P0" ? Color(hex: "#d94f4f") : theme.current.textMuted)
+                                        }
+                                        Text(p.status).font(fm.font(9))
+                                            .foregroundStyle(p.code == "SJWC" ? hitPrimary : theme.current.textMuted)
+                                        if p.scopes.contains("mine") {
+                                            Text("我参与").font(fm.font(8.5))
+                                                .padding(.horizontal, 4).padding(.vertical, 1)
+                                                .background(Capsule().fill(prdBlue.opacity(0.14)))
+                                                .foregroundStyle(prdBlue)
+                                        }
+                                        Spacer(minLength: 0)
+                                    }
+                                    Text(p.name).font(fm.font(10.5)).foregroundStyle(theme.current.textSecondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    HStack(spacing: 8) {
+                                        if let dev = p.dev, !dev.isEmpty {
+                                            Text("开发 \(dev)").font(fm.font(9)).foregroundStyle(theme.current.textMuted)
+                                        }
+                                        Button("PRD明细") { vm.openURL(p.url) }
+                                            .buttonStyle(.plain).font(fm.font(9).weight(.medium)).foregroundStyle(prdBlue)
+                                        if let doc = p.docs.first {
+                                            Button("需求文档") { vm.openURL(doc) }
+                                                .buttonStyle(.plain).font(fm.font(9).weight(.medium)).foregroundStyle(prdBlue)
+                                        }
+                                    }
+                                }
+                                .padding(6)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(RoundedRectangle(cornerRadius: 6).fill(prdBlue.opacity(0.06)))
+                                .help(p.note ?? "")
                             }
                         }
                     }
