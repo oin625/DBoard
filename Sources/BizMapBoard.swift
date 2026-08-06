@@ -181,6 +181,34 @@ final class BizMapViewModel: ObservableObject {
     var prdItems: [BizPRDItem] { cache?.prdItemsAll ?? [] }
     var prdUnrouted: [BizPRDItem] { prdItems.filter { $0.services.isEmpty } }
 
+    // MARK: PRD 快照新鲜度
+    // 面板上的 ↻ 只重拼旧快照; 真正拉取需 AI(浏览器登录态 + 语义标注),
+    // 所以必须把"数据多旧"摆到台面上, 不能靠人记得去问。
+    var prdAgeDays: Int? {
+        guard let g = cache?.prdGenerated, !g.isEmpty else { return nil }
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.dateFormat = "yyyy-MM-dd HH:mm"
+        guard let d = fmt.date(from: g) else { return nil }
+        return Calendar.current.dateComponents([.day], from: d, to: Date()).day
+    }
+
+    /// nil=无快照 / 0=新鲜 / 1=偏旧(提醒) / 2=太旧(警告)
+    var prdStaleLevel: Int {
+        guard let d = prdAgeDays else { return prdItems.isEmpty ? -1 : 0 }
+        if d >= 4 { return 2 }
+        if d >= 2 { return 1 }
+        return 0
+    }
+
+    /// 把刷新指令送到剪贴板: 你粘给 AI 就行, 省掉回忆措辞这一步
+    func copyRefreshPrompt() -> String {
+        let text = "刷新PRD"
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        return text
+    }
+
     // MARK: 需求视角: 搜索框降级为筛选器(名称/编号/开发/服务/状态)
     var filteredPRD: [BizPRDItem] {
         var base = prdItems
@@ -270,6 +298,7 @@ struct BizMapBoardView: View {
     @EnvironmentObject var fm: FontManager
     var popoverMode: Bool = false
     @FocusState private var searchFocused: Bool
+    @State private var copiedHint: String? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -300,6 +329,17 @@ struct BizMapBoardView: View {
         // 底层走与 Skills Board 同一套 ThemeBackground: 毛玻璃皮肤下是 NSVisualEffectView 原生材质,
         // 不能用裸主题色 opacity —— 半透主题叠透明窗口会成"几乎全透"
         .background(ThemeBackground().environmentObject(theme))
+        .overlay(alignment: .top) {
+            if let hint = copiedHint {
+                Text(hint).font(fm.font(10.5))
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(Capsule().fill(theme.current.accentPrimary.opacity(0.92)))
+                    .foregroundStyle(.white)
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.18), value: copiedHint)
         .onAppear { vm.load(); searchFocused = true }
     }
 
@@ -309,6 +349,7 @@ struct BizMapBoardView: View {
         HStack(alignment: .top, spacing: 18) {
             perspectiveStack
             Spacer()
+            prdFreshness
             if let g = vm.cache?.generated {
                 Text(g).font(fm.font(10)).foregroundStyle(theme.current.textMuted)
             }
@@ -329,6 +370,49 @@ struct BizMapBoardView: View {
         }
         .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 8)
         .tearOffHandle("BizMapBoard", enabled: popoverMode)
+    }
+
+    /// PRD 快照新鲜度指示器: 旧了就亮橙/红, 点一下拿到刷新指令(粘给 AI 即可)
+    @ViewBuilder private var prdFreshness: some View {
+        let lvl = vm.prdStaleLevel
+        if lvl >= 0 {
+            let ageDays = vm.prdAgeDays
+            let color: Color = lvl == 2 ? Color(hex: "#d94f4f") : (lvl == 1 ? hitPrimary : theme.current.textMuted)
+            let label: String = {
+                guard let d = ageDays else { return "PRD 快照时间未知" }
+                if d <= 0 { return "PRD 今日" }
+                return "PRD \(d) 天前"
+            }()
+            // 时间未知不能说"较新" —— 解析失败就诚实说 unknown, 不假 ok
+            let tip: String = {
+                if ageDays == nil {
+                    return "PRD 快照时间未知。面板 ↻ 只重拼旧快照，若怀疑陈旧可对 AI 说「刷新PRD」（点此复制）"
+                }
+                return lvl == 0
+                    ? "PRD 快照较新。面板 ↻ 只重拼旧快照，拉新需对 AI 说「刷新PRD」（点此复制）"
+                    : "PRD 快照已陈旧，新需求/状态变更可能未体现。点此复制刷新指令，粘给 AI 即可"
+            }()
+            Button(action: {
+                let t = vm.copyRefreshPrompt()
+                copiedHint = "已复制「\(t)」，粘给 AI 即可"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) { copiedHint = nil }
+            }) {
+                HStack(spacing: 3) {
+                    if lvl > 0 {
+                        Image(systemName: "exclamationmark.circle.fill").font(.system(size: 9))
+                    }
+                    Text(label).font(fm.font(9.5))
+                    if lvl > 0 {
+                        Image(systemName: "doc.on.clipboard").font(.system(size: 8.5))
+                    }
+                }
+                .padding(.horizontal, 7).padding(.vertical, 2.5)
+                .background(Capsule().fill(color.opacity(lvl > 0 ? 0.14 : 0.07)))
+                .foregroundStyle(color)
+            }
+            .buttonStyle(.plain)
+            .help(tip)
+        }
     }
 
     /// 叠卡容器: 两张字标同栈, 谁 active 谁在前台原位, 另一张缩到影子位
