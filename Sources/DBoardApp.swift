@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var sysMonTimer: Timer?
     private var prevSysSwap: (ins: UInt64, outs: UInt64, at: Date)?
     private var skillsStatusItem: NSStatusItem!
+    private var bizMapStatusItem: NSStatusItem!
     private var isDetached = false   // 面板脱出为独立窗口(不置顶)
     private var cancellables = Set<AnyCancellable>()
 
@@ -73,6 +74,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 kb.toolTip = "Skills 看板"
                 kb.target = self
                 kb.action = #selector(openSkillsFromStatusBar)
+            }
+            // BizMap 业务地图独立菜单栏入口: 接需求时搜关键词→路由到服务→直达作战地图
+            bizMapStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+            if let mb = bizMapStatusItem.button {
+                let mimg = NSImage(systemSymbolName: "map", accessibilityDescription: "BizMap 业务地图")
+                mimg?.isTemplate = true
+                mb.image = mimg
+                mb.imagePosition = .imageOnly
+                mb.toolTip = "BizMap 业务地图"
+                mb.target = self
+                mb.action = #selector(openBizMapFromStatusBar)
             }
             let smt = Timer(timeInterval: 5, repeats: true) { [weak self] _ in self?.updateSysStatusTitle() }
             RunLoop.main.add(smt, forMode: .common)
@@ -170,6 +182,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     @objc private func openSkillsFromStatusBar() {
         guard let btn = skillsStatusItem?.button else { return }
         SkillsBoardWindowController.shared.togglePopover(relativeTo: btn)
+    }
+
+    @objc private func openBizMapFromStatusBar() {
+        guard let btn = bizMapStatusItem?.button else { return }
+        BizMapBoardWindowController.shared.togglePopover(relativeTo: btn)
     }
 
     @objc private func openSysMonFromStatusBar() {

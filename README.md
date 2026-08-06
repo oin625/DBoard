@@ -6,7 +6,7 @@ Mac 菜单栏常驻应用。最初是读 `~/.claude/demand-center-cache.md` 的 
 
 ## 模块总览
 
-菜单栏三个图标：D板主面板、系统监控（实时 CPU%）、Skills 看板。
+菜单栏四个图标：D板主面板、系统监控（实时 CPU%）、Skills 看板、BizMap 业务地图。
 
 | 模块 | 功能 | 数据源 |
 |------|------|--------|
@@ -16,6 +16,7 @@ Mac 菜单栏常驻应用。最初是读 `~/.claude/demand-center-cache.md` 的 
 | Tech Scout | AI 精翻科技资讯流，历史留存 30 天 | `~/.claude/tech-scout-*.json`（tech-scout 定时任务） |
 | Skills 看板 | agent 技能库治理：健康度、启停、归档、分类、实战验证状态 | 扫描 `~/.claude/skills*` |
 | Agent Env | MCP / Hooks / Agents / Memory 全景可视 | 扫描 Qoder/Claude 配置 |
+| BizMap | TMYC 业务地图：服务卡片墙按梯队分组，搜需求关键词即路由（首查/次查高亮），D单联动，直达作战地图 | `~/.claude/bizmap-cache.json`（wiki 业务地图 gen_bizmap.py 生成） |
 | SysMon | CPU/内存/温度/进程监控，AI 卡顿诊断 | 本机采样 + qodercli |
 | MarketMap | 大盘 Treemap（拖拽/缩放/聚焦） | 东方财富 + 腾讯行情 API |
 
