@@ -307,10 +307,11 @@ struct BizMapBoardView: View {
             wordCard("BizMap", "业务地图", .services)
             wordCard("ReqFlow", "需求流", .requirements)
         }
-        .frame(width: 240, height: 48, alignment: .topLeading)
+        .frame(width: 175, height: 48, alignment: .topLeading)
     }
 
     /// 字标卡: active = 前台原位重墨 + 下划标; 非 active = 右斜下影子位(缩小/压暗/微斜), 点击弹簧换位
+    /// 纯英文字标, 不带中文小字(灰色小字很脏)——中文名只留在 tooltip
     private func wordCard(_ en: String, _ zh: String, _ p: BizPerspective) -> some View {
         let active = vm.perspective == p
         return Button(action: {
@@ -318,12 +319,8 @@ struct BizMapBoardView: View {
             withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) { vm.perspective = p }
         }) {
             VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    Text(en).font(fm.font(19).weight(.heavy))
-                        .foregroundStyle(active ? theme.current.accentPrimary : theme.current.textMuted)
-                    Text(zh).font(fm.font(10))
-                        .foregroundStyle(active ? theme.current.textSecondary : theme.current.textMuted)
-                }
+                Text(en).font(fm.font(19).weight(.heavy))
+                    .foregroundStyle(active ? theme.current.accentPrimary : theme.current.textMuted)
                 Capsule()
                     .fill(active ? theme.current.accentPrimary : Color.clear)
                     .frame(width: 28, height: 2.5)
@@ -334,7 +331,7 @@ struct BizMapBoardView: View {
         .disabled(active)
         .scaleEffect(active ? 1 : 0.78, anchor: .topLeading)
         .rotationEffect(.degrees(active ? 0 : 2.5), anchor: .topLeading)
-        .offset(x: active ? 0 : 98, y: active ? 0 : 17)
+        .offset(x: active ? 0 : 64, y: active ? 0 : 17)
         .opacity(active ? 1 : 0.4)
         .zIndex(active ? 1 : 0)
         .help(active ? "" : "切换到 \(en) \(zh)")
