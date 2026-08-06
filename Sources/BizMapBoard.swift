@@ -14,6 +14,16 @@ struct BizDItem: Codable, Identifiable {
     let status: String
 }
 
+struct BizFlowStep: Codable, Identifiable {
+    let t: String       // MM-dd HH:mm
+    let from: String
+    let to: String
+    let by: String
+    // 分钟级时间戳下同一需求会出现多次来回跳转(实测有 17:46 跳三次),
+    // 故 id 必须含全四元素 + 分隔符, 否则 ForEach 会因 id 重复错位
+    var id: String { "\(t)|\(from)|\(to)|\(by)" }
+}
+
 struct BizPRDItem: Codable, Identifiable {
     let id: Int             // PRD 系统 id
     let no: String          // R2607030033
@@ -27,6 +37,20 @@ struct BizPRDItem: Codable, Identifiable {
     let note: String?       // 标注依据
     let docs: [String]      // 钉钉需求文档链接(交付物)
     let url: String         // PRD 明细页
+    // 以下为详情字段(旧缓存可缺)
+    let desc: String?           // 需求正文
+    let value: String?          // 业务价值
+    let complexity: String?     // AI 复杂度评分 1~3
+    let confidence: String?     // verified / evidenced / inferred
+    let submitter: String?
+    let owner: String?
+    let pending: String?        // 当前滞留人
+    let devTeam: [String]?
+    let testTeam: [String]?
+    let submitTime: String?
+    let onlineTime: String?
+    let tags: String?
+    let flow: [BizFlowStep]?    // 状态流转记录
 }
 
 struct BizService: Codable, Identifiable {
@@ -84,6 +108,7 @@ final class BizMapViewModel: ObservableObject {
     @Published var perspective: BizPerspective = .services   // 服务视角 / 需求视角
     @Published var showUnroutedOnly = false                   // 需求视角: 只看未路由
     @Published var reqTab: ReqTab = .notStarted                // 需求流当前分栏
+    @Published var expandedPRD: Set<Int> = []                  // 需求行展开详情
 
     private let cachePath = NSString(string: "~/.claude/bizmap-cache.json").expandingTildeInPath
     private let genScript = NSString(string: "~/Documents/one/projects/业务地图/gen_bizmap.py").expandingTildeInPath
@@ -687,8 +712,12 @@ struct BizMapBoardView: View {
     }
 
     private func prdRow(_ p: BizPRDItem, hero: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        let open = vm.expandedPRD.contains(p.id)
+        return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 5) {
+                Image(systemName: open ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(theme.current.textMuted)
                 Text(p.no).font(fm.font(9.5).weight(.bold)).foregroundStyle(prdBlue)
                 if let pri = p.pri {
                     Text(pri).font(fm.font(9).weight(.bold))
@@ -696,6 +725,13 @@ struct BizMapBoardView: View {
                 }
                 Text(p.status).font(fm.font(9))
                     .foregroundStyle(p.code == "SJWC" ? hitPrimary : (hero ? prdBlue : theme.current.textMuted))
+                if let cx = p.complexity {
+                    Text("复杂度\(cx)").font(fm.font(8.5))
+                        .padding(.horizontal, 4).padding(.vertical, 1)
+                        .background(Capsule().fill(theme.current.separator.opacity(0.4)))
+                        .foregroundStyle(theme.current.textMuted)
+                        .help("AI 评定复杂度 \(cx)/3")
+                }
                 if let dev = p.dev, !dev.isEmpty {
                     Text("开发 \(dev)").font(fm.font(9)).foregroundStyle(theme.current.textMuted)
                 }
@@ -732,14 +768,113 @@ struct BizMapBoardView: View {
                         .buttonStyle(.plain)
                         .help("跳到服务视角并选中 \(name)")
                     }
+                    confidenceBadge(p.confidence)
                 }
             }
+            if open { prdDetail(p) }
         }
         .padding(hero ? 11 : 9)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 9).fill(hero ? prdBlue.opacity(0.07) : theme.current.cardFill.opacity(theme.current.cardFillOpacity)))
-        .overlay(RoundedRectangle(cornerRadius: 9).stroke(hero ? prdBlue.opacity(0.45) : theme.current.separator, lineWidth: hero ? 1.2 : 0.5))
-        .help(p.note ?? "")
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(open ? prdBlue.opacity(0.5) : (hero ? prdBlue.opacity(0.45) : theme.current.separator), lineWidth: (open || hero) ? 1.2 : 0.5))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.16)) {
+                if open { vm.expandedPRD.remove(p.id) } else { vm.expandedPRD.insert(p.id) }
+            }
+        }
+    }
+
+    /// 路由置信度徽章: 标注是推断还是 git 实证, 不冒充事实
+    @ViewBuilder private func confidenceBadge(_ c: String?) -> some View {
+        if let c = c {
+            let (txt, color, tip): (String, Color, String) = {
+                switch c {
+                case "verified":  return ("实证", Color(hex: "#34c759"), "git commit 实证过的服务归属")
+                case "evidenced": return ("纠正", prdBlue, "根据代码证据修正过的标注")
+                default:          return ("推断", theme.current.textMuted, "仅依需求文本+服务定位推断, 未经代码实证")
+                }
+            }()
+            Text(txt).font(fm.font(8.5))
+                .padding(.horizontal, 5).padding(.vertical, 1.5)
+                .background(Capsule().fill(color.opacity(0.12)))
+                .foregroundStyle(color)
+                .help(tip)
+        }
+    }
+
+    /// 展开详情: 正文 / 业务价值 / 当前卡在谁 / 团队 / 流转 / 标注依据
+    @ViewBuilder private func prdDetail(_ p: BizPRDItem) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider().opacity(0.5).padding(.vertical, 1)
+
+            if let d = p.desc, !d.isEmpty {
+                detailBlock("需求正文", d)
+            }
+            if let v = p.value, !v.isEmpty {
+                detailBlock("业务价值", v)
+            }
+
+            // 人与时间轴
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 10) {
+                    if let s = p.submitter, !s.isEmpty { metaItem("提出", s) }
+                    if let o = p.owner, !o.isEmpty { metaItem("承接", o) }
+                    if let pd = p.pending, !pd.isEmpty { metaItem("当前卡在", pd, tint: hitPrimary) }
+                }
+                HStack(spacing: 10) {
+                    if let st = p.submitTime, !st.isEmpty { metaItem("提交", st) }
+                    if let ot = p.onlineTime, !ot.isEmpty { metaItem("上线", ot) }
+                    if let tg = p.tags, !tg.isEmpty { metaItem("标签", tg, tint: prdBlue) }
+                }
+                if let dt = p.devTeam, !dt.isEmpty {
+                    metaItem("开发团队", dt.joined(separator: " · "))
+                }
+                if let tt = p.testTeam, !tt.isEmpty {
+                    metaItem("测试", tt.joined(separator: " · "))
+                }
+            }
+
+            if let flow = p.flow, !flow.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("流转记录").font(fm.font(9.5).weight(.semibold)).foregroundStyle(theme.current.textMuted)
+                    ForEach(Array(flow.enumerated()), id: \.offset) { _, f in
+                        HStack(spacing: 5) {
+                            Text(f.t).font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(theme.current.textMuted)
+                            Text("\(f.from) → \(f.to)").font(fm.font(9.5))
+                                .foregroundStyle(theme.current.textSecondary)
+                            Text(f.by).font(fm.font(9)).foregroundStyle(theme.current.textMuted)
+                        }
+                    }
+                }
+            }
+
+            if let note = p.note, !note.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("服务路由依据").font(fm.font(9.5).weight(.semibold)).foregroundStyle(theme.current.textMuted)
+                    Text(note).font(fm.font(9.5)).foregroundStyle(theme.current.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(.top, 2)
+    }
+
+    private func detailBlock(_ title: String, _ body: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(fm.font(9.5).weight(.semibold)).foregroundStyle(theme.current.textMuted)
+            Text(body).font(fm.font(10.5)).foregroundStyle(theme.current.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+    }
+
+    private func metaItem(_ label: String, _ value: String, tint: Color? = nil) -> some View {
+        HStack(spacing: 3) {
+            Text(label).font(fm.font(9)).foregroundStyle(theme.current.textMuted)
+            Text(value).font(fm.font(9.5)).foregroundStyle(tint ?? theme.current.textSecondary)
+        }
     }
 
     private func errorState(_ msg: String) -> some View {
