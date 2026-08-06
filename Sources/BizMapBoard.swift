@@ -874,7 +874,7 @@ struct BizMapBoardView: View {
         if let c = c {
             let (txt, color, tip): (String, Color, String) = {
                 switch c {
-                case "verified":  return ("实证", Color(hex: "#34c759"), "git commit 实证过的服务归属")
+                case "verified":  return ("实证", Color(hex: "#34c759"), "所列服务均有 git 代码证据。注意: 实证只能证有不能证无, 清单仍可能不全, 发现缺仓直接告诉 AI")
                 case "evidenced": return ("纠正", prdBlue, "根据代码证据修正过的标注")
                 default:          return ("推断", theme.current.textMuted, "仅依需求文本+服务定位推断, 未经代码实证")
                 }
