@@ -24,6 +24,18 @@ struct BizFlowStep: Codable, Identifiable {
     var id: String { "\(t)|\(from)|\(to)|\(by)" }
 }
 
+struct BizDelivDoc: Codable, Identifiable {
+    let t: Int          // 交付物阶段: 1方案/2设计/3开发/4测试
+    let url: String
+    var id: String { url }
+}
+
+struct BizDelivFile: Codable, Identifiable {
+    let name: String
+    let url: String
+    var id: String { url }
+}
+
 struct BizPRDItem: Codable, Identifiable {
     let id: Int             // PRD 系统 id
     let no: String          // R2607030033
@@ -51,6 +63,9 @@ struct BizPRDItem: Codable, Identifiable {
     let onlineTime: String?
     let tags: String?
     let flow: [BizFlowStep]?    // 状态流转记录
+    let delivDocs: [BizDelivDoc]?    // 官方交付物链接(方案/设计/开发/测试)
+    let files: [BizDelivFile]?       // 交付物附件(设计文档md等)
+    let devProjects: [String]?       // 开发交付声明的 仓:分支 清单(官方事实源)
 }
 
 struct BizService: Codable, Identifiable {
@@ -822,7 +837,7 @@ struct BizMapBoardView: View {
                 Spacer(minLength: 0)
                 Button("PRD明细") { vm.openURL(p.url) }
                     .buttonStyle(.plain).font(fm.font(9).weight(.medium)).foregroundStyle(prdBlue)
-                if let doc = p.docs.first {
+                if let doc = p.docs.first ?? (p.delivDocs ?? []).first(where: { $0.url.contains("alidocs") })?.url {
                     Button("需求文档") { vm.openURL(doc) }
                         .buttonStyle(.plain).font(fm.font(9).weight(.medium)).foregroundStyle(prdBlue)
                 }
@@ -934,6 +949,9 @@ struct BizMapBoardView: View {
                 }
             }
 
+            // 官方交付物: 链接按阶段分组 + 附件文件 + 开发分支声明
+            deliverableSection(p)
+
             if let note = p.note, !note.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("服务路由依据").font(fm.font(9.5).weight(.semibold)).foregroundStyle(theme.current.textMuted)
@@ -943,6 +961,52 @@ struct BizMapBoardView: View {
             }
         }
         .padding(.top, 2)
+    }
+
+    /// 交付物区块: 来自 PRD 官方 deliverable 接口, 按阶段分组展示
+    @ViewBuilder private func deliverableSection(_ p: BizPRDItem) -> some View {
+        let docs = p.delivDocs ?? []
+        let files = p.files ?? []
+        let projects = p.devProjects ?? []
+        if !docs.isEmpty || !files.isEmpty || !projects.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("交付物").font(fm.font(9.5).weight(.semibold)).foregroundStyle(theme.current.textMuted)
+                ForEach(files) { f in
+                    Button(action: { vm.openURL(f.url) }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "paperclip").font(.system(size: 8.5))
+                            Text(f.name).font(fm.font(9.5)).lineLimit(1)
+                        }
+                        .foregroundStyle(prdBlue)
+                    }
+                    .buttonStyle(.plain)
+                }
+                if !docs.isEmpty {
+                    let stage = [1: "方案", 2: "设计", 3: "开发", 4: "测试"]
+                    FlowChipsLinks(items: docs.map { d in
+                        (label: "\(stage[d.t] ?? "文档")·\(shortHost(d.url))", url: d.url)
+                    }) { vm.openURL($0) }
+                    .environmentObject(theme).environmentObject(fm)
+                }
+                if !projects.isEmpty {
+                    Text("开发分支声明").font(fm.font(9)).foregroundStyle(theme.current.textMuted)
+                    ForEach(projects, id: \.self) { pr in
+                        Text(pr).font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(theme.current.textSecondary)
+                            .lineLimit(1)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+        }
+    }
+
+    private func shortHost(_ url: String) -> String {
+        if url.contains("alidocs.dingtalk") { return "钉文档" }
+        if url.contains("done.alibaba") { return "D-ONE" }
+        if url.contains("devops.aliyun") { return "云效" }
+        if url.contains("zlcx-upload") { return "附件" }
+        return URL(string: url)?.host?.replacingOccurrences(of: "www.", with: "") ?? "链接"
     }
 
     private func detailBlock(_ title: String, _ body: String) -> some View {
@@ -984,6 +1048,30 @@ struct BizMapBoardView: View {
 }
 
 // MARK: - chip 流式布局
+
+/// 带链接的 chip 流: 交付物链接按阶段分组展示, 点即打开
+private struct FlowChipsLinks: View {
+    @EnvironmentObject var theme: ThemeManager
+    @EnvironmentObject var fm: FontManager
+    let items: [(label: String, url: String)]
+    let onTap: (String) -> Void
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 88), spacing: 4, alignment: .leading)], alignment: .leading, spacing: 4) {
+            ForEach(items, id: \.url) { it in
+                Button(action: { onTap(it.url) }) {
+                    Text(it.label).font(fm.font(9)).lineLimit(1)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().fill(prdBlue.opacity(0.08)))
+                        .overlay(Capsule().stroke(prdBlue.opacity(0.35), lineWidth: 0.5))
+                        .foregroundStyle(prdBlue)
+                }
+                .buttonStyle(.plain)
+                .help(it.url)
+            }
+        }
+    }
+}
 
 private struct FlowChips: View {
     @EnvironmentObject var theme: ThemeManager
