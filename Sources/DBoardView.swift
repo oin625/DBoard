@@ -672,6 +672,7 @@ struct DBoardRootView: View {
     @EnvironmentObject var vm: DBoardViewModel
     @EnvironmentObject var theme: ThemeManager
     @State private var monitor: Any?
+    var popoverMode: Bool = false   // popover 模式才挂下拉撕出手势
 
     var body: some View {
         ZStack {
@@ -680,7 +681,7 @@ struct DBoardRootView: View {
                 .environmentObject(theme)
 
             VStack(spacing: 0) {
-                HeaderView()
+                HeaderView(popoverMode: popoverMode)
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 0) {
                         NeedsSection()
@@ -803,6 +804,7 @@ struct HeaderView: View {
     @EnvironmentObject var theme: ThemeManager
     @EnvironmentObject var fm: FontManager
     @State private var showHandle = false
+    var popoverMode: Bool = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -844,6 +846,8 @@ struct HeaderView: View {
         .padding(.horizontal, 20).padding(.vertical, 20)
         .contentShape(Rectangle())
         .onHover { showHandle = $0 }
+        // 下拉撕出(与 Skills/BizMap/SysMon 同一套手感); 双击脱出作为旧入口保留
+        .tearOffHandle("DBoardPanel", enabled: popoverMode)
         .onTapGesture(count: 2) {
             // 双击标题区 -> 脱出为独立窗口
             if let app = NSApp.delegate as? AppDelegate {

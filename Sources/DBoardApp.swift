@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var skillsStatusItem: NSStatusItem!
     private var bizMapStatusItem: NSStatusItem!
     private var isDetached = false   // 面板脱出为独立窗口(不置顶)
+    private let panelTearOff = TearOffObserver()
     private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -297,7 +298,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let pop = NSPopover()
         pop.behavior = .transient
         pop.animates = true
-        let rootView = DBoardRootView()
+        let rootView = DBoardRootView(popoverMode: true)
             .environmentObject(viewModel)
             .environmentObject(ThemeManager.shared)
             .environmentObject(FontManager.shared)
@@ -306,6 +307,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         pop.contentViewController = host
         pop.show(relativeTo: btn.bounds, of: btn, preferredEdge: .minY)
         mainPopover = pop
+
+        // 顶部下拉撕出为独立窗口(与其他面板同一套手感)
+        panelTearOff.install(key: "DBoardPanel") { [weak self] in
+            self?.detachPanel()
+        }
 
         // 点外部收起(兜底 .transient 失效)
         mainClickMonitor = NSEvent.addGlobalMonitorForEvents(

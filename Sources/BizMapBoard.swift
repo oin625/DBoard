@@ -291,14 +291,11 @@ struct BizMapBoardView: View {
             .buttonStyle(.plain).foregroundStyle(theme.current.textSecondary)
             .help("重跑 gen_bizmap.py 并刷新")
             if popoverMode {
-                Button(action: { NotificationCenter.default.post(name: .init("tearOffBizMapBoard"), object: nil) }) {
-                    Image(systemName: "rectangle.expand.diagonal").font(.system(size: 11))
-                }
-                .buttonStyle(.plain).foregroundStyle(theme.current.textSecondary)
-                .help("撕出为独立窗口")
+                TearOffButton(key: "BizMapBoard")
             }
         }
         .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 8)
+        .tearOffHandle("BizMapBoard", enabled: popoverMode)
     }
 
     /// 叠卡容器: 两张字标同栈, 谁 active 谁在前台原位, 另一张缩到影子位
@@ -791,7 +788,7 @@ final class BizMapBoardWindowController {
     private var popover: NSPopover?
     private var clickMonitor: Any?
     private var keyMonitor: Any?
-    private var tearObserver: Any?
+    private let tearOff = TearOffObserver()
     private var popCloseObserver: Any?
     private let vm = BizMapViewModel()
 
@@ -838,9 +835,7 @@ final class BizMapBoardWindowController {
     }
 
     private func installTearOffObserver() {
-        guard tearObserver == nil else { return }
-        tearObserver = NotificationCenter.default.addObserver(
-            forName: .init("tearOffBizMapBoard"), object: nil, queue: .main) { [weak self] _ in
+        tearOff.install(key: "BizMapBoard") { [weak self] in
             guard let self = self else { return }
             self.closePopover()
             self.show()

@@ -788,6 +788,7 @@ struct SysMonView: View {
         .padding(.trailing, 16)
         .padding(.top, compactHeader ? 12 : 6)
         .padding(.bottom, 8)
+        .tearOffHandle("SysMon", enabled: popoverMode)
     }
 
     private func gaugeCard(title: String, value: Double, main: String, sub: String) -> some View {
@@ -833,6 +834,7 @@ final class SysMonWindowController {
     private var popover: NSPopover?
     private var clickMonitor: Any?
     private var keyMonitor: Any?
+    private let tearOff = TearOffObserver()
     private let vm = SysMonViewModel()
 
     /// 菜单栏入口: 图标正下方展开, 点外部自动收起
@@ -879,6 +881,12 @@ final class SysMonWindowController {
         NotificationCenter.default.addObserver(forName: NSPopover.didCloseNotification, object: pop, queue: .main) { [weak self] _ in
             self?.teardownMonitors()
             self?.vm.pause()   // 收起即停采样
+        }
+        // 顶部下拉撕出为独立窗口(与 Skills/BizMap 同一套手感)
+        tearOff.install(key: "SysMon") { [weak self] in
+            guard let self = self else { return }
+            self.closePopover()
+            self.show()
         }
     }
 
