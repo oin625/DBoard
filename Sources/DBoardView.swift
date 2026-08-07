@@ -477,6 +477,15 @@ final class DBoardViewModel: ObservableObject {
         aiHistoryExpanded = false
     }
 
+    /// 手滑把待办打进 AI 框的纠错出口：⌘⏎ 或点 ➕ 直接落今日零碎，不发 AI
+    func addTodoFromAIBar() {
+        let text = aiInput.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty, !aiLoading else { return }
+        aiInput = ""
+        addTodo(text)
+        aiReply = "➕ 已加为今日零碎：\(text)"
+    }
+
     func runAI() {
         let prompt = aiInput.trimmingCharacters(in: .whitespaces)
         guard !prompt.isEmpty, !aiLoading else { return }
@@ -1606,6 +1615,15 @@ struct AIChatBar: View {
                 if vm.aiLoading {
                     ProgressView().scaleEffect(0.6).frame(width: 16, height: 16)
                 } else if !vm.aiInput.trimmingCharacters(in: .whitespaces).isEmpty {
+                    // 打错框的纠错出口：绿色 ➕ 直接加为今日零碎，不发 AI
+                    Button { vm.addTodoFromAIBar() } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 18))
+                            .foregroundStyle(Color(hex: "#10b981"))
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .help("⌘⏎ 加为今日零碎（不问 AI）")
                     Button { vm.runAI() } label: {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.system(size: 18))
@@ -1614,6 +1632,7 @@ struct AIChatBar: View {
                             )
                     }
                     .buttonStyle(.plain)
+                    .help("⏎ 发送给 AI")
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
