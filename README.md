@@ -32,6 +32,11 @@ Mac 菜单栏常驻应用。最初是读 `~/.claude/demand-center-cache.md` 的 
 
 模型、认证和组织策略以各自运行时为准；看板只读取并展示配置，不保存 API Key。
 
+### Skills 与 Context 治理
+
+- 同名 Skill 的多个安装位置合并为一张卡；若 `SKILL.md` 定义不同，会标记“同名异定义”，必须按 Codex、Qoder CN 或企业插件各自的运行时分别治理。
+- 项目 `AGENTS.md` 是 Codex 与 Zed 原生 Agent 的权威规则；Qoder CN Memory 只服务 Qoder CN；`CLAUDE.md` 和旧 Qoder Memory 只作迁移对照。看板会提示同项目同时存在 `AGENTS.md` 与 `CLAUDE.md` 的潜在冲突。
+
 ## 安装
 
 ```bash

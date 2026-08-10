@@ -14,6 +14,12 @@ enum SkillHealth: Int, Comparable {
     static func < (a: SkillHealth, b: SkillHealth) -> Bool { a.rawValue < b.rawValue }
 }
 
+struct SkillInstallation: Identifiable, Hashable {
+    var id: String { source + "::" + path }
+    var source: String
+    var path: String
+}
+
 struct SkillItem: Identifiable {
     let dir: String                // 目录名
     let path: String
@@ -38,12 +44,16 @@ struct SkillItem: Identifiable {
     var fileCount: Int = 0
     var sources: [String] = []       // Codex / 共享 / Qoder CN / Codex 插件 / Claude 遗留
     var installPaths: [String] = []  // 同名 skill 的全部安装位置
+    var installations: [SkillInstallation] = []
+    var definitionHash: Int = 0       // 本次扫描内用于识别同名异定义，不作持久化身份
+    var divergentDefinitions = false  // 同名 skill 的 SKILL.md 内容不一致，需按运行时分别治理
     var readOnly: Bool = false       // 插件和遗留资产只展示，不移动目录
     var id: String { dir }
 
     var refCount: Int { hardRefs.count }
     var isHub: Bool { hardRefs.count >= 2 }
     var riskyToDisable: Bool { !externalRefs.isEmpty || !hardRefs.isEmpty }
+    var duplicateCount: Int { max(0, installations.count - 1) }
 }
 
 final class SkillsViewModel: ObservableObject {
@@ -223,6 +233,11 @@ final class SkillsViewModel: ObservableObject {
          items.filter { $0.origin == "已归档" }.count)
     }
 
+    var duplicateStats: (replicas: Int, divergent: Int) {
+        (items.filter { $0.duplicateCount > 0 }.count,
+         items.filter { $0.divergentDefinitions }.count)
+    }
+
     func scan() {
         guard !loading else { return }
         loading = true
@@ -312,6 +327,7 @@ final class SkillsViewModel: ObservableObject {
             it.enabled = en
             it.sources = [source]
             it.installPaths = [p]
+            it.installations = [SkillInstallation(source: source, path: p)]
             it.readOnly = readOnly
             // skills-disabled 是历史遗留目录, 仍扫描以免漏掉, 但归口显示为"已归档"
             if p.hasPrefix(Self.archiveRoot) || p.hasPrefix(Self.disabledRoot) {
@@ -344,7 +360,9 @@ final class SkillsViewModel: ObservableObject {
                 out.append(it)
                 continue
             }
-            texts[d] = txt
+            // 同名多来源时，交叉引用只取优先级最高的首份定义，避免低优先级副本覆盖它。
+            if texts[d] == nil { texts[d] = txt }
+            it.definitionHash = txt.hashValue
 
             // frontmatter
             guard let fmRange = txt.range(of: "^---\\s*\\n", options: .regularExpression),
@@ -413,6 +431,15 @@ final class SkillsViewModel: ObservableObject {
             if let idx = out.firstIndex(where: { ($0.name.isEmpty ? $0.dir : $0.name) == identity }) {
                 if !out[idx].sources.contains(source) { out[idx].sources.append(source) }
                 if !out[idx].installPaths.contains(p) { out[idx].installPaths.append(p) }
+                if !out[idx].installations.contains(SkillInstallation(source: source, path: p)) {
+                    out[idx].installations.append(SkillInstallation(source: source, path: p))
+                }
+                if out[idx].definitionHash != it.definitionHash {
+                    out[idx].divergentDefinitions = true
+                    if !out[idx].hints.contains("同名 Skill 在不同来源的定义不一致；需按运行时分别确认路由结果") {
+                        out[idx].hints.append("同名 Skill 在不同来源的定义不一致；需按运行时分别确认路由结果")
+                    }
+                }
             } else {
                 out.append(it)
             }
@@ -805,6 +832,7 @@ struct SkillsBoardView: View {
     private var gridArea: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                skillGovernancePanel
                 if vm.loading && vm.items.isEmpty { loadingState }
                 ForEach(grouped, id: \.0) { g in
                     let isArchive = g.0 == Self.archiveSection
@@ -829,6 +857,29 @@ struct SkillsBoardView: View {
             .padding(.top, 4)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private var skillGovernancePanel: some View {
+        let d = vm.duplicateStats
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Image(systemName: "square.stack.3d.up")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(theme.current.accentPrimary)
+                Text("Skill 治理").font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(theme.current.textPrimary)
+                Spacer()
+                Text("\(vm.items.count) 个能力").font(fm.font(10)).foregroundStyle(theme.current.textMuted)
+                if d.replicas > 0 { Text("\(d.replicas) 个多来源").font(fm.font(10)).foregroundStyle(theme.current.textMuted) }
+                if d.divergent > 0 { Text("\(d.divergent) 个同名异定义").font(fm.font(10)).foregroundStyle(Color(hex: "#c8863c")) }
+            }
+            Text("同名且定义一致的副本合并展示；同名但定义不同会提示风险。Codex、Qoder CN、企业插件各自按自己的运行时加载，合并不代表它们共用同一份规则。")
+                .font(fm.font(10)).foregroundStyle(theme.current.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10).padding(.horizontal, 4)
+        .background(RoundedRectangle(cornerRadius: 9).fill(theme.current.accentPrimary.opacity(0.055)))
+        .padding(.horizontal, 14).padding(.top, 8).padding(.bottom, 3)
     }
 
     private var grouped: [(String, [SkillItem])] {
@@ -883,6 +934,10 @@ struct SkillsBoardView: View {
                 }
                 if !item.missingCLI.isEmpty {
                     miniBadge(nil, "exclamationmark.triangle.fill", Color(hex: "#d94f4f"))
+                }
+                if item.duplicateCount > 0 {
+                    miniBadge("+\(item.duplicateCount)", "square.stack.3d.up",
+                              item.divergentDefinitions ? Color(hex: "#c8863c") : theme.current.textMuted)
                 }
                 // 只给"未验证"打标 —— 已验证是期望状态, 满屏打勾等于没有信息量
                 if item.verify == "未验证" && item.origin == "启用" {
@@ -1094,6 +1149,23 @@ struct SkillsBoardView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(RoundedRectangle(cornerRadius: 8)
                         .fill(theme.current.textTertiary.opacity(0.06)))
+                }
+
+                if item.installations.count > 1 {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.divergentDefinitions ? "同名异定义：请按运行时分别管理" : "同名副本：定义一致，已合并展示")
+                            .font(fm.font(10))
+                            .foregroundStyle(item.divergentDefinitions ? Color(hex: "#c8863c") : theme.current.textMuted)
+                        ForEach(item.installations) { install in
+                            Text("\(install.source) · \(install.path)")
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(theme.current.textTertiary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(theme.current.textTertiary.opacity(0.06)))
                 }
 
                 if !item.externalRefs.isEmpty {

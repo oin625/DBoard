@@ -61,6 +61,13 @@ struct MemoryGroup: Identifiable {
     var entries: [MemoryEntry]
 }
 
+struct ContextGovernance {
+    var authoritativeRules: Int
+    var qoderCNMemories: Int
+    var legacyEntries: Int
+    var potentialConflicts: [String]
+}
+
 // MARK: - ViewModel
 
 final class AgentEnvViewModel: ObservableObject {
@@ -71,6 +78,22 @@ final class AgentEnvViewModel: ObservableObject {
     @Published var memGroups: [MemoryGroup] = []
     @Published var runtimeHealth: [RuntimeHealthItem] = []
     var memTotal: Int { memGroups.reduce(0) { $0 + $1.entries.count } }
+    var contextGovernance: ContextGovernance {
+        let all = memGroups.flatMap(\.entries)
+        let authority = all.filter { $0.category == "agent_rules" }.count
+        let qoderCN = all.filter { $0.source == "Qoder CN" }.count
+        let legacy = all.filter { $0.source.contains("遗留") }.count
+        var perProject: [String: Set<String>] = [:]
+        for e in all where e.category == "agent_rules" || e.category == "legacy_rules" {
+            let project = e.title.components(separatedBy: " · ").first ?? e.title
+            perProject[project, default: []].insert(e.category)
+        }
+        let conflicts = perProject.compactMap { key, kinds in
+            kinds.contains("agent_rules") && kinds.contains("legacy_rules") ? key : nil
+        }.sorted()
+        return ContextGovernance(authoritativeRules: authority, qoderCNMemories: qoderCN,
+                                 legacyEntries: legacy, potentialConflicts: conflicts)
+    }
 
     /// hooks 按事件分组, 保持固定的生命周期顺序
     static let eventOrder = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
@@ -963,9 +986,7 @@ struct MemoryBoardView: View {
         ScrollView {
             // Lazy: 只构建滚入可视区的行 —— 全量 VStack 在 tesla(993条)展开时会一次建近千个视图
             LazyVStack(alignment: .leading, spacing: 10) {
-                Text("这里展示可审计的上下文：项目 AGENTS 规则、Qoder CN 当前 Memory 和旧 Qoder 历史。Codex 内部数据库不直接展开，避免将会话中间产物当作长期知识。")
-                    .font(fm.font(10)).foregroundStyle(theme.current.textMuted)
-                    .padding(.horizontal, 2)
+                contextGovernancePanel
                 HStack(spacing: 8) {
                     TextField("搜标题…", text: $search)
                         .textFieldStyle(.roundedBorder).font(fm.font(11))
@@ -1002,6 +1023,41 @@ struct MemoryBoardView: View {
                 }
             }
             .padding(14)
+        }
+    }
+
+    private var contextGovernancePanel: some View {
+        let g = env.contextGovernance
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label("Context 治理与优先级", systemImage: "list.number")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(theme.current.textPrimary)
+                Spacer()
+                Text("\(env.memTotal) 条可审计上下文").font(fm.font(10)).foregroundStyle(theme.current.textMuted)
+            }
+            priorityRow("1", "项目 AGENTS.md", "Codex / Zed 原生 Agent 的权威规则", "\(g.authoritativeRules) 份", Color(hex: "#5aa86c"))
+            priorityRow("2", "Qoder CN Memory", "仅 Qoder CN 运行时的经验与偏好，不等同项目规范", "\(g.qoderCNMemories) 条", theme.current.accentPrimary)
+            priorityRow("3", "CLAUDE.md / 旧 Qoder Memory", "仅迁移对照；除非仍在使用旧入口，否则不要继续维护", "\(g.legacyEntries) 条", theme.current.textMuted)
+            if !g.potentialConflicts.isEmpty {
+                Text("⚠️ 同项目同时存在 AGENTS.md 与 CLAUDE.md：\(g.potentialConflicts.joined(separator: "、"))。以 AGENTS.md 为当前权威，CLAUDE.md 建议迁移或归档。")
+                    .font(fm.font(10)).foregroundStyle(Color(hex: "#c8863c"))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 9).fill(theme.current.accentPrimary.opacity(0.055)))
+    }
+
+    private func priorityRow(_ n: String, _ title: String, _ detail: String, _ count: String, _ color: Color) -> some View {
+        HStack(spacing: 6) {
+            Text(n).font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(color).frame(width: 12)
+            Text(title).font(fm.font(10)).foregroundStyle(theme.current.textSecondary)
+                .frame(width: 112, alignment: .leading)
+            Text(detail).font(fm.font(10)).foregroundStyle(theme.current.textMuted).lineLimit(1)
+            Spacer(minLength: 0)
+            Text(count).font(fm.font(9)).foregroundStyle(color)
         }
     }
 
