@@ -12,9 +12,11 @@ struct McpServerItem: Identifiable {
     var toolCount: Int = 0
     var tools: [String] = []
     var alive: Bool? = nil           // 仅 HTTP 端点探测; nil = 不适用/未探测
+    var sources: [String] = []        // Codex / Zed / Qoder CN / Qoder 遗留
+    var enabled: Bool = true
 }
 
-/// Hook: 来自 ~/.claude/settings.json 的 hooks 段
+/// Hook: 来自 Codex / Qoder CN / Claude 遗留配置
 struct HookItem: Identifiable {
     let id = UUID()
     var event: String                // SessionStart / PreToolUse / ...
@@ -27,7 +29,7 @@ struct HookItem: Identifiable {
 
 /// Subagent: 自建的 .agent.md 或 Qoder 内置子代理
 struct AgentItem: Identifiable {
-    var id: String { name }
+    var id: String { origin + "::" + name }
     var name: String
     var desc: String
     var tools: String = ""
@@ -35,12 +37,13 @@ struct AgentItem: Identifiable {
     var path: String = ""
 }
 
-/// 长期记忆条目: ~/.qoder/memories 下的明文 Markdown
+/// 可审计上下文条目：项目规则或运行时的明文 Memory。
 struct MemoryEntry: Identifiable {
     let id = UUID()
     var title: String
     var path: String
     var category: String
+    var source: String = ""
 }
 
 struct MemoryGroup: Identifiable {
@@ -107,6 +110,71 @@ final class AgentEnvViewModel: ObservableObject {
         var out: [AgentItem] = []
         let fm = FileManager.default
         let home = NSHomeDirectory()
+
+        // Qoder ACP 配置保存的是内部 key；看板只展示人能读懂的名称。
+        // 新 key 未覆盖时仍保留原值，避免因版本升级而误报模型。
+        func displayModel(_ key: String) -> String {
+            let names = [
+                "gm51model": "GLM-5.2",
+                "qmodel_38max": "Qwen3.8-Max",
+                "q36fmodel": "Qwen3.6-Flash",
+                "qmodel_latest": "Qwen3.7-Max",
+                "qmodel": "Qwen3.7-Plus",
+                "dmodel": "DeepSeek-V4-Pro",
+                "dfmodel": "DeepSeek-V4-Flash",
+                "kmodel": "Kimi-K2.7-Code"
+            ]
+            return names[key] ?? key
+        }
+
+        // 工作入口与运行时：从真实配置生成，不再硬编码 Qoder 内置子代理。
+        if let d = fm.contents(atPath: home + "/.config/zed/settings.json"),
+           let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+            var models: [String] = []
+            if let providers = j["language_models"] as? [String: Any] {
+                func collectModels(_ value: Any) {
+                    if let dict = value as? [String: Any] {
+                        if let list = dict["available_models"] as? [[String: Any]] {
+                            models += list.compactMap { ($0["display_name"] as? String) ?? ($0["name"] as? String) }
+                        }
+                        for child in dict.values { collectModels(child) }
+                    }
+                }
+                collectModels(providers)
+            }
+            out.append(AgentItem(name: "Zed", desc: "代码与 Git 工作入口",
+                                 tools: models.isEmpty ? "未发现自配模型" : models.joined(separator: ", "),
+                                 origin: "工作入口", path: home + "/.config/zed/settings.json"))
+            if let servers = j["agent_servers"] as? [String: Any] {
+                for (name, value) in servers.sorted(by: { $0.key < $1.key }) {
+                    guard let cfg = value as? [String: Any] else { continue }
+                    let options = cfg["default_config_options"] as? [String: Any]
+                    let rawModel = options?["model"] as? String ?? "自动"
+                    let model = displayModel(rawModel)
+                    let command = cfg["command"] as? String ?? "Zed Registry"
+                    let stale = command.hasSuffix("/qodercli") || rawModel.lowercased() == "ultimate"
+                    out.append(AgentItem(name: name,
+                        desc: stale ? "⚠️ 仍指向国际版 Qoder CLI / 旧模型，需要迁移到 qoderclicn" : "由 Zed 调用的 Agent Runtime",
+                        tools: "模型: \(model) · \(command)", origin: stale ? "Zed 遗留" : "Zed Runtime",
+                        path: home + "/.config/zed/settings.json"))
+                }
+            }
+        }
+
+        if let text = try? String(contentsOfFile: home + "/.codex/config.toml", encoding: .utf8),
+           let line = text.components(separatedBy: "\n").first(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("model =") }),
+           let eq = line.firstIndex(of: "=") {
+            let model = line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            out.append(AgentItem(name: "Codex Desktop", desc: "复杂日常任务、插件与跨应用执行",
+                                 tools: "默认模型: \(model)", origin: "工作入口",
+                                 path: home + "/.codex/config.toml"))
+        }
+        out.append(AgentItem(name: "Qoder CN CLI", desc: "DBoard 的低成本后台 AI 引擎（团队版）",
+                             tools: "后台: Qwen3.6-Flash · 主动对话: Qwen3.8-Max",
+                             origin: "DBoard Runtime", path: home + "/.local/bin/qoderclicn"))
+
+        // 旧 Agent 文件只作迁移对照。
         for dir in [home + "/.qoder/agents", home + "/.claude/agents"] {
             guard let fs = try? fm.contentsOfDirectory(atPath: dir) else { continue }
             for f in fs.sorted() where f.hasSuffix(".md") {
@@ -122,33 +190,22 @@ final class AgentEnvViewModel: ObservableObject {
                           .replacingOccurrences(of: ".md", with: ""),
                     desc: line(after: "description:"),
                     tools: line(after: "tools:"),
-                    origin: "自建", path: p))
+                    origin: "Claude/Qoder 遗留", path: p))
             }
         }
-        // Qoder 内置 subagent —— 由 harness 提供, 无本地文件, 清单写死
-        let builtins: [(String, String)] = [
-            ("Browser", "浏览器子代理: 点击/输入/导航/截图, 操控网页完成任务"),
-            ("CodeReview", "代码评审子代理: 找逻辑 Bug 与安全漏洞, 高信噪比"),
-            ("ComputerUse", "桌面操控子代理: 点击/键盘/滚动本地 App(非浏览器)"),
-            ("Debug", "调试子代理: 复现并定位运行时故障, 产出根因报告"),
-            ("GeneralPurpose", "通用子代理: 复杂多步任务与代码搜索"),
-            ("Search", "只读检索子代理: 调查代码/记忆/知识, 不做修改"),
-            ("plan-agent", "规划子代理: 产出结构化实施计划 / spec 文档"),
-        ]
-        for (n, d) in builtins { out.append(AgentItem(name: n, desc: d, origin: "内置")) }
         return out
     }
 
     // MARK: Memory 扫描
 
-    /// ~/.qoder/memories/<id>/{global, projects/<slug>}/<category>/<title>.md
+    /// 把“可读、可审计”的上下文放在同一视图：项目规则优先，其次是 Qoder CN Memory；
+    /// Codex 内部 SQLite 不直接展开，以免把私有会话中间产物误当成可维护知识。
     private static func scanMemories() -> [MemoryGroup] {
         let fm = FileManager.default
-        let root = NSHomeDirectory() + "/.qoder/memories"
-        guard let ids = try? fm.contentsOfDirectory(atPath: root) else { return [] }
         var groups: [String: [MemoryEntry]] = [:]
+        let home = NSHomeDirectory()
 
-        func collect(_ dir: String, into name: String) {
+        func collectMemory(_ dir: String, into name: String, source: String) {
             guard let cats = try? fm.contentsOfDirectory(atPath: dir) else { return }
             for c in cats where !c.hasPrefix(".") {
                 let cd = dir + "/" + c
@@ -156,24 +213,50 @@ final class AgentEnvViewModel: ObservableObject {
                 for f in files where f.hasSuffix(".md") {
                     groups[name, default: []].append(MemoryEntry(
                         title: String(f.dropLast(3)).replacingOccurrences(of: "_", with: " "),
-                        path: cd + "/" + f, category: c))
+                        path: cd + "/" + f, category: c, source: source))
                 }
             }
         }
 
-        for mid in ids where !mid.hasPrefix(".") {
-            let base = root + "/" + mid
-            collect(base + "/global", into: "全局")
-            if let projs = try? fm.contentsOfDirectory(atPath: base + "/projects") {
-                // slug 形如 Users-zz-work-code-muse —— 前缀由 home 路径推导, 不写死用户名
-                let homeSlug = NSHomeDirectory().dropFirst()
+        func collectRuntimeMemory(root: String, label: String) {
+            guard let ids = try? fm.contentsOfDirectory(atPath: root) else { return }
+            for mid in ids where !mid.hasPrefix(".") {
+                let base = root + "/" + mid
+                collectMemory(base + "/global", into: label + " · 全局", source: label)
+                if let projs = try? fm.contentsOfDirectory(atPath: base + "/projects") {
+                    let homeSlug = home.dropFirst()
                     .replacingOccurrences(of: "/", with: "-") + "-"
-                for p in projs where !p.hasPrefix(".") {
-                    let disp = p.hasPrefix(homeSlug) ? String(p.dropFirst(homeSlug.count)) : p
-                    collect(base + "/projects/" + p, into: disp)
+                    for p in projs where !p.hasPrefix(".") {
+                        let disp = p.hasPrefix(homeSlug) ? String(p.dropFirst(homeSlug.count)) : p
+                        collectMemory(base + "/projects/" + p, into: label + " · " + disp, source: label)
+                    }
                 }
             }
         }
+
+        // 项目规则是 Codex/Zed 都能直接读取的“权威上下文”。
+        let codeRoot = home + "/work/code"
+        if let projects = try? fm.contentsOfDirectory(atPath: codeRoot) {
+            for project in projects where !project.hasPrefix(".") {
+                let base = codeRoot + "/" + project
+                var isDir: ObjCBool = false
+                guard fm.fileExists(atPath: base, isDirectory: &isDir), isDir.boolValue else { continue }
+                for file in ["AGENTS.md", "CLAUDE.md"] where fm.fileExists(atPath: base + "/" + file) {
+                    groups["项目规则", default: []].append(MemoryEntry(
+                        title: project + " · " + file, path: base + "/" + file,
+                        category: file == "AGENTS.md" ? "agent_rules" : "legacy_rules",
+                        source: file == "AGENTS.md" ? "Codex/Zed" : "Claude 遗留"))
+                }
+            }
+        }
+        for (name, path) in [("工作区", codeRoot + "/AGENTS.md"), ("知识库", home + "/Documents/one/AGENTS.md")]
+            where fm.fileExists(atPath: path) {
+            groups["项目规则", default: []].append(MemoryEntry(title: name + " · AGENTS.md", path: path,
+                category: "agent_rules", source: "Codex/Zed"))
+        }
+
+        collectRuntimeMemory(root: home + "/.qoder-cn/memories", label: "Qoder CN")
+        collectRuntimeMemory(root: home + "/.qoder/memories", label: "Qoder 遗留")
         return groups.map { MemoryGroup(name: $0.key, entries: $0.value.sorted { $0.category < $1.category }) }
             .sorted { a, b in
                 let (ra, rb) = (Self.sectionRank(a.name), Self.sectionRank(b.name))
@@ -183,14 +266,15 @@ final class AgentEnvViewModel: ObservableObject {
 
     /// 分区次序: 全局 > 代码项目 > 文档项目 > 临时会话
     static func sectionRank(_ name: String) -> Int {
-        if name == "全局" { return 0 }
+        if name == "项目规则" { return 0 }
+        if name.contains("全局") { return 1 }
         if name.hasPrefix("work-code-") { return 1 }
         if name.hasPrefix("Documents-one-") { return 2 }
-        return 3   // Documents-Qoder-* / Qoder-Chats 等临时会话
+        return 3
     }
 
     static func sectionName(_ rank: Int) -> String {
-        ["📌 全局（任何会话都注入）", "💼 代码项目", "�� 文档项目", "💬 临时会话（chat 工作区）"][rank]
+        ["📌 项目规则（权威上下文）", "🌐 全局上下文", "💼 项目上下文", "📦 运行时与历史上下文"][rank]
     }
 
     // MARK: MCP 扫描
@@ -200,7 +284,75 @@ final class AgentEnvViewModel: ObservableObject {
         let fm = FileManager.default
         let home = NSHomeDirectory()
 
-        // 1) Qoder 内置注入: SharedClientCache/projects/*/mcps/<server>/tools/*.json
+        func merge(_ incoming: McpServerItem) {
+            if var old = map[incoming.name] {
+                for source in incoming.sources where !old.sources.contains(source) { old.sources.append(source) }
+                if old.endpoint.isEmpty { old.endpoint = incoming.endpoint }
+                if incoming.toolCount > old.toolCount {
+                    old.toolCount = incoming.toolCount; old.tools = incoming.tools
+                }
+                old.enabled = old.enabled || incoming.enabled
+                map[incoming.name] = old
+            } else {
+                map[incoming.name] = incoming
+            }
+        }
+
+        // 1) Codex TOML。只解析顶层 [mcp_servers.NAME]，忽略其 .env 子表。
+        let codexConfig = home + "/.codex/config.toml"
+        if let text = try? String(contentsOfFile: codexConfig, encoding: .utf8) {
+            var current: McpServerItem?
+            func flush() { if let item = current { merge(item) }; current = nil }
+            for raw in text.components(separatedBy: "\n") {
+                let line = raw.trimmingCharacters(in: .whitespaces)
+                if line.hasPrefix("[") {
+                    flush()
+                    if line.hasPrefix("[mcp_servers."), line.hasSuffix("]") {
+                        let name = String(line.dropFirst(13).dropLast())
+                        if !name.contains(".") {
+                            current = McpServerItem(name: name, origin: "自配", sources: ["Codex"])
+                        }
+                    }
+                    continue
+                }
+                guard current != nil, let eq = line.firstIndex(of: "=") else { continue }
+                let key = line[..<eq].trimmingCharacters(in: .whitespaces)
+                let value = line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                if key == "command" || key == "url" { current?.endpoint = value }
+                if key == "enabled" { current?.enabled = value.lowercased() != "false" }
+            }
+            flush()
+        }
+
+        // 2) Zed context_servers / mcp_servers（当前为空也保持兼容）。
+        if let d = fm.contents(atPath: home + "/.config/zed/settings.json"),
+           let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+            for key in ["context_servers", "mcp_servers"] {
+                guard let servers = j[key] as? [String: Any] else { continue }
+                for (name, value) in servers {
+                    guard let cfg = value as? [String: Any] else { continue }
+                    let endpoint = (cfg["url"] as? String) ?? (cfg["command"] as? String) ?? ""
+                    merge(McpServerItem(name: name, endpoint: endpoint, origin: "自配",
+                                        sources: ["Zed"], enabled: (cfg["enabled"] as? Bool) ?? true))
+                }
+            }
+        }
+
+        // 3) Qoder CN 本地 MCP；企业策略文件只控制准入，不伪装成 Server。
+        let qoderCNMcp = home + "/Library/Application Support/QoderCN/SharedClientCache/extension/local/mcp.json"
+        if let d = fm.contents(atPath: qoderCNMcp),
+           let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+           let servers = j["mcpServers"] as? [String: Any] {
+            for (name, value) in servers {
+                guard let cfg = value as? [String: Any] else { continue }
+                let endpoint = (cfg["url"] as? String) ?? (cfg["command"] as? String) ?? ""
+                merge(McpServerItem(name: name, endpoint: endpoint, origin: "自配",
+                                    sources: ["Qoder CN"], enabled: (cfg["disabled"] as? Bool) != true))
+            }
+        }
+
+        // 4) 旧 Qoder 缓存仅作迁移对照。
         //    多个项目会重复出现同名 server, 取工具数最全的一份
         let cacheRoot = home + "/Library/Application Support/Qoder/SharedClientCache/projects"
         if let projects = try? fm.contentsOfDirectory(atPath: cacheRoot) {
@@ -213,7 +365,7 @@ final class AgentEnvViewModel: ObservableObject {
                         .filter { $0.hasSuffix(".json") }
                         .map { String($0.dropLast(5)) }
                         .sorted()
-                    var it = map[sv] ?? McpServerItem(name: sv)
+                    var it = McpServerItem(name: sv, origin: "历史", sources: ["Qoder 遗留"])
                     if tools.count >= it.toolCount {
                         it.toolCount = tools.count
                         it.tools = tools
@@ -228,7 +380,7 @@ final class AgentEnvViewModel: ObservableObject {
                                 ?? (j["type"] as? String) ?? ""
                         }
                     }
-                    map[sv] = it
+                    merge(it)
                 }
             }
         }
@@ -240,11 +392,10 @@ final class AgentEnvViewModel: ObservableObject {
             let servers = (j["mcpServers"] as? [String: Any]) ?? j
             for (k, v) in servers {
                 guard let cfg = v as? [String: Any] else { continue }
-                var it = map[k] ?? McpServerItem(name: k)
-                it.origin = "自配"
+                var it = McpServerItem(name: k, origin: "历史", sources: ["Qoder 遗留"])
                 let ep = (cfg["url"] as? String) ?? (cfg["command"] as? String) ?? ""
                 if !ep.isEmpty { it.endpoint = ep }
-                map[k] = it
+                merge(it)
             }
         }
         return map.values.sorted { $0.name < $1.name }
@@ -273,21 +424,30 @@ final class AgentEnvViewModel: ObservableObject {
         let fm = FileManager.default
         let home = NSHomeDirectory()
 
-        // 来源 1: settings.json / settings.local.json 里手工注册的钩子
-        for file in ["/.claude/settings.json", "/.claude/settings.local.json"] {
+        // 当前运行时优先；Claude 仅作迁移对照。
+        let settingsFiles: [(String, String)] = [
+            ("/.codex/hooks.json", "Codex"),
+            ("/.qoder-cn/settings.json", "Qoder CN"),
+            ("/.qoder-cn/settings.local.json", "Qoder CN"),
+            ("/.claude/settings.json", "Claude 遗留"),
+            ("/.claude/settings.local.json", "Claude 遗留")
+        ]
+        for (file, source) in settingsFiles {
             guard let d = fm.contents(atPath: home + file),
                   let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                   let hooks = j["hooks"] as? [String: Any] else { continue }
-            appendHooks(hooks, into: &out, sourceSuffix: "", pluginRoot: nil)
+            appendHooks(hooks, into: &out, sourceSuffix: source, pluginRoot: nil)
         }
 
-        // 来源 2: 已安装插件自带的 hooks/hooks.json —— 由插件体系自动加载,
-        // 不出现在 settings.json 里。之前面板漏了这块, 导致"只看得到 1.0.6 的死钩子,
-        // 看不到 1.1.3 正在跑的新钩子"。
-        // installed_plugins.json 记录了每个插件实际加载的 installPath。
-        if let d = fm.contents(atPath: home + "/.claude/plugins/installed_plugins.json"),
-           let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-           let plugins = j["plugins"] as? [String: Any] {
+        // 插件 Hook 不一定写进 settings，按安装登记表读取实际 installPath。
+        let registries: [(String, String)] = [
+            (home + "/.qoder-cn/plugins/installed_plugins.json", "Qoder CN 插件"),
+            (home + "/.claude/plugins/installed_plugins.json", "Claude 遗留插件")
+        ]
+        for (registry, runtime) in registries {
+          if let d = fm.contents(atPath: registry),
+             let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+             let plugins = j["plugins"] as? [String: Any] {
             for (name, v) in plugins {
                 guard let installs = v as? [[String: Any]] else { continue }
                 for inst in installs {
@@ -298,12 +458,18 @@ final class AgentEnvViewModel: ObservableObject {
                           let hooks = (hj["hooks"] as? [String: Any]) ?? (hj as [String: Any]?) else { continue }
                     let short = name.split(separator: "@").first.map(String.init) ?? name
                     appendHooks(hooks, into: &out,
-                                sourceSuffix: "\(short) \(ver)(插件自带)",
+                                sourceSuffix: "\(runtime) · \(short) \(ver)",
                                 pluginRoot: root)
                 }
             }
+          }
         }
-        return out
+        // 同一条 Hook 可能被当前配置和遗留配置重复登记，按行为去重并保留当前来源。
+        var seen: Set<String> = []
+        return out.filter {
+            let key = $0.event + "\u{1f}" + $0.matcher + "\u{1f}" + $0.command
+            return seen.insert(key).inserted
+        }
     }
 
     /// 解析一段 hooks 配置(事件 -> [{matcher, hooks:[{command}]}]) 并追加到结果。
@@ -327,7 +493,8 @@ final class AgentEnvViewModel: ObservableObject {
                         event: event, matcher: matcher, command: cmd,
                         scriptPath: script,
                         scriptExists: script.isEmpty ? true : fm.fileExists(atPath: script),
-                        source: sourceSuffix.isEmpty ? classify(cmd) : sourceSuffix))
+                        source: sourceSuffix.isEmpty ? classify(cmd)
+                            : sourceSuffix + " · " + classify(cmd)))
                 }
             }
         }
@@ -335,7 +502,9 @@ final class AgentEnvViewModel: ObservableObject {
 
     /// 从 "node /path/x.js arg" / "bash /path/y.sh" / "/path/z.sh stop" 里抽脚本路径
     private static func extractScript(_ cmd: String) -> String {
-        let parts = cmd.split(separator: " ").map(String.init)
+        let parts = cmd.split(separator: " ").map {
+            String($0).trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        }
         guard let first = parts.first else { return "" }
         let interpreters = ["node", "bash", "sh", "python3", "python", "zsh"]
         let candidate: String
@@ -377,7 +546,7 @@ struct McpBoardView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                Text("MCP Server 由 Qoder 注入或 ~/.qoder/mcp.json 自配, 提供对话内可调用的工具。内置项跨项目聚合(不同项目注入的 server 不同)")
+                Text("汇总 Codex、Zed、Qoder CN 的 MCP Server；旧 Qoder 配置仅作迁移对照，同名 Server 合并显示来源")
                     .font(fm.font(10)).foregroundStyle(theme.current.textMuted)
                     .padding(.horizontal, 2)
                 Text("● 绿 = HTTP 端点在线 · ● 红 = 探测失败 · ● 灰 = 按会话注入无常驻端口, 无法探测(不代表没用) · 点卡片看说明")
@@ -405,10 +574,15 @@ struct McpBoardView: View {
                     .frame(width: 7, height: 7)
                 Text(m.name).font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(theme.current.textPrimary)
-                Text(m.origin).font(fm.font(9))
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Capsule().fill(theme.current.textTertiary.opacity(0.1)))
-                    .foregroundStyle(theme.current.textSecondary)
+                ForEach(m.sources, id: \.self) { source in
+                    Text(source).font(fm.font(9))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().fill(theme.current.textTertiary.opacity(0.1)))
+                        .foregroundStyle(source.contains("遗留") ? theme.current.textMuted : theme.current.textSecondary)
+                }
+                if !m.enabled {
+                    Text("已停用").font(fm.font(9)).foregroundStyle(Color(hex: "#c8863c"))
+                }
                 Spacer()
                 Text("\(m.toolCount) 工具").font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(theme.current.textSecondary)
@@ -489,7 +663,7 @@ struct HooksBoardView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Hook 在对话生命周期的固定时机自动执行脚本 —— 当前全部来自公司预置(埋点/审计/监控)。点条目看解释")
+                Text("Hook 在对话生命周期的固定时机自动执行脚本；已按 Codex、Qoder CN 与 Claude 遗留来源汇总。点条目看解释")
                     .font(fm.font(10)).foregroundStyle(theme.current.textMuted)
                     .padding(.horizontal, 2)
                 ForEach(env.hooksByEvent, id: \.0) { ev, items in
@@ -572,7 +746,7 @@ struct AgentsBoardView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Subagent 是分工的班组: 主对话把任务派给它, 各干各的互不占上下文。自建的是 .agent.md 文件, 内置的由 Qoder 提供")
+                Text("区分工作入口、模型与 Agent Runtime；旧 Qoder/Claude Agent 仅作迁移对照")
                     .font(fm.font(10)).foregroundStyle(theme.current.textMuted)
                     .padding(.horizontal, 2)
                 ForEach(env.agents) { a in card(a) }
@@ -668,13 +842,14 @@ struct MemoryBoardView: View {
         "tool_experience": "工具经验", "task_experience": "任务经验",
         "user_info": "用户信息", "user_hobby": "用户偏好",
         "user_communication": "沟通偏好", "user_behavior": "行为约定",
+        "agent_rules": "AGENTS 规则", "legacy_rules": "Claude 遗留规则",
     ]
 
     var body: some View {
         ScrollView {
             // Lazy: 只构建滚入可视区的行 —— 全量 VStack 在 tesla(993条)展开时会一次建近千个视图
             LazyVStack(alignment: .leading, spacing: 10) {
-                Text("长期记忆按「打开的项目目录」隔离: 只有在该项目干活时才注入; 全局组则任何会话都注入。每行是一个项目, 点行展开(分类分节), 点条目就地预览正文, 行尾 ↗ 才是打开文件")
+                Text("这里展示可审计的上下文：项目 AGENTS 规则、Qoder CN 当前 Memory 和旧 Qoder 历史。Codex 内部数据库不直接展开，避免将会话中间产物当作长期知识。")
                     .font(fm.font(10)).foregroundStyle(theme.current.textMuted)
                     .padding(.horizontal, 2)
                 HStack(spacing: 8) {
@@ -733,6 +908,10 @@ struct MemoryBoardView: View {
                 Text(e.title).font(fm.font(11))
                     .foregroundStyle(isOpen ? theme.current.textPrimary : theme.current.textSecondary)
                     .lineLimit(1).truncationMode(.middle)
+                if !e.source.isEmpty {
+                    Text(e.source).font(.system(size: 9))
+                        .foregroundStyle(e.source.contains("遗留") ? theme.current.textMuted : theme.current.accentPrimary.opacity(0.8))
+                }
                 Spacer(minLength: 0)
                 Button(action: { NSWorkspace.shared.open(URL(fileURLWithPath: e.path)) }) {
                     Image(systemName: "arrow.up.forward.square")

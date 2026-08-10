@@ -698,25 +698,9 @@ struct TechScoutCard: View {
         return "\(Int(diff / 86400))天前"
     }
 
-    /// 单次 qodercli 纯文本调用(Efficient, 禁工具), 失败返回 nil
+    /// 低成本纯文本调用；Provider 失败时不回退到 Codex。
     private static func aiText(_ prompt: String) -> String? {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: NSHomeDirectory() + "/.local/bin/qodercli")
-        proc.arguments = ["-m", "Efficient", "--tools", "", "-p", prompt]
-        var env = ProcessInfo.processInfo.environment
-        env["BUN_OPTIONS"] = "--preload=" + NSHomeDirectory() + "/.loongsuite-pilot/hooks/qodercli-token-intercept.mjs"
-        env["PATH"] = (env["PATH"] ?? "") + ":" + NSHomeDirectory() + "/.local/bin:/opt/homebrew/bin"
-        proc.environment = env
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = Pipe()
-        do { try proc.run() } catch { return nil }
-        let deadline = Date().addingTimeInterval(100)
-        while proc.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.4) }
-        if proc.isRunning { proc.terminate(); return nil }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let out = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        return out.isEmpty ? nil : out
+        DBoardAIProvider.shared.text(prompt, timeout: 100)
     }
 
     @ViewBuilder

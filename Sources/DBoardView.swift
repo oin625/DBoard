@@ -514,21 +514,18 @@ final class DBoardViewModel: ObservableObject {
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            let task = Process()
-            task.environment = ProcessInfo.processInfo.environment
-            task.executableURL = URL(fileURLWithPath: "/bin/zsh")
-
-            // qodercli: 极致模型, stream-json 与 claude 同构无需改解析; BUN_OPTIONS 为 token 拦截钩子
-            let home = NSHomeDirectory()
-            let qodercli = "BUN_OPTIONS=--preload=\(home)/.loongsuite-pilot/hooks/qodercli-token-intercept.mjs \(home)/.local/bin/qodercli -m Ultimate"
-            let commonFlags = "--output-format stream-json --dangerously-skip-permissions"
-            let cmd: String
+            // 强模型只用于用户主动发起的 D板对话；失败时不回退到 Codex。
+            let provider = DBoardAIProvider.shared
+            let arguments: [String]
             if firstTime {
-                cmd = "\(qodercli) -p \(Self.shellEscape(prompt)) --append-system-prompt \(Self.shellEscape(systemPrompt)) --session-id \(sid) \(commonFlags)"
+                arguments = ["-p", prompt, "--append-system-prompt", systemPrompt,
+                             "--session-id", sid, "--output-format", "stream-json",
+                             "--dangerously-skip-permissions"]
             } else {
-                cmd = "\(qodercli) -p \(Self.shellEscape(prompt)) --resume \(sid) \(commonFlags)"
+                arguments = ["-p", prompt, "--resume", sid,
+                             "--output-format", "stream-json", "--dangerously-skip-permissions"]
             }
-            task.arguments = ["-l", "-c", cmd]
+            let task = provider.makeProcess(tier: .strong, arguments: arguments)
 
             let outPipe = Pipe()
             let errPipe = Pipe()
@@ -584,7 +581,7 @@ final class DBoardViewModel: ObservableObject {
                     }
                 }
             } catch {
-                finalReply = "⚠️ 调用失败: \(error.localizedDescription)"
+                finalReply = "⚠️ Qoder CLI 调用失败: \(error.localizedDescription)（未回退 Codex）"
                 DispatchQueue.main.async {
                     self.aiSessionID = nil
                     self.aiSessionCreated = false
@@ -699,7 +696,7 @@ struct DBoardRootView: View {
                     }
                     .padding(.bottom, 12)
                 }
-                AIChatBar()  // 2026-07-28 已切换 qodercli(-m Ultimate) + d-board skill, 恢复入口
+                AIChatBar()  // 国内版 Qoder CLI 强模型 + d-board skill；用户主动触发才调用
                 FooterView()
             }
             if vm.paletteOpen {

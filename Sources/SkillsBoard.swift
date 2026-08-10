@@ -36,6 +36,9 @@ struct SkillItem: Identifiable {
     var modified: Date? = nil
     var category: String = "其他"
     var fileCount: Int = 0
+    var sources: [String] = []       // Codex / 共享 / Qoder CN / Codex 插件 / Claude 遗留
+    var installPaths: [String] = []  // 同名 skill 的全部安装位置
+    var readOnly: Bool = false       // 插件和遗留资产只展示，不移动目录
     var id: String { dir }
 
     var refCount: Int { hardRefs.count }
@@ -158,10 +161,14 @@ final class SkillsViewModel: ObservableObject {
     static let archiveRoot = NSHomeDirectory() + "/.claude/skills-archive"
     /// 分享区: 对外分发的副本, 不参与本机路由(避免与自用版描述撞车)
     static let sharedRoot = NSHomeDirectory() + "/.claude/skills-shared"
+    static let codexRoot = NSHomeDirectory() + "/.codex/skills"
+    static let agentsRoot = NSHomeDirectory() + "/.agents/skills"
+    static let qoderCNRoot = NSHomeDirectory() + "/.qoder-cn/skills"
+    static let qoderCNLubanRoot = NSHomeDirectory() + "/.qoder-cn/luban"
 
     /// 非启用态的分类(已归档/分享版)不是日常关注对象, 固定排在最后,
     /// 否则会因数量大而挤到筛选条前排, 把常用业务分类推到"更多"里。
-    static let tailCategories = ["分享版", "已归档"]
+    static let tailCategories = ["分享版", "已归档", "Claude 遗留"]
 
     /// 筛选条固定展示顺序 —— 之前按数量降序, 每次扫描数量一变顺序就重排, 视觉上一直在跳。
     /// 顺序按"日常使用频度"手工排定, 与数量无关。
@@ -213,7 +220,7 @@ final class SkillsViewModel: ObservableObject {
          items.filter { $0.health == .healthy }.count,
          items.filter { $0.health == .warn }.count,
          items.filter { $0.health == .broken }.count,
-         items.filter { !$0.enabled }.count)
+         items.filter { $0.origin == "已归档" }.count)
     }
 
     func scan() {
@@ -252,31 +259,67 @@ final class SkillsViewModel: ObservableObject {
             }
         }
 
-        // 收集所有目录(启用 + 禁用)
-        var dirs: [(String, String, Bool)] = []   // (dir, path, enabled)
-        if let ds = try? fm.contentsOfDirectory(atPath: root) {
-            for d in ds where isDir(root + "/" + d) { dirs.append((d, root + "/" + d, true)) }
+        // 当前运行时优先；同名项稍后合并。~/.qoder/skills 是 Claude 的符号链接，不扫描。
+        var dirs: [(String, String, Bool, String, Bool)] = [] // dir/path/enabled/source/readOnly
+        func addRoot(_ base: String, source: String, enabled: Bool = true, readOnly: Bool = false) {
+            guard let ds = try? fm.contentsOfDirectory(atPath: base) else { return }
+            for d in ds where !d.hasPrefix(".") && isDir(base + "/" + d) {
+                dirs.append((d, base + "/" + d, enabled, source, readOnly))
+            }
         }
+        func addNestedSkills(_ base: String, source: String) {
+            guard let walk = fm.enumerator(at: URL(fileURLWithPath: base),
+                                           includingPropertiesForKeys: [.isDirectoryKey],
+                                           options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return }
+            for case let url as URL in walk where url.lastPathComponent == "SKILL.md" {
+                let dirURL = url.deletingLastPathComponent()
+                dirs.append((dirURL.lastPathComponent, dirURL.path, true, source, true))
+            }
+        }
+        addRoot(codexRoot, source: "Codex", readOnly: true)
+        addRoot(agentsRoot, source: "共享", readOnly: true)
+        addRoot(qoderCNRoot, source: "Qoder CN", readOnly: true)
+        addNestedSkills(codexRoot + "/.system", source: "Codex 系统")
+        addNestedSkills(NSHomeDirectory() + "/.codex/plugins/cache", source: "Codex 插件")
+        // Qoder CN 企业插件（如 Luban）按版本扫描其 skills 目录。
+        if let plugins = try? fm.contentsOfDirectory(atPath: qoderCNLubanRoot) {
+            for version in plugins {
+                addRoot(qoderCNLubanRoot + "/" + version + "/skills",
+                        source: "Qoder CN 插件", readOnly: true)
+            }
+        }
+        // 旧 Claude 库只用于迁移对照，不再视为当前启用能力。
+        addRoot(root, source: "Claude 遗留", enabled: false, readOnly: true)
         if let ds = try? fm.contentsOfDirectory(atPath: disabledRoot) {
-            for d in ds where isDir(disabledRoot + "/" + d) { dirs.append((d, disabledRoot + "/" + d, false)) }
+            for d in ds where isDir(disabledRoot + "/" + d) {
+                dirs.append((d, disabledRoot + "/" + d, false, "已归档", false))
+            }
         }
         // 归档区 / 分享区同样纳入展示, 但都标记为未启用(不参与本机路由)
         for extraRoot in [archiveRoot, sharedRoot] {
             if let ds = try? fm.contentsOfDirectory(atPath: extraRoot) {
-                for d in ds where isDir(extraRoot + "/" + d) { dirs.append((d, extraRoot + "/" + d, false)) }
+                for d in ds where isDir(extraRoot + "/" + d) {
+                    dirs.append((d, extraRoot + "/" + d, false,
+                                 extraRoot == sharedRoot ? "分享版" : "已归档", false))
+                }
             }
         }
 
         // 第一轮: 解析元数据
         var texts: [String: String] = [:]
-        for (d, p, en) in dirs {
+        for (d, p, en, source, readOnly) in dirs {
             var it = SkillItem(dir: d, path: p)
             it.enabled = en
+            it.sources = [source]
+            it.installPaths = [p]
+            it.readOnly = readOnly
             // skills-disabled 是历史遗留目录, 仍扫描以免漏掉, 但归口显示为"已归档"
             if p.hasPrefix(Self.archiveRoot) || p.hasPrefix(Self.disabledRoot) {
                 it.origin = "已归档"
             } else if p.hasPrefix(Self.sharedRoot) {
                 it.origin = "分享版"
+            } else if source == "Claude 遗留" {
+                it.origin = "Claude 遗留"
             }
             let sk = p + "/SKILL.md"
 
@@ -295,7 +338,7 @@ final class SkillsViewModel: ObservableObject {
                     it.hints.append("无 SKILL.md, 只能定时/命令行调用, 对话中无法唤起")
                 } else {
                     it.health = .broken
-                    it.problems.append("缺少 SKILL.md, Qoder 无法加载")
+                it.problems.append("缺少 SKILL.md, Agent 无法加载")
                 }
                 it.category = "其他"
                 out.append(it)
@@ -330,7 +373,7 @@ final class SkillsViewModel: ObservableObject {
             }
             if it.desc.isEmpty {
                 it.health = .broken
-                it.problems.append("frontmatter 缺 description, Qoder 无法判断何时触发")
+                it.problems.append("frontmatter 缺 description, Agent 无法判断何时触发")
             }
 
             // 仅手动调用的 skill(disable-model-invocation)不参与"触发词"检查 ——
@@ -346,7 +389,7 @@ final class SkillsViewModel: ObservableObject {
             // 第三方插件的 description 由上游维护, 本地改了会被插件更新覆盖, 不提示。
             if !it.desc.isEmpty && !it.external && it.origin == "启用" {
                 if it.desc.count < 40 {
-                    it.hints.append("description 仅 \(it.desc.count) 字, 过短会导致 Qoder 匹配不准")
+                    it.hints.append("description 仅 \(it.desc.count) 字, 过短会导致 Agent 匹配不准")
                 }
                 if !it.manualOnly && !Self.declaresTrigger(desc: it.desc, front: front) {
                     it.hints.append("description 没写触发条件(如\"当用户说…\"/\"Use when…\"), 可能不会被自动唤起")
@@ -365,7 +408,14 @@ final class SkillsViewModel: ObservableObject {
             if let ex = cronRefs[d] { it.externalRefs.append(ex) }
             if let ex = launchRefs[d] { it.externalRefs.append(ex) }
 
-            out.append(it)
+            // 同名合并：保留优先扫描到的当前版本，把安装位置与运行时来源汇总到一张卡。
+            let identity = it.name.isEmpty ? d : it.name
+            if let idx = out.firstIndex(where: { ($0.name.isEmpty ? $0.dir : $0.name) == identity }) {
+                if !out[idx].sources.contains(source) { out[idx].sources.append(source) }
+                if !out[idx].installPaths.contains(p) { out[idx].installPaths.append(p) }
+            } else {
+                out.append(it)
+            }
         }
 
         // 第二轮: 交叉引用 —— 分硬依赖 / 软提及两级
@@ -674,7 +724,7 @@ struct SkillsBoardView: View {
 
     enum BoardTab: String, CaseIterable {
         case skills = "Skills", mcp = "MCP", hooks = "Hooks"
-        case agents = "Agents", memory = "Memory"
+        case agents = "Agents", memory = "Context"
     }
 
     static let archiveSection = "已归档 / 分享版"
@@ -864,6 +914,10 @@ struct SkillsBoardView: View {
                         Text(Self.dateStr(m)).font(.system(size: 9, design: .monospaced))
                     }
                     Text("\(item.fileCount) 文件").font(.system(size: 9))
+                    if let source = item.sources.first {
+                        Text(item.sources.count > 1 ? "\(source) +\(item.sources.count - 1)" : source)
+                            .font(.system(size: 9, weight: .medium))
+                    }
                     if !item.enabled {
                         Text("已归档").font(.system(size: 9, weight: .medium))
                             .foregroundStyle(theme.current.textMuted)
@@ -999,6 +1053,10 @@ struct SkillsBoardView: View {
 
                 HStack(spacing: 6) {
                     tag(item.category, theme.current.textMuted)
+                    ForEach(item.sources, id: \.self) { source in
+                        tag(source, source == "Claude 遗留" ? theme.current.textMuted
+                            : theme.current.accentPrimary)
+                    }
                     if !item.verify.isEmpty {
                         tag(item.verify, item.verify == "已验证" ? Color(hex: "#5aa86c")
                                        : item.verify == "未验证" ? Color(hex: "#8a8f98")
@@ -1059,8 +1117,14 @@ struct SkillsBoardView: View {
                     }
                     HStack {
                         Spacer()
-                        if item.enabled { disableControl(item) }
-                        else { flatBtn("启用", "power", tint: Color(hex: "#5aa86c")) { vm.enable(item) } }
+                        if item.readOnly {
+                            Text("由 \(item.sources.joined(separator: " / ")) 管理")
+                                .font(fm.font(10)).foregroundStyle(theme.current.textMuted)
+                        } else if item.enabled {
+                            disableControl(item)
+                        } else {
+                            flatBtn("启用", "power", tint: Color(hex: "#5aa86c")) { vm.enable(item) }
+                        }
                     }
                 }
                 Spacer(minLength: 0)

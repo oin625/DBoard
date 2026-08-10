@@ -128,32 +128,13 @@ final class SysMonViewModel: ObservableObject {
                 + "第2行: 具体关闭/重启哪个应用能缓解(CloudShell/AliEntSafe/alilang 是公司安全软件, 严禁建议关闭; mds/WindowServer 不要动)\n"
                 + "第3行: 一句话行动建议\n"
                 + "数据: " + snap + "\n按应用聚合内存: " + fam + "\n瞬时CPU榜: " + rows
-            let out = Self.aiText(prompt) ?? "诊断失败(qodercli 不可用), 稍后再试"
+            let out = DBoardAIProvider.shared.text(prompt, timeout: 90)
+                ?? "诊断失败（Qoder CLI 未登录或不可用），未消耗 Codex 额度"
             DispatchQueue.main.async {
                 self?.aiDiag = out
                 self?.aiDiagLoading = false
             }
         }
-    }
-
-    private static func aiText(_ prompt: String) -> String? {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: NSHomeDirectory() + "/.local/bin/qodercli")
-        proc.arguments = ["-m", "Efficient", "--tools", "", "-p", prompt]
-        var env = ProcessInfo.processInfo.environment
-        env["BUN_OPTIONS"] = "--preload=" + NSHomeDirectory() + "/.loongsuite-pilot/hooks/qodercli-token-intercept.mjs"
-        env["PATH"] = (env["PATH"] ?? "") + ":" + NSHomeDirectory() + "/.local/bin:/opt/homebrew/bin"
-        proc.environment = env
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = Pipe()
-        do { try proc.run() } catch { return nil }
-        let deadline = Date().addingTimeInterval(90)
-        while proc.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.4) }
-        if proc.isRunning { proc.terminate(); return nil }
-        let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return out.isEmpty ? nil : out
     }
 
     /// 轻量采样(纯 syscall, 无子进程): 三信号 + 判级
