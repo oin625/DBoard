@@ -37,6 +37,15 @@ struct AgentItem: Identifiable {
     var path: String = ""
 }
 
+/// 每次扫描实时取样的运行健康度；只读本机配置/进程，不触发 AI 调用。
+struct RuntimeHealthItem: Identifiable {
+    enum Level { case good, warning, bad, neutral }
+    var id: String { title }
+    var title: String
+    var detail: String
+    var level: Level
+}
+
 /// 可审计上下文条目：项目规则或运行时的明文 Memory。
 struct MemoryEntry: Identifiable {
     let id = UUID()
@@ -60,6 +69,7 @@ final class AgentEnvViewModel: ObservableObject {
     @Published var loading = false
     @Published var agents: [AgentItem] = []
     @Published var memGroups: [MemoryGroup] = []
+    @Published var runtimeHealth: [RuntimeHealthItem] = []
     var memTotal: Int { memGroups.reduce(0) { $0 + $1.entries.count } }
 
     /// hooks 按事件分组, 保持固定的生命周期顺序
@@ -82,13 +92,72 @@ final class AgentEnvViewModel: ObservableObject {
             let h = Self.scanHooks()
             let a = Self.scanAgents()
             let g = Self.scanMemories()
+            let health = Self.scanRuntimeHealth(hooks: h)
             DispatchQueue.main.async {
                 self.mcps = m; self.hooks = h
                 self.agents = a; self.memGroups = g
+                self.runtimeHealth = health
                 self.loading = false
                 self.probeAlive()
             }
         }
+    }
+
+    // MARK: Runtime health
+
+    private static func scanRuntimeHealth(hooks: [HookItem]) -> [RuntimeHealthItem] {
+        let home = NSHomeDirectory()
+        let fm = FileManager.default
+        let cli = home + "/.local/bin/qoderclicn"
+        var result: [RuntimeHealthItem] = []
+
+        if fm.isExecutableFile(atPath: cli) {
+            result.append(RuntimeHealthItem(title: "Qoder CN CLI", detail: "命令可执行", level: .good))
+        } else {
+            result.append(RuntimeHealthItem(title: "Qoder CN CLI", detail: "未找到或不可执行：\(cli)", level: .bad))
+        }
+
+        // status 是本地 CLI 的只读状态查询；失败时只报未知，不把网络瞬断误判成未登录。
+        if fm.isExecutableFile(atPath: cli) {
+            let p = Process()
+            let out = Pipe()
+            p.executableURL = URL(fileURLWithPath: cli)
+            p.arguments = ["status", "-o", "json"]
+            p.standardOutput = out
+            p.standardError = Pipe()
+            if (try? p.run()) != nil {
+                p.waitUntilExit()
+                let data = out.fileHandleForReading.readDataToEndOfFile()
+                if let info = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   info["logged_in"] as? Bool == true {
+                    let user = info["username"] as? String ?? "团队账号"
+                    result.append(RuntimeHealthItem(title: "团队登录", detail: "已登录：\(user) · BYOK 受组织策略控制", level: .good))
+                } else {
+                    result.append(RuntimeHealthItem(title: "团队登录", detail: "状态未知；在终端执行 qoderclicn status 查看", level: .warning))
+                }
+            } else {
+                result.append(RuntimeHealthItem(title: "团队登录", detail: "无法读取 CLI 状态", level: .warning))
+            }
+        }
+
+        let zedPath = home + "/.config/zed/settings.json"
+        let zedConfigured = (try? Data(contentsOf: URL(fileURLWithPath: zedPath)))
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            .flatMap { $0["agent_servers"] as? [String: Any] }?["Qoder CN CLI"] != nil
+        result.append(RuntimeHealthItem(title: "Zed ACP", detail: zedConfigured ? "已配置 Qoder CN CLI 外部 Agent" : "未发现 Qoder CN CLI 配置", level: zedConfigured ? .good : .warning))
+
+        let pgrep = Process()
+        pgrep.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        pgrep.arguments = ["-f", "qoderclicn --acp"]
+        pgrep.standardOutput = Pipe()
+        if (try? pgrep.run()) != nil {
+            pgrep.waitUntilExit()
+            result.append(RuntimeHealthItem(title: "Zed ACP 进程", detail: pgrep.terminationStatus == 0 ? "运行中" : "未运行（启动 Zed 对话后会出现）", level: pgrep.terminationStatus == 0 ? .good : .neutral))
+        }
+
+        let broken = hooks.filter { !$0.scriptExists }.count
+        result.append(RuntimeHealthItem(title: "公司 Hooks", detail: broken == 0 ? "\(hooks.count) 条脚本均可访问" : "\(broken) 条脚本失效 / 共 \(hooks.count) 条", level: broken == 0 ? .good : .warning))
+        return result
     }
 
     /// 物理删除自建 agent 文件（用户明确要求直接删, 不做隔离区）。
@@ -660,6 +729,20 @@ struct HooksBoardView: View {
         return "未知脚本, 展开看完整命令自行判断。"
     }
 
+    /// Hook 归宿不能只看脚本：同一脚本被不同 harness 调起，生效范围完全不同。
+    private static func scope(_ h: HookItem) -> String {
+        if h.source.contains("Qoder CN") {
+            return "仅 Qoder CN CLI：终端 Qoder 会话，以及 Zed 中选择 Qoder CN 外部 Agent 时生效"
+        }
+        if h.source.contains("Codex") {
+            return "仅 Codex：不会随 Zed 原生 Agent 或 Qoder CN CLI 触发"
+        }
+        if h.source.contains("Claude") || h.source.contains("遗留") {
+            return "仅旧 Claude/Qoder 入口：当前只作迁移对照，不保证仍会触发"
+        }
+        return "按配置来源触发；展开查看完整命令与来源"
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
@@ -717,6 +800,9 @@ struct HooksBoardView: View {
                     Text(Self.explain(h)).font(fm.font(11))
                         .foregroundStyle(theme.current.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    Text("生效范围：\(Self.scope(h))").font(fm.font(10))
+                        .foregroundStyle(theme.current.accentPrimary.opacity(0.85))
+                        .fixedSize(horizontal: false, vertical: true)
                     Text(h.command).font(.system(size: 9, design: .monospaced))
                         .foregroundStyle(theme.current.textMuted)
                         .fixedSize(horizontal: false, vertical: true)
@@ -749,9 +835,37 @@ struct AgentsBoardView: View {
                 Text("区分工作入口、模型与 Agent Runtime；旧 Qoder/Claude Agent 仅作迁移对照")
                     .font(fm.font(10)).foregroundStyle(theme.current.textMuted)
                     .padding(.horizontal, 2)
+                healthPanel
                 ForEach(env.agents) { a in card(a) }
             }
             .padding(14)
+        }
+    }
+
+    private var healthPanel: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("运行健康度").font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(theme.current.textPrimary)
+            ForEach(env.runtimeHealth) { h in
+                HStack(spacing: 6) {
+                    Circle().fill(healthColor(h.level)).frame(width: 6, height: 6)
+                    Text(h.title).font(fm.font(10)).foregroundStyle(theme.current.textSecondary)
+                    Spacer()
+                    Text(h.detail).font(fm.font(10)).foregroundStyle(theme.current.textMuted)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 9).fill(theme.current.accentPrimary.opacity(0.06)))
+    }
+
+    private func healthColor(_ level: RuntimeHealthItem.Level) -> Color {
+        switch level {
+        case .good: return Color(hex: "#5aa86c")
+        case .warning: return Color(hex: "#c8863c")
+        case .bad: return Color(hex: "#d94f4f")
+        case .neutral: return theme.current.textMuted
         }
     }
 
