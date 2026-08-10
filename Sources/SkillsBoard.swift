@@ -64,6 +64,9 @@ final class SkillsViewModel: ObservableObject {
     @Published var onlyProblems = false
     @Published var lastScan: Date? = nil
     @Published var actionMsg = ""
+    /// 默认只看当前直接配置的 Skill；插件缓存、系统内置、遗留和归档进入资产库。
+    @Published var showAssetLibrary = false
+    @Published var assetLimit = 40
 
     /// 用户自定义分类覆盖表: 目录名 -> 分类名。
     /// **只存在这个独立 JSON 里, 绝不写入 SKILL.md** —— frontmatter 是 AI 路由的依据,
@@ -186,9 +189,28 @@ final class SkillsViewModel: ObservableObject {
                                 "设计/动画", "浏览器", "信息获取", "知识库",
                                 "个人效率", "元技能", "其他"]
 
+    private func isCurrentManaged(_ item: SkillItem) -> Bool {
+        item.sources.contains { ["Codex", "共享", "Qoder CN"].contains($0) }
+    }
+
+    var currentItems: [SkillItem] { items.filter(isCurrentManaged) }
+    var assetItems: [SkillItem] { items.filter { !isCurrentManaged($0) } }
+    var scopedItems: [SkillItem] { showAssetLibrary ? assetItems : currentItems }
+    var assetTotal: Int { assetItems.count }
+    var canLoadMoreAssets: Bool { showAssetLibrary && assetLimit < assetItems.count }
+
+    func switchScope(assetLibrary: Bool) {
+        showAssetLibrary = assetLibrary
+        categoryFilter = "全部"
+        onlyProblems = false
+        assetLimit = 40
+    }
+
+    func loadMoreAssets() { assetLimit += 40 }
+
     var categories: [(String, Int)] {
         var c: [String: Int] = [:]
-        for i in items { c[i.category, default: 0] += 1 }
+        for i in scopedItems { c[i.category, default: 0] += 1 }
         func rank(_ k: String) -> Int {
             if let i = Self.categoryOrder.firstIndex(of: k) { return i }
             if let i = Self.tailCategories.firstIndex(of: k) { return 900 + i }  // 归档/分享垫底
@@ -198,7 +220,7 @@ final class SkillsViewModel: ObservableObject {
             let (ra, rb) = (rank(a.key), rank(b.key))
             return ra != rb ? ra < rb : a.key < b.key   // 同档按名字, 保证稳定
         }
-        return [("全部", items.count)] + sorted.map { ($0.key, $0.value) }
+        return [("全部", scopedItems.count)] + sorted.map { ($0.key, $0.value) }
     }
 
     /// 只有归档/分享收进"更多", 其余全部平铺 —— 免得常用分类被折叠进下拉
@@ -210,7 +232,7 @@ final class SkillsViewModel: ObservableObject {
     }
 
     var filtered: [SkillItem] {
-        items.filter { i in
+        let result = scopedItems.filter { i in
             if onlyProblems && i.health == .healthy { return false }
             if categoryFilter != "全部" && i.category != categoryFilter { return false }
             if !search.isEmpty {
@@ -223,19 +245,21 @@ final class SkillsViewModel: ObservableObject {
             if $0.health != $1.health { return $0.health < $1.health }  // 有问题的排前面
             return $0.dir < $1.dir
         }
+        return showAssetLibrary ? Array(result.prefix(assetLimit)) : result
     }
 
     var stats: (total: Int, healthy: Int, warn: Int, broken: Int, disabled: Int) {
-        (items.count,
-         items.filter { $0.health == .healthy }.count,
-         items.filter { $0.health == .warn }.count,
-         items.filter { $0.health == .broken }.count,
-         items.filter { $0.origin == "已归档" }.count)
+        let visible = currentItems
+        return (visible.count,
+         visible.filter { $0.health == .healthy }.count,
+         visible.filter { $0.health == .warn }.count,
+         visible.filter { $0.health == .broken }.count,
+         assetItems.filter { $0.origin == "已归档" }.count)
     }
 
     var duplicateStats: (replicas: Int, divergent: Int) {
-        (items.filter { $0.duplicateCount > 0 }.count,
-         items.filter { $0.divergentDefinitions }.count)
+        (currentItems.filter { $0.duplicateCount > 0 }.count,
+         currentItems.filter { $0.divergentDefinitions }.count)
     }
 
     func scan() {
@@ -858,6 +882,15 @@ struct SkillsBoardView: View {
                         .padding(.bottom, 16)
                     }
                 }
+                if vm.canLoadMoreAssets {
+                    Button(action: { vm.loadMoreAssets() }) {
+                        Text("再加载 40 条（已显示 \(vm.filtered.count) / \(vm.assetTotal)）")
+                            .font(fm.font(11)).foregroundStyle(theme.current.accentPrimary)
+                            .padding(.vertical, 8).frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 14).padding(.bottom, 14)
+                }
                 if !vm.loading && vm.filtered.isEmpty && !vm.items.isEmpty { emptyState }
             }
             .padding(.top, 4)
@@ -875,11 +908,14 @@ struct SkillsBoardView: View {
                 Text("Skill 治理").font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(theme.current.textPrimary)
                 Spacer()
-                Text("\(vm.items.count) 个能力").font(fm.font(10)).foregroundStyle(theme.current.textMuted)
+                Text(vm.showAssetLibrary ? "资产库 \(vm.assetTotal) 项" : "当前 \(vm.currentItems.count) 个")
+                    .font(fm.font(10)).foregroundStyle(theme.current.textMuted)
                 if d.replicas > 0 { Text("\(d.replicas) 个多来源").font(fm.font(10)).foregroundStyle(theme.current.textMuted) }
                 if d.divergent > 0 { Text("\(d.divergent) 个同名异定义").font(fm.font(10)).foregroundStyle(Color(hex: "#c8863c")) }
             }
-            Text("同名且定义一致的副本合并展示；同名但定义不同会提示风险。Codex、Qoder CN、企业插件各自按自己的运行时加载，合并不代表它们共用同一份规则。")
+            Text(vm.showAssetLibrary
+                 ? "系统内置、插件缓存、Claude 遗留、归档和分享副本集中在这里；默认最多渲染 40 条，按需继续加载。"
+                 : "这里只展示 Codex、共享层和 Qoder CN 当前直接配置的 Skill；同名副本合并，同名异定义会提示风险。")
                 .font(fm.font(10)).foregroundStyle(theme.current.textMuted)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1306,6 +1342,13 @@ struct SkillsBoardView: View {
 
     private var toolbar: some View {
         HStack(spacing: 8) {
+            HStack(spacing: 2) {
+                scopeButton("当前", asset: false)
+                scopeButton("资产库 \(vm.assetTotal)", asset: true)
+            }
+            .padding(2)
+            .background(RoundedRectangle(cornerRadius: 7).fill(theme.current.textTertiary.opacity(0.07)))
+
             HStack(spacing: 5) {
                 Image(systemName: "magnifyingglass").font(.system(size: 10, weight: .medium))
                     .foregroundStyle(theme.current.textMuted)
@@ -1345,6 +1388,18 @@ struct SkillsBoardView: View {
                 .foregroundStyle(theme.current.textSecondary)
         }
         .padding(.horizontal, 16).padding(.bottom, 9)
+    }
+
+    private func scopeButton(_ title: String, asset: Bool) -> some View {
+        let selected = vm.showAssetLibrary == asset
+        return Button(action: { vm.switchScope(assetLibrary: asset) }) {
+            Text(title).font(fm.font(10))
+                .foregroundStyle(selected ? theme.current.accentPrimary : theme.current.textMuted)
+                .padding(.horizontal, 7).padding(.vertical, 3)
+                .background(RoundedRectangle(cornerRadius: 5)
+                    .fill(selected ? theme.current.cardFill.opacity(0.8) : Color.clear))
+        }
+        .buttonStyle(.plain)
     }
 
     private func catChip(_ name: String, _ n: Int) -> some View {
