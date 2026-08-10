@@ -745,6 +745,8 @@ struct SkillsBoardView: View {
     @State private var renameText = ""
     /// 归档组默认折叠 —— 它有十几个成员却几乎不看, 展开会把常用分类挤到屏幕外
     @State private var archiveExpanded = false
+    /// Claude 遗留与真正归档不是一回事；默认单独折叠，只在迁移清理时查看。
+    @State private var legacyExpanded = false
     /// 顶部 Tab: Skills 之外再暴露 MCP 与 Hooks —— 它们同样影响每次对话行为, 却一直不可见
     @State private var boardTab: BoardTab = .skills
     @StateObject private var envVM = AgentEnvViewModel()
@@ -755,6 +757,7 @@ struct SkillsBoardView: View {
     }
 
     static let archiveSection = "已归档 / 分享版"
+    static let legacySection = "Claude 遗留（迁移对照）"
 
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: popoverMode ? 208 : 236,
@@ -836,15 +839,18 @@ struct SkillsBoardView: View {
                 if vm.loading && vm.items.isEmpty { loadingState }
                 ForEach(grouped, id: \.0) { g in
                     let isArchive = g.0 == Self.archiveSection
+                    let isLegacy = g.0 == Self.legacySection
                     // 用筛选条主动筛到归档/分享时视为"就是要看它", 强制展开,
                     // 否则会出现"点了分类却一片空白"
                     let forced = SkillsViewModel.tailCategories.contains(vm.categoryFilter)
                     if isArchive {
                         collapsibleHeader(g.0, g.1.count)
+                    } else if isLegacy {
+                        legacyHeader(g.0, g.1.count)
                     } else {
                         sectionHeader(g.0, g.1.count)
                     }
-                    if !isArchive || archiveExpanded || forced {
+                    if !isArchive && !isLegacy || (isArchive && (archiveExpanded || forced)) || (isLegacy && (legacyExpanded || forced)) {
                         LazyVGrid(columns: columns, spacing: 10) {
                             ForEach(g.1) { item in card(item) }
                         }
@@ -888,9 +894,15 @@ struct SkillsBoardView: View {
         var map: [String: [SkillItem]] = [:]
         let bad = items.filter { $0.health != .healthy }
         if !bad.isEmpty { order.append("需要处理"); map["需要处理"] = bad }
-        // 归档与分享合并成一组: 二者都是"移出使用范围、留档备查", 没必要分两栏各占一屏
+        // 归档与分享才是"移出使用范围、留档备查"；Claude 遗留只是旧运行时的迁移对照，
+        // 绝不能混入归档数，否则会制造“误归档了几十个”的错觉。
         var archived: [SkillItem] = []
+        var legacy: [SkillItem] = []
         for i in items where i.health == .healthy {
+            if i.category == "Claude 遗留" {
+                legacy.append(i)
+                continue
+            }
             if SkillsViewModel.tailCategories.contains(i.category) {
                 archived.append(i)
                 continue
@@ -907,6 +919,9 @@ struct SkillsBoardView: View {
                 return ra != rb ? ra < rb : $0.dir < $1.dir
             }
             result.append((Self.archiveSection, archived))
+        }
+        if !legacy.isEmpty {
+            result.append((Self.legacySection, legacy.sorted { $0.dir < $1.dir }))
         }
         return result
     }
@@ -1387,6 +1402,33 @@ struct SkillsBoardView: View {
         .onTapGesture {
             withAnimation(.spring(response: 0.3, dampingFraction: 1.0)) {
                 archiveExpanded.toggle()
+            }
+        }
+    }
+
+    private func legacyHeader(_ title: String, _ n: Int) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(theme.current.textMuted.opacity(0.7))
+                .rotationEffect(.degrees(legacyExpanded ? 90 : 0))
+            Text(title)
+                .font(.system(size: 10, weight: .semibold)).tracking(0.6)
+                .foregroundStyle(theme.current.textMuted)
+            Text("\(n)")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(theme.current.textMuted.opacity(0.7))
+            if !legacyExpanded {
+                Text("不参与当前运行时路由").font(fm.font(9))
+                    .foregroundStyle(theme.current.textMuted.opacity(0.5))
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 7)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.spring(response: 0.3, dampingFraction: 1.0)) {
+                legacyExpanded.toggle()
             }
         }
     }
