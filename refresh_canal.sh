@@ -1,17 +1,12 @@
 #!/bin/bash
-# Canal 面板一键刷新：拉 Tesla 远端 → 扫两仓源码 → 渲染 HTML → 发布到预览目录
-# 用法：./refresh_canal.sh 然后浏览器刷新即可
+# 三渠统一状态板刷新入口：同步 Tesla 三渠分支后生成 HTML。
+# 直接运行 python3 canal_board.py 也可离线生成，但不会拉取远端最新提交。
 set -e
-cd "$(dirname "$0")"
 
-# Tesla 读的是 origin/three-canals-unified-0615（git show），fetch 才能拿到远端新提交；
-# Ultra 读工作区文件，本地一保存重跑就生效，无需任何 git 操作
-git -C "$HOME/work/code/tesla" fetch --quiet origin three-canals-unified-0615 2>/dev/null || \
-  echo "⚠ Tesla fetch 失败（离线？），继续用本地已有的远端快照"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESLA_DIR="$HOME/work/code/tesla"
 
-python3 gen_canal.py
-python3 proto_canal.py
+git -C "$TESLA_DIR" fetch --quiet origin three-canals-unified-0615 2>/dev/null || \
+  echo "⚠ Tesla fetch 失败（离线？），继续使用本地已有分支快照"
 
-mkdir -p /tmp/canal_preview
-cp /tmp/canal_proto.html /tmp/canal_preview/index.html
-echo "✓ 已发布 → http://localhost:8807 （浏览器刷新即可看到新数据）"
+python3 "$SCRIPT_DIR/canal_board.py"
