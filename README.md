@@ -14,7 +14,7 @@ Mac 菜单栏常驻应用。最初是读 `~/.claude/demand-center-cache.md` 的 
 | 引擎心跳 | Footer 三点状态条：值守/资讯/同步三个 daemon 的死活，点开看判定依据与修复命令 | launchctl + 各数据文件时间戳 |
 | Reply Inbox | 钉钉待回复人工审批台：AI 起草 → 人批准 → 发送，支持配方沉淀 | `~/.dws/reply-pending.json`（reply-daemon） |
 | Tech Scout | AI 精翻科技资讯流，历史留存 30 天 | `~/.claude/tech-scout-*.json`（tech-scout 定时任务） |
-| Skills 看板 | agent 技能库治理：健康度、启停、归档、分类、实战验证状态 | 汇总 `~/.codex/skills`、Codex 插件、`~/.qoder-cn/skills` 与 Qoder CN 企业插件；Claude/Qoder 旧目录仅作迁移对照 |
+| Skills 看板 | agent 技能库治理：健康度、启停、归档、分类、实战验证状态 | 汇总 `~/.codex/skills`、`~/.agents/skills`、Codex 插件、`~/.qoder-cn/skills` 与企业插件；链接自 Claude 的兼容 Skill 单独折叠，旧目录仅作迁移对照 |
 | Agent Env | MCP / Hooks / 工作入口 / Context 全景可视 | 汇总 Codex、Zed、Qoder CN；显示 Luban/R2C/LoongSuite Hooks、项目 `AGENTS.md` 和可审计 Memory，旧配置显式标为遗留 |
 | BizMap | TMYC 业务地图：服务卡片墙按梯队分组，搜需求关键词即路由（首查/次查高亮），D单联动，直达作战地图 | `~/.claude/bizmap-cache.json`（wiki 业务地图 gen_bizmap.py 生成） |
 | SysMon | CPU/内存/温度/进程监控，AI 卡顿诊断 | 本机采样 + Qoder CN CLI |

@@ -2,8 +2,9 @@ import SwiftUI
 import AppKit
 import Foundation
 
-// MARK: - Skills 看板: 扫描 ~/.claude/skills, 校验合规性, 管理启用/禁用
-// 关键事实: ~/.qoder/skills 是指向 ~/.claude/skills 的符号链接, 单一数据源
+// MARK: - Skills 看板: 汇总 Codex / Agent 共享层 / Qoder CN / Claude 兼容资产
+// Claude 旧 Skill 可逐项软链到 ~/.agents/skills 供 Codex 使用；看板将其单独折叠，
+// 避免几十个兼容项淹没日常维护的原生 Skill。
 // 禁用机制: 移到 ~/.claude/skills-disabled/ (彻底移出扫描范围, 可逆)
 //   —— frontmatter 加 disabled 字段是假禁用(Qoder 不认这字段), 不采用
 
@@ -33,7 +34,7 @@ struct SkillItem: Identifiable {
     /// 实战验证状态: 取自 SKILL.md 正文的「## 实战验证」段 —— 用来区分
     /// "装了但没用过"(未验证) 与 "真跑通过"(已验证), 避免把摆设当能力。
     var verify: String = ""          // 已验证 / 部分验证 / 未验证 / 空(未标注)
-    var origin: String = "启用"      // 启用 / 已归档 / 分享版
+    var origin: String = "启用"      // 启用 / Claude 兼容 / 已归档 / 分享版
     var external: Bool = false     // 第三方插件(marketplace 安装), 描述由上游维护, 本地改动会被覆盖
     var manualOnly: Bool = false   // frontmatter 声明 disable-model-invocation: 只能手动唤起
     var hardRefs: [String] = []    // 硬依赖我的 skill(写死了我的路径, 禁用即崩)
@@ -42,7 +43,7 @@ struct SkillItem: Identifiable {
     var modified: Date? = nil
     var category: String = "其他"
     var fileCount: Int = 0
-    var sources: [String] = []       // Codex / 共享 / Qoder CN / Codex 插件 / Claude 遗留
+    var sources: [String] = []       // Codex / 共享 / Claude 兼容 / Qoder CN / 插件 / 遗留
     var installPaths: [String] = []  // 同名 skill 的全部安装位置
     var installations: [SkillInstallation] = []
     var definitionHash: Int = 0       // 本次扫描内用于识别同名异定义，不作持久化身份
@@ -64,7 +65,7 @@ final class SkillsViewModel: ObservableObject {
     @Published var onlyProblems = false
     @Published var lastScan: Date? = nil
     @Published var actionMsg = ""
-    /// 默认只看当前直接配置的 Skill；插件缓存、系统内置、遗留和归档进入资产库。
+    /// 默认只看日常维护的原生 Skill；兼容层、插件缓存、系统内置、遗留和归档进入资产库。
     @Published var showAssetLibrary = false
     @Published var assetLimit = 40
 
@@ -181,7 +182,7 @@ final class SkillsViewModel: ObservableObject {
 
     /// 非启用态的分类(已归档/分享版)不是日常关注对象, 固定排在最后,
     /// 否则会因数量大而挤到筛选条前排, 把常用业务分类推到"更多"里。
-    static let tailCategories = ["分享版", "已归档", "Claude 遗留"]
+    static let tailCategories = ["分享版", "已归档", "Claude 兼容", "Claude 遗留"]
 
     /// 筛选条固定展示顺序 —— 之前按数量降序, 每次扫描数量一变顺序就重排, 视觉上一直在跳。
     /// 顺序按"日常使用频度"手工排定, 与数量无关。
@@ -191,6 +192,7 @@ final class SkillsViewModel: ObservableObject {
 
     private func isCurrentManaged(_ item: SkillItem) -> Bool {
         item.sources.contains { ["Codex", "共享", "Qoder CN"].contains($0) }
+            && !item.sources.contains("Claude 兼容")
     }
 
     var currentItems: [SkillItem] { items.filter(isCurrentManaged) }
@@ -303,7 +305,13 @@ final class SkillsViewModel: ObservableObject {
         func addRoot(_ base: String, source: String, enabled: Bool = true, readOnly: Bool = false) {
             guard let ds = try? fm.contentsOfDirectory(atPath: base) else { return }
             for d in ds where !d.hasPrefix(".") && isDir(base + "/" + d) {
-                dirs.append((d, base + "/" + d, enabled, source, readOnly))
+                let path = base + "/" + d
+                // ~/.agents/skills 中指回 ~/.claude/skills 的单项软链确实会被 Codex 加载，
+                // 但属于迁移兼容层，不应与少量原生共享 Skill 混在首页平铺。
+                let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+                let actualSource = base == agentsRoot && resolved.hasPrefix(root + "/")
+                    ? "Claude 兼容" : source
+                dirs.append((d, path, enabled, actualSource, readOnly))
             }
         }
         func addNestedSkills(_ base: String, source: String) {
@@ -358,6 +366,8 @@ final class SkillsViewModel: ObservableObject {
                 it.origin = "已归档"
             } else if p.hasPrefix(Self.sharedRoot) {
                 it.origin = "分享版"
+            } else if source == "Claude 兼容" {
+                it.origin = "Claude 兼容"
             } else if source == "Claude 遗留" {
                 it.origin = "Claude 遗留"
             }
@@ -914,8 +924,8 @@ struct SkillsBoardView: View {
                 if d.divergent > 0 { Text("\(d.divergent) 个同名异定义").font(fm.font(10)).foregroundStyle(Color(hex: "#c8863c")) }
             }
             Text(vm.showAssetLibrary
-                 ? "系统内置、插件缓存、Claude 遗留、归档和分享副本集中在这里；默认最多渲染 40 条，按需继续加载。"
-                 : "这里只展示 Codex、共享层和 Qoder CN 当前直接配置的 Skill；同名副本合并，同名异定义会提示风险。")
+                 ? "Claude 兼容、系统内置、插件缓存、遗留、归档和分享副本集中在这里；默认最多渲染 40 条，按需继续加载。"
+                 : "这里只展示日常维护的 Codex、原生共享层和 Qoder CN Skill；兼容层虽已启用，但默认折叠到资产库。")
                 .font(fm.font(10)).foregroundStyle(theme.current.textMuted)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -933,8 +943,13 @@ struct SkillsBoardView: View {
         // 归档与分享才是"移出使用范围、留档备查"；Claude 遗留只是旧运行时的迁移对照，
         // 绝不能混入归档数，否则会制造“误归档了几十个”的错觉。
         var archived: [SkillItem] = []
+        var compatible: [SkillItem] = []
         var legacy: [SkillItem] = []
         for i in items where i.health == .healthy {
+            if i.category == "Claude 兼容" {
+                compatible.append(i)
+                continue
+            }
             if i.category == "Claude 遗留" {
                 legacy.append(i)
                 continue
@@ -955,6 +970,9 @@ struct SkillsBoardView: View {
                 return ra != rb ? ra < rb : $0.dir < $1.dir
             }
             result.append((Self.archiveSection, archived))
+        }
+        if !compatible.isEmpty {
+            result.append(("Claude 兼容（Codex 已启用）", compatible.sorted { $0.dir < $1.dir }))
         }
         if !legacy.isEmpty {
             result.append((Self.legacySection, legacy.sorted { $0.dir < $1.dir }))
@@ -1160,7 +1178,7 @@ struct SkillsBoardView: View {
                 HStack(spacing: 6) {
                     tag(item.category, theme.current.textMuted)
                     ForEach(item.sources, id: \.self) { source in
-                        tag(source, source == "Claude 遗留" ? theme.current.textMuted
+                        tag(source, source == "Claude 遗留" || source == "Claude 兼容" ? theme.current.textMuted
                             : theme.current.accentPrimary)
                     }
                     if !item.verify.isEmpty {
