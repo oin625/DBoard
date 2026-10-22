@@ -349,8 +349,30 @@ final class DBoardViewModel: ObservableObject {
             ("折叠全部需求", "arrow.down.right.and.arrow.up.left", { self.collapseAll(); self.paletteOpen = false }),
             ("同步钉钉", "bolt", { self.doSyncNow(); self.paletteOpen = false }),
             ("刷新", "arrow.clockwise", { self.reload(); self.paletteOpen = false }),
-            ("应用发布台 (⌃Q)", "paperplane", { NotificationCenter.default.post(name: .init("openAppRelease"), object: nil); self.paletteOpen = false }),
+            ("模块使用统计(近14天)", "chart.bar", {
+                self.paletteOpen = false
+                let names = Dictionary(uniqueKeysWithValues: DBoardModule.all.map { ($0.id, $0.title) })
+                let rows = UsageStats.summary().map { "\(names[$0.0] ?? $0.0)：\($0.1) 次" }
+                let alert = NSAlert()
+                alert.messageText = "模块使用统计（近 14 天）"
+                alert.informativeText = rows.isEmpty ? "还没有记录" : rows.joined(separator: "\n")
+                NSApp.activate(ignoringOtherApps: true)
+                alert.runModal()
+            }),
         ]
+        // 一键运维: 写生产的动作仍走 Runner 的二次确认
+        for op in OpsAction.all where q.isEmpty || op.title.lowercased().contains(q) || "cookie 抖音 douyin 运维".contains(q) {
+            es.append(PaletteEntry(label: op.title, sub: "运维", icon: op.icon, action: {
+                self.paletteOpen = false
+                DispatchQueue.main.async { OpsRunner.shared.requestRun(op) }
+            }))
+        }
+        for m in DBoardModule.all where q.isEmpty || m.title.lowercased().contains(q) || m.id.contains(q) {
+            es.append(PaletteEntry(label: m.title, sub: m.shortcut.isEmpty ? "模块" : m.shortcut, icon: m.icon, action: {
+                self.paletteOpen = false
+                m.launch()
+            }))
+        }
         for a in acts {
             if q.isEmpty || a.0.lowercased().contains(q) {
                 es.append(PaletteEntry(label: a.0, sub: "动作", icon: a.1, action: a.2))
@@ -691,6 +713,7 @@ struct DBoardRootView: View {
                 HeaderView(popoverMode: popoverMode)
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 0) {
+                        CockpitSection()
                         NeedsSection()
                         PrevSection()
                         TodaySection()
@@ -813,47 +836,52 @@ struct HeaderView: View {
     @State private var showHandle = false
     var popoverMode: Bool = false
 
+    private static let dateFmt: DateFormatter = {
+        let f = DateFormatter(); f.locale = Locale(identifier: "zh_CN"); f.dateFormat = "M月d日 EEEE"; return f
+    }()
+
     var body: some View {
-        HStack(spacing: 10) {
-            HeaderIconButton(icon: "wand.and.stars", help: "Skills 看板") {
-                NotificationCenter.default.post(name: .init("openSkillsBoard"), object: nil)
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("D板").font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(theme.current.textPrimary)
+                Text(Self.dateFmt.string(from: Date())).font(.system(size: 11))
+                    .foregroundStyle(theme.current.textTertiary)
             }
-            // 双击标题可脱出为独立窗口, hover 时显示提示图标
-            Image(systemName: "arrow.up.left.and.arrow.down.right")
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(theme.current.textMuted.opacity(showHandle ? 0.5 : 0))
-                .frame(width: 14)
-                .animation(.easeInOut(duration: 0.2), value: showHandle)
-                .help("双击标题栏可脱出为独立窗口")
-            Text("我的需求看板")
-                .font(fm.font(22))
-                .foregroundStyle(theme.current.accentGradient)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
+            .help("下拉或双击可脱出为独立窗口")
             Spacer()
             if vm.urgentCount > 0 {
-                Text("\(vm.urgentCount) 紧急").font(fm.font(13))
-                    .foregroundStyle(Color(hex: "#ef4444"))
-                    .padding(.horizontal, 7).padding(.vertical, 3)
-                    .background(Capsule().fill(Color(hex: "#ef4444").opacity(0.1)))
+                Text("\(vm.urgentCount) 紧急").font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(Capsule().fill(Color.red.opacity(0.12)))
                     .contentTransition(.numericText())
             }
             if vm.inProgressCount > 0 {
-                Text("\(vm.inProgressCount) 进行中").font(fm.font(14))
+                Text("\(vm.inProgressCount) 进行中").font(.system(size: 11))
                     .foregroundStyle(theme.current.textTertiary)
                     .contentTransition(.numericText())
             }
-            HeaderIconButton(icon: "chart.line.uptrend.xyaxis", help: "A股行情") {
-                NotificationCenter.default.post(name: .init("openETF"), object: nil)
+            HeaderIconButton(icon: "magnifyingglass", help: "命令面板 ⌘K") {
+                vm.paletteQuery = ""; vm.paletteSel = 0; vm.paletteOpen = true
             }
-            HeaderIconButton(icon: "antenna.radiowaves.left.and.right", help: "前线科技资讯") {
-                NotificationCenter.default.post(name: .init("openTechScout"), object: nil)
+            // 入口收敛: 所有模块收进一个菜单, 不再在头部平铺一排图标
+            Menu {
+                ForEach(DBoardModule.all) { m in
+                    Button { m.launch() } label: {
+                        Label(m.shortcut.isEmpty ? m.title : "\(m.title)  \(m.shortcut)", systemImage: m.icon)
+                    }
+                }
+            } label: {
+                Image(systemName: "square.grid.2x2").font(.system(size: 13))
+                    .foregroundStyle(theme.current.textTertiary)
             }
-            HeaderIconButton(icon: "bubble.left.and.bubble.right", help: "钉钉待回复") {
-                NotificationCenter.default.post(name: .init("openReplyInbox"), object: nil)
-            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("全部模块")
         }
-        .padding(.horizontal, 20).padding(.vertical, 20)
+        .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 6)
         .contentShape(Rectangle())
         .onHover { showHandle = $0 }
         // 下拉撕出(与 Skills/BizMap/SysMon 同一套手感); 双击脱出作为旧入口保留
@@ -878,13 +906,12 @@ struct HeaderIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(fm.font(15))
-                .foregroundStyle(hovered ? theme.current.accentPrimary : theme.current.textTertiary)
-                .padding(6)
-                .background(Circle().fill(theme.current.accentPrimary.opacity(hovered ? 0.12 : 0)))
+                .font(.system(size: 13))
+                .foregroundStyle(hovered ? theme.current.textPrimary : theme.current.textTertiary)
+                .frame(width: 24, height: 24)
+                .background(RoundedRectangle(cornerRadius: 6).fill(theme.current.textPrimary.opacity(hovered ? 0.07 : 0)))
         }
-        .buttonStyle(SmoothButtonStyle(scale: 0.85, hoverScale: 1.0))
-        .scaleEffect(hovered ? 1.12 : 1.0)
+        .buttonStyle(SmoothButtonStyle(scale: 0.9, hoverScale: 1.0))
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: hovered)
         .onHover { hovered = $0 }
         .help(help)
@@ -909,7 +936,7 @@ struct NeedsSection: View {
         } else {
             return ItemPriority.allCases.compactMap { p in
                 let arr = vm.items.filter { $0.priority == p }
-                return arr.isEmpty ? nil : (p.title, Color(hex: p.dotColor), arr)
+                return arr.isEmpty ? nil : (p.title, p.color, arr)
             }
         }
     }
@@ -917,13 +944,14 @@ struct NeedsSection: View {
     var body: some View {
         ForEach(Array(groups.enumerated()), id: \.element.0) { gi, grp in
             HStack(spacing: 6) {
-                Circle().fill(grp.1).frame(width: 7, height: 7)
-                Text(grp.0).font(fm.font(20)).foregroundStyle(theme.current.textSecondary)
+                Circle().fill(grp.1).frame(width: 6, height: 6)
+                Text(grp.0).font(.system(size: 13, weight: .semibold)).foregroundStyle(theme.current.textSecondary)
                 Spacer()
+                Text("\(grp.2.count)").font(.system(size: 11, design: .monospaced)).foregroundStyle(theme.current.textMuted)
             }
-            .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 8)
+            .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 6)
             .transition(.move(edge: .top).combined(with: .opacity))
-            VStack(spacing: 12) {
+            VStack(spacing: 6) {
                 ForEach(Array(grp.2.enumerated()), id: \.element.id) { i, item in
                     ItemCardView(item: item, appearDelay: Double(i) * 0.04 + Double(gi) * 0.02)
                 }
@@ -944,7 +972,7 @@ struct ItemCardView: View {
     @State private var hovered = false
     @State private var appeared = false
     var expanded: Bool { vm.expandedIDs.contains(item.id) }
-    var pcolor: Color { Color(hex: item.priority.dotColor) }
+    var pcolor: Color { item.priority.color }
     var projC: Color { Color(hex: projColor(item.project)) }
     var showDesc: Bool { !item.title.isEmpty && item.title != "（待补充）" && item.title != item.displayTitle }
     var hasBranch: Bool { (item.branch?.isEmpty == false && item.branch != "待定") }
@@ -959,8 +987,6 @@ struct ItemCardView: View {
         .buttonStyle(SmoothButtonStyle(scale: 0.985, hoverScale: 1.0))
         .contextMenu { contextMenuContent }
         .opacity(appeared ? 1 : 0)
-        .offset(y: hovered ? -2 : 0)
-        .shadow(color: .black.opacity(hovered ? 0.1 : 0.06), radius: hovered ? 12 : 8, y: hovered ? 4 : 2)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hovered)
         .animation(.spring(response: 0.4, dampingFraction: 0.75), value: expanded)
         .onHover { hovered = $0 }
@@ -971,33 +997,29 @@ struct ItemCardView: View {
 
     @ViewBuilder
     private var cardContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             cardHeader
             cardMeta
             if expanded {
                 cardDetails
             }
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(theme.current.cardFill.opacity(theme.current.cardFillOpacity))
-        )
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .cardStyle(theme.current)
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(vm.selectedID == item.id ? pcolor.opacity(0.06) : Color.clear)
+            RoundedRectangle(cornerRadius: 8)
+                .fill(vm.selectedID == item.id || hovered ? theme.current.textPrimary.opacity(0.035) : Color.clear)
         )
-        .padding(.horizontal, 12)
-        .contentShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 16)
+        .contentShape(RoundedRectangle(cornerRadius: 8))
     }
 
     @ViewBuilder
     private var cardHeader: some View {
         HStack(spacing: 8) {
-            Circle().fill(pcolor).frame(width: 8, height: 8)
+            Circle().fill(pcolor).frame(width: 6, height: 6)
             Text(item.displayTitle)
-                .font(fm.font(17))
+                .font(fm.font(15, weight: .medium))
                 .lineLimit(expanded ? nil : 2)
                 .foregroundStyle(theme.current.textPrimary)
             Spacer()
@@ -1005,9 +1027,9 @@ struct ItemCardView: View {
                 if item.isUrgent {
                     Text("\(dl)天")
                         .font(fm.font(13))
-                        .foregroundStyle(Color(hex: "#ef4444"))
+                        .foregroundStyle(Color.red)
                         .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Capsule().fill(Color(hex: "#ef4444").opacity(0.1)))
+                        .background(Capsule().fill(Color.red.opacity(0.1)))
                 } else {
                     Text("\(dl)天").font(fm.font(13)).foregroundStyle(theme.current.textTertiary)
                 }
@@ -1036,36 +1058,36 @@ struct ItemCardView: View {
             if hasDetail {
                 if showDesc {
                     HStack(alignment: .top, spacing: 6) {
-                        Text("描述").font(fm.font(14)).foregroundStyle(Color(hex: "#94a3b8")).frame(width: 30, alignment: .leading)
-                        Text(item.title).font(fm.font(14)).foregroundStyle(Color(hex: "#334155"))
+                        Text("描述").font(fm.font(14)).foregroundStyle(theme.current.textMuted).frame(width: 30, alignment: .leading)
+                        Text(item.title).font(fm.font(14)).foregroundStyle(theme.current.textSecondary)
                     }
                 }
                 if hasBranch, let b = item.branch {
                     HStack(spacing: 6) {
-                        Text("分支").font(fm.font(14)).foregroundStyle(Color(hex: "#94a3b8")).frame(width: 30, alignment: .leading)
-                        Text(b).font(.system(size: 11, design: .monospaced)).foregroundStyle(Color(hex: "#667eea"))
+                        Text("分支").font(fm.font(14)).foregroundStyle(theme.current.textMuted).frame(width: 30, alignment: .leading)
+                        Text(b).font(.system(size: 11, design: .monospaced)).foregroundStyle(theme.current.accentPrimary)
                     }
                 }
                 if let sd = item.startDate {
                     HStack(spacing: 6) {
-                        Text("周期").font(fm.font(14)).foregroundStyle(Color(hex: "#94a3b8")).frame(width: 30, alignment: .leading)
-                        Text("\(sd)\(item.deadline.map { " → \($0)" } ?? "")").font(fm.font(14)).foregroundStyle(Color(hex: "#334155"))
+                        Text("周期").font(fm.font(14)).foregroundStyle(theme.current.textMuted).frame(width: 30, alignment: .leading)
+                        Text("\(sd)\(item.deadline.map { " → \($0)" } ?? "")").font(fm.font(14)).foregroundStyle(theme.current.textSecondary)
                     }
                 }
                 if hasProgress {
                     VStack(alignment: .leading, spacing: 3) {
                         ForEach(Array(item.milestones.enumerated()), id: \.offset) { _, ms in
                             HStack(spacing: 5) {
-                                Circle().fill(Color(hex: "#667eea")).frame(width: 5, height: 5)
-                                Text(ms.date).font(.system(size: 10, design: .monospaced)).foregroundStyle(Color(hex: "#94a3b8"))
-                                Text(ms.content).font(fm.font(14)).foregroundStyle(Color(hex: "#475569"))
+                                Circle().fill(theme.current.accentPrimary).frame(width: 5, height: 5)
+                                Text(ms.date).font(.system(size: 10, design: .monospaced)).foregroundStyle(theme.current.textMuted)
+                                Text(ms.content).font(fm.font(14)).foregroundStyle(theme.current.textSecondary)
                             }
                         }
                     }
                     .padding(.leading, 4)
                 }
             } else {
-                Text("暂无详情，对 Claude 说「更新 \(item.id)」补充").font(fm.font(14)).foregroundStyle(Color(hex: "#cbd5e1"))
+                Text("暂无详情，对 Claude 说「更新 \(item.id)」补充").font(fm.font(14)).foregroundStyle(theme.current.textMuted)
             }
         }
         .padding(.top, 4)
@@ -1117,10 +1139,10 @@ struct StatusPill: View {
     @State private var hovered = false
     var fg: Color {
         switch status {
-        case .pending: return Color(hex: "#8e8e93")
-        case .inProgress: return Color(hex: "#007aff")
-        case .completed: return Color(hex: "#34c759")
-        case .suspended: return Color(hex: "#ff9500")
+        case .pending: return Color.secondary
+        case .inProgress: return Color.blue
+        case .completed: return Color.green
+        case .suspended: return Color.orange
         }
     }
     var body: some View {
@@ -1179,7 +1201,7 @@ struct PrevSection: View {
                 if !done.isEmpty {
                     Button { expanded.toggle() } label: {
                         HStack(spacing: 6) {
-                            Circle().fill(Color(hex: "#34c759")).frame(width: 7, height: 7)
+                            Circle().fill(Color.green).frame(width: 7, height: 7)
                             Text("\(prev.shortDate) 已完成 \(done.count) 项").font(fm.font(14)).foregroundStyle(theme.current.textTertiary)
                             Spacer()
                             Image(systemName: "chevron.right").font(.system(size: 9)).rotationEffect(.degrees(expanded ? 90 : 0)).foregroundStyle(theme.current.chrome)
@@ -1251,26 +1273,22 @@ struct TodaySection: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("今日零碎").font(fm.font(20)).foregroundStyle(theme.current.textSecondary)
+                Text("今日零碎").font(.system(size: 13, weight: .semibold)).foregroundStyle(theme.current.textSecondary)
                 Spacer()
                 Text("\(vm.doneCount)/\(vm.totalCount)")
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundStyle(theme.current.textTertiary)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(theme.current.textMuted)
                     .contentTransition(.numericText())
             }
-            .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 10)
+            .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 6)
 
             // 醒目的添加行
             HStack(spacing: 10) {
-                ZStack {
-                    Circle().fill(theme.current.accentGradient)
-                        .frame(width: 24, height: 24)
-                    Image(systemName: "plus")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(.white)
-                }
+                Image(systemName: "plus.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(theme.current.accentPrimary)
                 TextField("添加今日零碎…", text: $vm.newTodoText)
-                    .font(fm.font(17))
+                    .font(fm.font(15))
                     .textFieldStyle(.plain)
                     .foregroundStyle(theme.current.textPrimary)
                     .onSubmit {
@@ -1283,23 +1301,16 @@ struct TodaySection: View {
                     Text("回车添加").font(fm.font(12)).foregroundStyle(theme.current.textMuted)
                 }
             }
-            .padding(.horizontal, 14).padding(.vertical, 11)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(theme.current.accentPrimary.opacity(0.08))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .strokeBorder(theme.current.accentPrimary.opacity(0.35), style: StrokeStyle(lineWidth: 1.5, dash: [6, 3]))
-                    )
-            )
+            .padding(.horizontal, 12).padding(.vertical, 9)
+            .background(RoundedRectangle(cornerRadius: 8).fill(theme.current.textPrimary.opacity(0.05)))
             .padding(.horizontal, 16).padding(.vertical, 4)
 
             if vm.todayTodos.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "list.bullet").font(.system(size: 28)).foregroundStyle(Color(hex: "#e2e8f0"))
-                    Text("暂无今日零碎").font(fm.font(15)).foregroundStyle(Color(hex: "#cbd5e1"))
+                VStack(spacing: 6) {
+                    Image(systemName: "checklist").font(.system(size: 22)).foregroundStyle(theme.current.textMuted)
+                    Text("今天还没有零碎事项，上面一行直接输入").font(.system(size: 12)).foregroundStyle(theme.current.textTertiary)
                 }
-                .frame(maxWidth: .infinity).padding(.vertical, 24)
+                .frame(maxWidth: .infinity).padding(.vertical, 18)
             }
 
             ForEach(Array(vm.todayTodos.enumerated()), id: \.offset) { idx, td in
@@ -1342,16 +1353,16 @@ struct TodoRow: View {
                     }
                 } label: {
                     ZStack {
-                        Circle().stroke(todo.isCompleted ? Color(hex: "#34c759") : (hovered ? Color(hex: "#667eea") : Color(hex: "#cbd5e1")), lineWidth: 1.5)
+                        Circle().stroke(todo.isCompleted ? Color.green : (hovered ? theme.current.accentPrimary : theme.current.textMuted), lineWidth: 1.5)
                             .frame(width: 18, height: 18)
                         if todo.isCompleted {
-                            Circle().fill(Color(hex: "#34c759").opacity(0.3)).frame(width: 18, height: 18)
+                            Circle().fill(Color.green.opacity(0.3)).frame(width: 18, height: 18)
                                 .scaleEffect(pop ? 1.7 : 1).opacity(pop ? 0 : 0.6)
                             Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
                         }
                     }
                     .contentShape(Circle())
-                    .background(todo.isCompleted ? Color(hex: "#34c759") : .clear, in: Circle())
+                    .background(todo.isCompleted ? Color.green : .clear, in: Circle())
                     .scaleEffect(todo.isCompleted && pop ? 1.15 : 1)
                 }
                 .buttonStyle(.plain)
@@ -1368,13 +1379,13 @@ struct TodoRow: View {
                         if !textBuf.isEmpty { vm.editTodo(idx, newText: textBuf) }
                         editingText = false
                     })
-                    .font(fm.font(16))
+                    .font(fm.font(15))
                     .focused($textFocused)
                     .textFieldStyle(.plain)
                     .padding(5)
                     .background(RoundedRectangle(cornerRadius: 6).stroke(Color.blue.opacity(0.4)))
                 } else {
-                    Text(todo.text).font(fm.font(16))
+                    Text(todo.text).font(fm.font(15))
                         .strikethrough(todo.isCompleted, color: theme.current.chrome)
                         .foregroundStyle(todo.isCompleted ? theme.current.textMuted : theme.current.textPrimary)
                         .animation(.easeInOut(duration: 0.35), value: todo.isCompleted)
@@ -1411,10 +1422,10 @@ struct TodoRow: View {
                 }.padding(.leading, 28)
             }
         }
-        .padding(.horizontal, 16).padding(.vertical, 10)
+        .padding(.horizontal, 20).padding(.vertical, 7)
         .scaleEffect(checkBounce ? 1.02 : 1.0)
         .background(
-            RoundedRectangle(cornerRadius: 8).fill(hovered && !readOnly ? Color.black.opacity(0.02) : .clear)
+            RoundedRectangle(cornerRadius: 6).fill(hovered && !readOnly ? theme.current.textPrimary.opacity(0.04) : .clear).padding(.horizontal, 12)
         )
         .contextMenu {
             if !readOnly {
@@ -1599,8 +1610,8 @@ struct AIChatBar: View {
                 }
                 .buttonStyle(.plain)
                 .help(vm.aiHistory.isEmpty ? "AI 对话" : (vm.aiHistoryExpanded ? "收起历史" : "查看对话历史"))
-                TextField(vm.hasAISession ? "继续问 AI…" : "🤖 问 AI：改需求状态、查看板…", text: $vm.aiInput)
-                    .font(fm.font(15))
+                TextField(vm.hasAISession ? "继续问 AI…" : "问 AI：改需求状态、查看板…", text: $vm.aiInput)
+                    .font(fm.font(13))
                     .textFieldStyle(.plain)
                     .onSubmit { vm.runAI() }
                     .disabled(vm.aiLoading)
@@ -1620,7 +1631,7 @@ struct AIChatBar: View {
                     Button { vm.addTodoFromAIBar() } label: {
                         Image(systemName: "plus.circle.fill")
                             .font(.system(size: 18))
-                            .foregroundStyle(Color(hex: "#10b981"))
+                            .foregroundStyle(Color.green)
                     }
                     .buttonStyle(.plain)
                     .keyboardShortcut(.return, modifiers: .command)
@@ -1646,7 +1657,7 @@ struct AIChatBar: View {
         }
         .padding(.vertical, 8)
         .overlay(alignment: .top) {
-            Color.black.opacity(0.06).frame(height: 1)
+            theme.current.separator.frame(height: 0.5)
         }
     }
 }
@@ -1666,38 +1677,39 @@ struct FooterView: View {
                 if vm.expandedIDs.isEmpty { vm.expandAll() } else { vm.collapseAll() }
             }
             Button { vm.paletteOpen.toggle() } label: {
-                Text("⌘K").font(.system(size: 9, weight: .medium, design: .monospaced)).foregroundStyle(theme.current.textTertiary)
-                    .padding(.horizontal, 5).padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.black.opacity(0.04)))
+                Text("⌘K").font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(theme.current.textTertiary)
+                    .padding(.horizontal, 5).padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(theme.current.textPrimary.opacity(0.06)))
             }.buttonStyle(SmoothButtonStyle(scale: 0.88))
             FooterButtonIcon("arrow.clockwise") { vm.reload() }
             FooterButtonIcon("bolt") { vm.doSyncNow() }
             Menu {
-                ForEach(DBoardTheme.all) { t in
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.4)) { ThemeManager.shared.current = t }
-                    } label: {
-                        Label(t.name, systemImage: t.icon)
+                Section("主题") {
+                    ForEach(DBoardTheme.all) { t in
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.3)) { ThemeManager.shared.current = t }
+                        } label: {
+                            Label(t.name, systemImage: theme.current.id == t.id ? "checkmark" : t.icon)
+                        }
+                    }
+                }
+                Section("字体") {
+                    ForEach(DBoardFont.all) { f in
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.3)) { FontManager.shared.current = f }
+                        } label: {
+                            Label(f.name, systemImage: fm.current.id == f.id ? "checkmark" : "textformat")
+                        }
                     }
                 }
             } label: {
-                Image(systemName: "paintbrush").font(fm.font(13)).foregroundStyle(theme.current.textMuted)
+                Image(systemName: "paintbrush").font(.system(size: 12)).foregroundStyle(theme.current.textMuted)
                     .padding(3)
             }
             .menuStyle(.borderlessButton)
-            Menu {
-                ForEach(DBoardFont.all) { f in
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.3)) { FontManager.shared.current = f }
-                    } label: {
-                        Label(f.name, systemImage: fm.current.id == f.id ? "checkmark" : "textformat")
-                    }
-                }
-            } label: {
-                Image(systemName: "textformat").font(fm.font(13)).foregroundStyle(theme.current.textMuted)
-                    .padding(3)
-            }
-            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("外观")
         }
         .padding(.horizontal, 14).padding(.vertical, 7)
         .overlay(alignment: .top) {
@@ -1708,15 +1720,16 @@ struct FooterView: View {
 
 struct FooterButton: View {
     @EnvironmentObject var fm: FontManager
+    @EnvironmentObject var theme: ThemeManager
     let title: String
     let action: () -> Void
     @State private var hovered = false
     init(_ title: String, action: @escaping () -> Void) { self.title = title; self.action = action }
     var body: some View {
         Button(action: action) {
-            Text(title).font(fm.font(13)).foregroundStyle(hovered ? Color(hex: "#6366f1") : Color(hex: "#94a3b8"))
+            Text(title).font(.system(size: 11)).foregroundStyle(hovered ? theme.current.accentPrimary : theme.current.textMuted)
                 .padding(.horizontal, 8).padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 6).fill(hovered ? Color(hex: "#6366f1").opacity(0.12) : Color.clear))
+                .background(RoundedRectangle(cornerRadius: 6).fill(hovered ? theme.current.accentPrimary.opacity(0.12) : Color.clear))
         }
         .buttonStyle(SmoothButtonStyle(scale: 0.9))
         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: hovered)
@@ -1726,15 +1739,16 @@ struct FooterButton: View {
 
 struct FooterButtonIcon: View {
     @EnvironmentObject var fm: FontManager
+    @EnvironmentObject var theme: ThemeManager
     let icon: String
     let action: () -> Void
     @State private var hovered = false
     init(_ icon: String, action: @escaping () -> Void) { self.icon = icon; self.action = action }
     var body: some View {
         Button(action: action) {
-            Image(systemName: icon).font(fm.font(14)).foregroundStyle(hovered ? Color(hex: "#6366f1") : Color(hex: "#94a3b8"))
+            Image(systemName: icon).font(.system(size: 12)).foregroundStyle(hovered ? theme.current.accentPrimary : theme.current.textMuted)
                 .padding(.horizontal, 6).padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 6).fill(hovered ? Color(hex: "#6366f1").opacity(0.12) : Color.clear))
+                .background(RoundedRectangle(cornerRadius: 6).fill(hovered ? theme.current.accentPrimary.opacity(0.12) : Color.clear))
         }
         .buttonStyle(SmoothButtonStyle(scale: 0.9))
         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: hovered)

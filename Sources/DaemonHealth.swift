@@ -20,6 +20,7 @@ struct EngineStatus: Identifiable {
 }
 
 final class EngineHealthModel: ObservableObject {
+    static let shared = EngineHealthModel()
     @Published var engines: [EngineStatus] = [
         EngineStatus(id: "reply", name: "值守 reply-daemon", icon: "bubble.left.and.bubble.right"),
         EngineStatus(id: "scout", name: "资讯 tech-scout", icon: "antenna.radiowaves.left.and.right"),
@@ -143,18 +144,21 @@ final class EngineHealthModel: ObservableObject {
             e.detail = "synced 时间戳解析失败: \(iso)"
             return e
         }
-        let ageH = Date().timeIntervalSince(date) / 3600
         e.detail = "上次同步 " + Self.rel(date)
-        if ageH < 24 {
+        // 没改动就不需要同步: 只有"文件在上次同步之后又被改过且迟迟没推上去"才算异常。
+        // (旧逻辑按同步时间绝对年龄判, 几天不动看板就报红, 是误报)
+        guard let mtime = fileDate(path), mtime.timeIntervalSince(date) > 120 else {
             e.state = .ok
-        } else if ageH < 72 {
-            e.state = .warn
-            e.problem = "同步 \(Int(ageH / 24)) 天没跑"
-            e.hint = "点 ⚡ 立即同步, 或对 agent 说「同步D板」"
+            return e
+        }
+        let pendingH = Date().timeIntervalSince(mtime) / 3600
+        e.detail = "上次同步 " + Self.rel(date) + " · 之后有改动(" + Self.rel(mtime) + ")"
+        if pendingH < 1 {
+            e.state = .ok
         } else {
-            e.state = .dead
-            e.problem = "同步 \(Int(ageH / 24)) 天没跑"
-            e.hint = "点 ⚡ 立即同步, 或对 agent 说「同步D板」"
+            e.state = pendingH < 24 ? .warn : .dead
+            e.problem = "有改动未同步钉钉"
+            e.hint = "~/.local/bin/sync_dboard.sh"
         }
         return e
     }
@@ -177,7 +181,7 @@ final class EngineHealthModel: ObservableObject {
 struct EngineStrip: View {
     @EnvironmentObject var vm: DBoardViewModel
     @EnvironmentObject var theme: ThemeManager
-    @StateObject private var health = EngineHealthModel()
+    @ObservedObject private var health = EngineHealthModel.shared
     @State private var showDetail = false
     @State private var syncPulse = false
 

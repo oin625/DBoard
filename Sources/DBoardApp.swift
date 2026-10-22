@@ -176,7 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
 
         // 钉钉待回复 初始化
-        replyInboxVM = ReplyInboxViewModel()
+        replyInboxVM = ReplyInboxViewModel.shared
         replyInboxWindow = ReplyInboxWindowController(viewModel: replyInboxVM)
 
         // 监听待回复入口点击
@@ -215,6 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 // 剪切板不留菜单栏图标, ⌥V 直接弹窗口
                 _ = self
                 NSLog("DBoard: clip hotkey fired")
+                UsageStats.hit("clipboard")
                 ClipboardBoardWindowController.shared.show()
             }
         }
@@ -222,13 +223,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 全局快捷键 ⌥C: Codex 供应商切换面板(csw 可视化)
         codexHotKey = HotKey()
         codexHotKey?.register(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(optionKey)) {
-            DispatchQueue.main.async { CodexSwitchWindowController.shared.toggle() }
+            DispatchQueue.main.async { UsageStats.hit("codex"); CodexSwitchWindowController.shared.toggle() }
         }
 
         // 全局快捷键 ⌃E: 居中浮窗弹 ReqFlow(需求视角), 不贴菜单栏图标
         reqFlowHotKey = HotKey()
         reqFlowHotKey?.register(keyCode: UInt32(kVK_ANSI_E), modifiers: UInt32(controlKey)) {
             DispatchQueue.main.async {
+                UsageStats.hit("reqflow")
                 BizMapBoardWindowController.shared.toggleWindow(requirements: true)
             }
         }
@@ -237,31 +239,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 全局快捷键 Ctrl+O: 今日规划，不占用独立菜单栏入口
         dayPlanHotKey = HotKey()
         dayPlanHotKey?.register(keyCode: UInt32(kVK_ANSI_O), modifiers: UInt32(controlKey)) {
-            DispatchQueue.main.async { DayPlanWindowController.shared.toggle() }
+            DispatchQueue.main.async { UsageStats.hit("dayplan"); DayPlanWindowController.shared.toggle() }
         }
 
         // 全局快捷键 Ctrl+L: Audi 内嵌日志页
         logHotKey = HotKey()
         logHotKey?.register(keyCode: UInt32(kVK_ANSI_L), modifiers: UInt32(controlKey)) {
-            DispatchQueue.main.async { AppReleaseWindowController.shared.toggleLogs() }
+            DispatchQueue.main.async { UsageStats.hit("logs"); AppReleaseWindowController.shared.toggleLogs() }
         }
 
         // 全局快捷键 ⌃Q: 应用发布台(WKWebView 内嵌 audi 线上版)
         appReleaseHotKey = HotKey()
         appReleaseHotKey?.register(keyCode: UInt32(kVK_ANSI_Q), modifiers: UInt32(controlKey)) {
-            DispatchQueue.main.async { AppReleaseWindowController.shared.toggle() }
+            DispatchQueue.main.async { UsageStats.hit("apprelease"); AppReleaseWindowController.shared.toggle() }
         }
 
         // 全局快捷键 Ctrl+W: Audi 首页
         audiHomeHotKey = HotKey()
         audiHomeHotKey?.register(keyCode: UInt32(kVK_ANSI_W), modifiers: UInt32(controlKey)) {
-            DispatchQueue.main.async { AppReleaseWindowController.shared.toggleHome() }
+            DispatchQueue.main.async { UsageStats.hit("audihome"); AppReleaseWindowController.shared.toggleHome() }
         }
 
         // 全局快捷键 Ctrl+Shift+L: 取剪切板文本直接搜日志
         logClipHotKey = HotKey()
         logClipHotKey?.register(keyCode: UInt32(kVK_ANSI_L), modifiers: UInt32(controlKey | shiftKey)) {
-            DispatchQueue.main.async { LogSearchWindowController.shared.searchWithClipboard() }
+            DispatchQueue.main.async { UsageStats.hit("logsearch"); LogSearchWindowController.shared.searchWithClipboard() }
         }
 
         // 调试触发: echo optv|mbpanel > /tmp/dboard-debug-trigger → 等价于按 ⌥V / 点菜单栏管家图标
@@ -279,6 +281,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             case "codex": CodexSwitchWindowController.shared.toggle()
             case "apprelease": AppReleaseWindowController.shared.show()
             case "dayplan": DayPlanWindowController.shared.toggle()
+            case "panel": self?.detachPanel()
             case let cmd where c.hasPrefix("logsearchq="):
                 LogSearchWindowController.shared.debugSearch(String(cmd.dropFirst("logsearchq=".count)))
 
@@ -298,6 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     @objc private func openBizMapFromStatusBar() {
         guard let btn = bizMapStatusItem?.button else { return }
+        UsageStats.hit("bizmap")
         BizMapBoardWindowController.shared.togglePopover(relativeTo: btn)
     }
 
@@ -306,6 +310,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     @objc private func openSysMonFromStatusBar() {
         guard let btn = sysStatusItem?.button else { return }
+        UsageStats.hit("sysmon")
         SysMonWindowController.shared.togglePopover(relativeTo: btn)
     }
 
@@ -389,6 +394,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     // MARK: - 主面板交互 (popover 模式, 跟系统监控/Skills 同一套)
 
     @objc func togglePopover() {
+        UsageStats.hit("dboard")
         NSLog("DBoard: togglePopover called")
         if isDetached {
             // 已脱出为独立窗口

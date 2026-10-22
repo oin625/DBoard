@@ -42,60 +42,22 @@ struct DBoardTheme: Identifiable, Equatable {
 
 // MARK: - Presets
 extension DBoardTheme {
-    // 牛皮纸: 手绘暖色(保留, 无背景图)
-    static let kraft = DBoardTheme(
-        id: "kraft", name: "牛皮纸", icon: "doc.plaintext",
-        background: Color(hex: "#f5e6d3"),
-        orbA: Color(hex: "#d4a574"), orbB: Color(hex: "#c4956a"), orbC: Color(hex: "#e8c9a0"),
-        cardFill: Color(hex: "#fdf6ee"), cardFillOpacity: 0.85,
-        accentPrimary: Color(hex: "#8b5e3c"), accentSecondary: Color(hex: "#c4734f"),
-        textPrimary: Color(hex: "#3d2b1f"), textSecondary: Color(hex: "#5c4033"),
-        textTertiary: Color(hex: "#8b6f47"), textMuted: Color(hex: "#b89b7a"),
-        chrome: Color(hex: "#d4b896"), separator: Color(hex: "#e8d5b7"),
+    // 跟随系统(默认): 全部取 AppKit 语义色, 深浅色自动切换, 强调色跟随系统设置。
+    // 对齐 DESIGN.md —— 不写死色值、不用背景图/光球, 层级靠字重与间距。
+    static let system = DBoardTheme(
+        id: "system", name: "跟随系统", icon: "circle.lefthalf.filled",
+        background: Color(nsColor: .windowBackgroundColor),
+        orbA: .clear, orbB: .clear, orbC: .clear,
+        cardFill: Color(nsColor: .controlBackgroundColor), cardFillOpacity: 1.0,
+        accentPrimary: .accentColor, accentSecondary: .accentColor,
+        textPrimary: Color(nsColor: .labelColor),
+        textSecondary: Color(nsColor: .secondaryLabelColor),
+        textTertiary: Color(nsColor: .secondaryLabelColor),
+        textMuted: Color(nsColor: .tertiaryLabelColor),
+        chrome: Color(nsColor: .tertiaryLabelColor),
+        separator: Color(nsColor: .separatorColor),
         backgroundImage: nil, backgroundBlur: 0, cardMaterial: false,
-        overlayOpacity: 0, overlayColor: .clear, glowEnabled: true, nativeBlur: false
-    )
-
-    // 赛博朋克: 霓虹城市夜景 + 暗色毛玻璃
-    static let cyberpunk = DBoardTheme(
-        id: "cyberpunk", name: "赛博朋克", icon: "bolt.horizontal.circle",
-        background: Color(hex: "#0a0a1a"),
-        orbA: Color(hex: "#ff006e"), orbB: Color(hex: "#00f5d4"), orbC: Color(hex: "#8338ec"),
-        cardFill: Color(hex: "#1a1a2e"), cardFillOpacity: 0.65,
-        accentPrimary: Color(hex: "#00f5d4"), accentSecondary: Color(hex: "#ff006e"),
-        textPrimary: Color(hex: "#eaf2f8"), textSecondary: Color(hex: "#b0c4de"),
-        textTertiary: Color(hex: "#6c8ebf"), textMuted: Color(hex: "#3d5a80"),
-        chrome: Color(hex: "#2a2a4a"), separator: Color(hex: "#1f1f3a"),
-        backgroundImage: "bg-cyberpunk", backgroundBlur: 3, cardMaterial: true,
-        overlayOpacity: 0.55, overlayColor: .black, glowEnabled: false, nativeBlur: false
-    )
-
-    // QQ经典: 蓝天白云 + 亮色毛玻璃(致敬2005-2010)
-    static let qqClassic = DBoardTheme(
-        id: "qqClassic", name: "QQ经典", icon: "bubble.left.fill",
-        background: Color(hex: "#e8f4fd"),
-        orbA: Color(hex: "#1e1e1e"), orbB: Color(hex: "#ffffff"), orbC: Color(hex: "#fe6d2e"),
-        cardFill: .white, cardFillOpacity: 0.78,
-        accentPrimary: Color(hex: "#12b7f5"), accentSecondary: Color(hex: "#fe6d2e"),
-        textPrimary: Color(hex: "#1a2b42"), textSecondary: Color(hex: "#2d4a6f"),
-        textTertiary: Color(hex: "#5a7a9a"), textMuted: Color(hex: "#7a8fa6"),
-        chrome: Color(hex: "#b8d4e8"), separator: Color(hex: "#d4eaf7"),
-        backgroundImage: "bg-qqsky", backgroundBlur: 2, cardMaterial: true,
-        overlayOpacity: 0.25, overlayColor: .white, glowEnabled: false, nativeBlur: false
-    )
-
-    // 星空: 紫粉星云 + 暗色毛玻璃 + 淡光球
-    static let starfield = DBoardTheme(
-        id: "starfield", name: "星空", icon: "sparkles",
-        background: Color(hex: "#0f0a1e"),
-        orbA: Color(hex: "#7c3aed"), orbB: Color(hex: "#ec4899"), orbC: Color(hex: "#6366f1"),
-        cardFill: Color(hex: "#1e1040"), cardFillOpacity: 0.6,
-        accentPrimary: Color(hex: "#a78bfa"), accentSecondary: Color(hex: "#f472b6"),
-        textPrimary: Color(hex: "#f5f3ff"), textSecondary: Color(hex: "#ddd6fe"),
-        textTertiary: Color(hex: "#a78bfa"), textMuted: Color(hex: "#6d5aab"),
-        chrome: Color(hex: "#2e1f5e"), separator: Color(hex: "#1e1040"),
-        backgroundImage: "bg-starfield", backgroundBlur: 1, cardMaterial: true,
-        overlayOpacity: 0.5, overlayColor: .black, glowEnabled: true, nativeBlur: false
+        overlayOpacity: 0, overlayColor: .clear, glowEnabled: false, nativeBlur: false
     )
 
     // 毛玻璃: 抽象光斑 + 系统 Material + 彩色光球
@@ -134,7 +96,7 @@ extension DBoardTheme {
         overlayOpacity: 0, overlayColor: .clear, glowEnabled: false, nativeBlur: false
     )
 
-    static let all: [DBoardTheme] = [.minimal, .kraft, .cyberpunk, .qqClassic, .starfield, .glass]
+    static let all: [DBoardTheme] = [.system, .glass, .minimal]
 }
 
 // MARK: - Theme Manager
@@ -152,8 +114,15 @@ final class ThemeManager: ObservableObject {
     private init() {
         // 默认落到 minimal 紫: 新皮肤上线时旧用户第一次启动会看到, 老用户手动切走后
         // savedID 会覆盖回原选择。
-        let savedID = UserDefaults.standard.string(forKey: "dboard_theme_id") ?? "minimal"
-        self.current = DBoardTheme.all.first { $0.id == savedID } ?? .minimal
+        // 2026-10 UI 改版: 一次性迁移到「跟随系统」, 之后尊重手动选择
+        let d = UserDefaults.standard
+        if !d.bool(forKey: "dboard_ui_v2") {
+            d.set("system", forKey: "dboard_theme_id")
+            d.set("system", forKey: "dboard_font_id")
+            d.set(true, forKey: "dboard_ui_v2")
+        }
+        let savedID = d.string(forKey: "dboard_theme_id") ?? "system"
+        self.current = DBoardTheme.all.first { $0.id == savedID } ?? .system
     }
 
     func cycle() {

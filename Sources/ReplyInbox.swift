@@ -41,6 +41,7 @@ struct ReplyPayload: Codable {
 // MARK: - ViewModel
 
 final class ReplyInboxViewModel: ObservableObject {
+    static let shared = ReplyInboxViewModel()
     @Published var items: [ReplyItem] = []
     @Published var lastUpdate: Date? = nil
 

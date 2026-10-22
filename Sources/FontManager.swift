@@ -19,7 +19,10 @@ extension DBoardFont {
     static let kaiti   = DBoardFont(id: "kaiti",   name: "楷体",     fontName: "Kaiti SC",        sizeScale: 0.95)
     static let pingfang = DBoardFont(id: "pingfang", name: "苹方(标准)", fontName: "PingFang SC", sizeScale: 0.9)
 
-    static let all: [DBoardFont] = [.muyao, .yuanti, .xingkai, .baoli, .hannotate, .kaiti, .pingfang]
+    /// 系统字体(SF Pro + 苹方回退)。各模块的基准字号是按手写体视觉大小定的, 系统字体统一乘 0.9 校正
+    static let system  = DBoardFont(id: "system",  name: "系统字体",  fontName: "",                sizeScale: 0.9)
+
+    static let all: [DBoardFont] = [.system, .pingfang, .yuanti, .hannotate, .kaiti, .muyao, .xingkai, .baoli]
 }
 
 // MARK: - 字体管理器
@@ -31,12 +34,14 @@ final class FontManager: ObservableObject {
     }
 
     private init() {
-        let savedID = UserDefaults.standard.string(forKey: "dboard_font_id") ?? "muyao"
-        self.current = DBoardFont.all.first { $0.id == savedID } ?? .muyao
+        _ = ThemeManager.shared   // 触发 UI v2 一次性迁移(主题与字体一起切到系统)
+        let savedID = UserDefaults.standard.string(forKey: "dboard_font_id") ?? "system"
+        self.current = DBoardFont.all.first { $0.id == savedID } ?? .system
     }
 
     /// 按当前字体返回 Font，传入基准字号
-    func font(_ size: CGFloat) -> Font {
-        .custom(current.fontName, size: size * current.sizeScale)
+    func font(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        if current.id == "system" { return .system(size: size * current.sizeScale, weight: weight) }
+        return .custom(current.fontName, size: size * current.sizeScale).weight(weight)
     }
 }
