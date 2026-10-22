@@ -75,6 +75,10 @@ final class ReplyInboxViewModel: ObservableObject {
     }
 
     func reload() {
+        guard FeatureFlags.shared.replyEnabled else {
+            if !items.isEmpty { items = [] }
+            return
+        }
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: Self.pendingPath)),
               let payload = try? JSONDecoder().decode(ReplyPayload.self, from: data) else {
             return

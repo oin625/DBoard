@@ -48,7 +48,7 @@ final class EngineHealthModel: ObservableObject {
     func refresh() {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
-            let result = [self.checkReplyDaemon(), self.checkTechScout(), self.checkSync()]
+            let result = (FeatureFlags.shared.replyEnabled ? [self.checkReplyDaemon()] : []) + [self.checkTechScout(), self.checkSync()]
             DispatchQueue.main.async {
                 self.engines = result
                 self.lastCheck = Date()

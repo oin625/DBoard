@@ -350,6 +350,9 @@ final class DBoardViewModel: ObservableObject {
             ("折叠全部需求", "arrow.down.right.and.arrow.up.left", { self.collapseAll(); self.paletteOpen = false }),
             ("同步钉钉", "bolt", { self.doSyncNow(); self.paletteOpen = false }),
             ("刷新", "arrow.clockwise", { self.reload(); self.paletteOpen = false }),
+            (FeatureFlags.shared.replyEnabled ? "关闭钉钉值守" : "开启钉钉值守", "bubble.left.and.bubble.right", {
+                FeatureFlags.shared.setReplyEnabled(!FeatureFlags.shared.replyEnabled); self.paletteOpen = false
+            }),
             ("模块使用统计(近14天)", "chart.bar", {
                 self.paletteOpen = false
                 let names = Dictionary(uniqueKeysWithValues: DBoardModule.all.map { ($0.id, $0.title) })
@@ -368,7 +371,7 @@ final class DBoardViewModel: ObservableObject {
                 DispatchQueue.main.async { OpsRunner.shared.requestRun(op) }
             }))
         }
-        for m in DBoardModule.all where q.isEmpty || m.title.lowercased().contains(q) || m.id.contains(q) {
+        for m in DBoardModule.visible where q.isEmpty || m.title.lowercased().contains(q) || m.id.contains(q) {
             es.append(PaletteEntry(label: m.title, sub: m.shortcut.isEmpty ? "模块" : m.shortcut, icon: m.icon, action: {
                 self.paletteOpen = false
                 m.launch()
@@ -612,6 +615,7 @@ struct PaletteRow: View {
 
 // MARK: - Header
 struct HeaderView: View {
+    @ObservedObject private var flags = FeatureFlags.shared
     @EnvironmentObject var vm: DBoardViewModel
     @EnvironmentObject var theme: ThemeManager
     @EnvironmentObject var fm: FontManager
@@ -649,7 +653,7 @@ struct HeaderView: View {
             }
             // 入口收敛: 所有模块收进一个菜单, 不再在头部平铺一排图标
             Menu {
-                ForEach(DBoardModule.all) { m in
+                ForEach(DBoardModule.visible) { m in
                     Button { m.launch() } label: {
                         Label(m.shortcut.isEmpty ? m.title : "\(m.title)  \(m.shortcut)", systemImage: m.icon)
                     }
@@ -1327,6 +1331,7 @@ struct IconBtn: View {
 }
 
 struct FooterView: View {
+    @ObservedObject private var flags = FeatureFlags.shared
     @EnvironmentObject var vm: DBoardViewModel
     @EnvironmentObject var theme: ThemeManager
     @EnvironmentObject var fm: FontManager
@@ -1347,6 +1352,11 @@ struct FooterView: View {
             FooterButtonIcon("arrow.clockwise") { vm.reload() }
             FooterButtonIcon("bolt") { vm.doSyncNow() }
             Menu {
+                Section("功能") {
+                    Toggle("钉钉值守（自动回复 + 待回复提醒）", isOn: Binding(
+                        get: { flags.replyEnabled },
+                        set: { flags.setReplyEnabled($0) }))
+                }
                 Section("主题") {
                     ForEach(DBoardTheme.all) { t in
                         Button {
@@ -1366,13 +1376,13 @@ struct FooterView: View {
                     }
                 }
             } label: {
-                Image(systemName: "paintbrush").font(.system(size: 12)).foregroundStyle(theme.current.textMuted)
+                Image(systemName: "gearshape").font(.system(size: 12)).foregroundStyle(theme.current.textMuted)
                     .padding(3)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .help("外观")
+            .help("设置")
         }
         .padding(.horizontal, 14).padding(.vertical, 7)
         .overlay(alignment: .top) {
