@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<style>
+  body { width: 360px; margin: 0; padding: 12px; font: 12px/1.5 -apple-system, sans-serif; color: #1f2937; }
+  h3 { margin: 0 0 6px; font-size: 13px; }
+  .row { margin: 4px 0; }
+  button { width: 100%; margin: 4px 0; padding: 7px; border: 0; border-radius: 6px; font-size: 12px; cursor: pointer; }
+  #open { background: #2563eb; color: #fff; }
+  #push { background: #eef2ff; color: #1f2937; }
+  #pushed { color: #047857; font-weight: 600; }
+  #err { color: #b91c1c; white-space: pre-wrap; }
+  #sess { color: #6b7280; }
+  pre { background: #f3f4f6; padding: 6px; border-radius: 4px; max-height: 120px; overflow: auto; font-size: 10px; white-space: pre-wrap; word-break: break-all; }
+</style>
+</head>
+<body>
+  <h3>DBoard Cookie Bridge v2.4</h3>
+  <button id="open">打开 ai.tmallyc.com（已登录则什么都不用点）</button>
+  <button id="push">立即再投递一次</button>
+  <div class="row" id="pushed">-</div>
+  <div class="row" id="audi">Audi: -</div>
+  <div class="row" id="err"></div>
+  <div class="row" id="count">-</div>
+  <div class="row" id="names">-</div>
+  <div class="row" id="sess">-</div>
+  <pre id="pre">扫描中…</pre>
+  <script src="popup.js"></script>
+</body>
+</html>

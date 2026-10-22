@@ -68,6 +68,22 @@ struct ContextGovernance {
     var potentialConflicts: [String]
 }
 
+/// 上下文来源图：每种连接方式下规则/记忆/skills 的读取位置，实时取样。
+struct CtxRow: Identifiable {
+    var id: String { kind + path }
+    var kind: String
+    var path: String
+    var detail: String
+    var exists: Bool = true
+}
+
+struct CtxRuntime: Identifiable {
+    var id: String { name }
+    var name: String
+    var note: String
+    var rows: [CtxRow]
+}
+
 // MARK: - ViewModel
 
 final class AgentEnvViewModel: ObservableObject {
@@ -76,6 +92,7 @@ final class AgentEnvViewModel: ObservableObject {
     @Published var loading = false
     @Published var agents: [AgentItem] = []
     @Published var memGroups: [MemoryGroup] = []
+    @Published var ctxMap: [CtxRuntime] = []
     @Published var runtimeHealth: [RuntimeHealthItem] = []
     var memTotal: Int { memGroups.reduce(0) { $0 + $1.entries.count } }
     var contextGovernance: ContextGovernance {
@@ -115,10 +132,12 @@ final class AgentEnvViewModel: ObservableObject {
             let h = Self.scanHooks()
             let a = Self.scanAgents()
             let g = Self.scanMemories()
+            let cm = Self.scanContextMap()
             let health = Self.scanRuntimeHealth(hooks: h)
             DispatchQueue.main.async {
                 self.mcps = m; self.hooks = h
                 self.agents = a; self.memGroups = g
+                self.ctxMap = cm
                 self.runtimeHealth = health
                 self.loading = false
                 self.probeAlive()
@@ -140,27 +159,10 @@ final class AgentEnvViewModel: ObservableObject {
             result.append(RuntimeHealthItem(title: "Qoder CN CLI", detail: "未找到或不可执行：\(cli)", level: .bad))
         }
 
-        // status 是本地 CLI 的只读状态查询；失败时只报未知，不把网络瞬断误判成未登录。
+        // 不在面板打开时调用 qoderclicn status：该命令可能触发网络等待，且与本地文件健康检查无关。
+        // 用户需要确认登录状态时，再按提示在终端手动执行，避免拖慢环境扫描。
         if fm.isExecutableFile(atPath: cli) {
-            let p = Process()
-            let out = Pipe()
-            p.executableURL = URL(fileURLWithPath: cli)
-            p.arguments = ["status", "-o", "json"]
-            p.standardOutput = out
-            p.standardError = Pipe()
-            if (try? p.run()) != nil {
-                p.waitUntilExit()
-                let data = out.fileHandleForReading.readDataToEndOfFile()
-                if let info = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   info["logged_in"] as? Bool == true {
-                    let user = info["username"] as? String ?? "团队账号"
-                    result.append(RuntimeHealthItem(title: "团队登录", detail: "已登录：\(user) · BYOK 受组织策略控制", level: .good))
-                } else {
-                    result.append(RuntimeHealthItem(title: "团队登录", detail: "状态未知；在终端执行 qoderclicn status 查看", level: .warning))
-                }
-            } else {
-                result.append(RuntimeHealthItem(title: "团队登录", detail: "无法读取 CLI 状态", level: .warning))
-            }
+            result.append(RuntimeHealthItem(title: "团队登录", detail: "未主动探测；需要时在终端执行 qoderclicn status", level: .neutral))
         }
 
         let zedPath = home + "/.config/zed/settings.json"
@@ -354,6 +356,101 @@ final class AgentEnvViewModel: ObservableObject {
                 let (ra, rb) = (Self.sectionRank(a.name), Self.sectionRank(b.name))
                 return ra != rb ? ra < rb : a.entries.count > b.entries.count
             }
+    }
+
+    // MARK: 上下文来源图
+
+    /// 四种连接方式各自读哪份规则/记忆/skills。只读本机配置与目录，不触发 AI 调用。
+    /// 结论来自实测：Zed 的 shim 只转发 ACP 流量、~/.config/zed 无 rules 目录，
+    /// 故 Zed 侧不注入任何上下文，外部 Agent 各读各的存储。
+    private static func scanContextMap() -> [CtxRuntime] {
+        let fm = FileManager.default
+        let home = NSHomeDirectory()
+        func exists(_ p: String) -> Bool { fm.fileExists(atPath: p) }
+        func lines(_ p: String) -> Int {
+            guard let s = try? String(contentsOfFile: p, encoding: .utf8) else { return 0 }
+            return s.isEmpty ? 0 : s.components(separatedBy: "\n").count
+        }
+        func dirCount(_ p: String) -> Int {
+            ((try? fm.contentsOfDirectory(atPath: p)) ?? [])
+                .filter { !($0 as String).hasPrefix(".") }.count
+        }
+        func mdCount(_ root: String) -> Int {
+            var n = 0
+            guard let ids = try? fm.contentsOfDirectory(atPath: root) else { return 0 }
+            for mid in ids where !mid.hasPrefix(".") {
+                for sub in ["global", "projects"] {
+                    guard let cats = try? fm.contentsOfDirectory(atPath: root + "/" + mid + "/" + sub) else { continue }
+                    for c in cats {
+                        let files = (try? fm.contentsOfDirectory(atPath: root + "/" + mid + "/" + sub + "/" + c)) ?? []
+                        n += files.filter { ($0 as String).hasSuffix(".md") }.count
+                    }
+                }
+            }
+            return n
+        }
+        func sizeKB(_ p: String) -> Int {
+            ((try? fm.attributesOfItem(atPath: p))?[.size] as? Int).map { $0 / 1024 } ?? 0
+        }
+
+        var out: [CtxRuntime] = []
+
+        // 1) Codex 原生
+        var codex: [CtxRow] = []
+        let rulesDir = home + "/.codex/rules"
+        let ruleFiles = ((try? fm.contentsOfDirectory(atPath: rulesDir)) ?? [])
+            .filter { ($0 as String).hasSuffix(".rules") }
+        let ruleLines = ruleFiles.reduce(0) { $0 + lines(rulesDir + "/" + $1) }
+        let agLines = lines(home + "/.codex/AGENTS.md")
+        codex.append(CtxRow(kind: "全局规则", path: "~/.codex/rules/ · ~/.codex/AGENTS.md",
+                            detail: "\(ruleFiles.count) 个 rules 文件 \(ruleLines) 行 · AGENTS.md \(agLines) 行",
+                            exists: !ruleFiles.isEmpty || agLines > 0))
+        let codeRoot = home + "/work/code"
+        var agCount = exists(codeRoot + "/AGENTS.md") ? 1 : 0
+        for p in ((try? fm.contentsOfDirectory(atPath: codeRoot)) ?? [])
+            where !p.hasPrefix(".") && exists(codeRoot + "/" + p + "/AGENTS.md") { agCount += 1 }
+        codex.append(CtxRow(kind: "项目规则", path: "~/work/code 各项目及父级 AGENTS.md",
+                            detail: "\(agCount) 份（下方『项目规则』区可逐份看）", exists: agCount > 0))
+        codex.append(CtxRow(kind: "全局记忆", path: "~/.codex/memories_1.sqlite",
+                            detail: "sqlite \(sizeKB(home + "/.codex/memories_1.sqlite"))KB · Codex 自动写，不按明文展开",
+                            exists: exists(home + "/.codex/memories_1.sqlite")))
+        codex.append(CtxRow(kind: "skills", path: "~/.codex/skills",
+                            detail: "\(dirCount(home + "/.codex/skills")) 个"))
+        out.append(CtxRuntime(name: "Codex 原生", note: "终端直接跑 codex", rows: codex))
+
+        // 2) Zed × Codex
+        var serverNames: [String] = []
+        if let d = try? Data(contentsOf: URL(fileURLWithPath: home + "/.config/zed/settings.json")),
+           let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+           let s = j["agent_servers"] as? [String: Any] {
+            serverNames = s.keys.sorted()
+        }
+        out.append(CtxRuntime(name: "Zed × Codex", note: "codex-acp shim 只转发不注入",
+                              rows: [
+            CtxRow(kind: "连接配置", path: "~/.config/zed/settings.json → agent_servers",
+                   detail: serverNames.joined(separator: " / "), exists: !serverNames.isEmpty),
+            CtxRow(kind: "规则/记忆", path: "同 Codex 原生（上一卡）",
+                   detail: "项目 AGENTS.md + ~/.codex/*"),
+        ]))
+
+        // 3) Zed × Qoder CN CLI
+        let cnMem = mdCount(home + "/.qoder-cn/memories")
+        out.append(CtxRuntime(name: "Zed × Qoder CN CLI", note: "qoderclicn --acp；Zed 不注入规则",
+                              rows: [
+            CtxRow(kind: "记忆", path: "~/.qoder-cn/memories/", detail: "\(cnMem) 条", exists: cnMem > 0),
+            CtxRow(kind: "skills", path: "~/.qoder-cn/skills + ~/.agents/skills",
+                   detail: "\(dirCount(home + "/.qoder-cn/skills")) + \(dirCount(home + "/.agents/skills")) 个"),
+        ]))
+
+        // 4) QoderCN 直连
+        out.append(CtxRuntime(name: "QoderCN 直连", note: "终端 qoderclicn / Qoder CN app",
+                              rows: [
+            CtxRow(kind: "记忆", path: "~/.qoder-cn/memories/",
+                   detail: "与 Zed 连接同源 \(cnMem) 条", exists: cnMem > 0),
+            CtxRow(kind: "MCP", path: "~/.qoder-cn/mcp.json",
+                   detail: exists(home + "/.qoder-cn/mcp.json") ? "有" : "无"),
+        ]))
+        return out
     }
 
     /// 分区次序: 全局 > 代码项目 > 文档项目 > 临时会话
@@ -959,6 +1056,7 @@ struct MemoryBoardView: View {
     @EnvironmentObject var theme: ThemeManager
     @EnvironmentObject var fm: FontManager
     @State private var expandedGroups: Set<String> = []
+    @State private var legacyOpen = false
     @State private var search = ""
     /// 原地展开的记忆条目及其正文缓存 —— 点击不再跳编辑器, 就地预览
     @State private var expandedEntries: Set<UUID> = []
@@ -986,6 +1084,7 @@ struct MemoryBoardView: View {
         ScrollView {
             // Lazy: 只构建滚入可视区的行 —— 全量 VStack 在 tesla(993条)展开时会一次建近千个视图
             LazyVStack(alignment: .leading, spacing: 10) {
+                contextMapPanel
                 contextGovernancePanel
                 HStack(spacing: 8) {
                     TextField("搜标题…", text: $search)
@@ -998,6 +1097,7 @@ struct MemoryBoardView: View {
                                 expandedGroups.removeAll()
                                 expandedEntries.removeAll()
                                 fullCats.removeAll()
+                                legacyOpen = false
                             }
                         }) {
                             HStack(spacing: 3) {
@@ -1012,7 +1112,7 @@ struct MemoryBoardView: View {
                         .buttonStyle(.plain)
                     }
                 }
-                let ranked = Dictionary(grouping: env.memGroups,
+                let ranked = Dictionary(grouping: activeGroups,
                                         by: { AgentEnvViewModel.sectionRank($0.name) })
                 ForEach(ranked.keys.sorted(), id: \.self) { r in
                     Text(AgentEnvViewModel.sectionName(r))
@@ -1021,8 +1121,80 @@ struct MemoryBoardView: View {
                         .padding(.top, r == 0 ? 0 : 8)
                     ForEach(ranked[r] ?? []) { g in groupCard(g) }
                 }
+                legacySection
             }
             .padding(14)
+        }
+    }
+
+    /// Qoder 遗留统一收口：不再散落在各分区，默认折叠
+    private var legacyGroups: [MemoryGroup] {
+        env.memGroups.filter { $0.name.hasPrefix("Qoder 遗留") }
+    }
+    private var activeGroups: [MemoryGroup] {
+        env.memGroups.filter { !$0.name.hasPrefix("Qoder 遗留") }
+    }
+
+    private var legacySection: some View {
+        let total = legacyGroups.reduce(0) { $0 + $1.entries.count }
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(theme.current.textMuted.opacity(0.6))
+                    .rotationEffect(.degrees(legacyOpen ? 90 : 0))
+                Text("Qoder 遗留").font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(theme.current.textPrimary)
+                Text("\(total) 条 · ~/.qoder 不再写入 · 仅作迁移对照")
+                    .font(fm.font(9)).foregroundStyle(theme.current.textMuted)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                withAnimation(.spring(response: 0.3, dampingFraction: 1.0)) { legacyOpen.toggle() }
+            }
+            if legacyOpen || !search.isEmpty {
+                ForEach(legacyGroups) { g in groupCard(g) }
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 9).fill(theme.current.textTertiary.opacity(0.05)))
+    }
+
+    /// 上下文来源图：四种连接方式各读哪份规则/记忆
+    private var contextMapPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("各连接方式的上下文在哪", systemImage: "map")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(theme.current.textPrimary)
+            ForEach(env.ctxMap) { rt in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text(rt.name).font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(theme.current.textPrimary)
+                        Text(rt.note).font(fm.font(9))
+                            .foregroundStyle(theme.current.textMuted)
+                            .lineLimit(1).truncationMode(.tail)
+                    }
+                    ForEach(rt.rows) { r in
+                        HStack(spacing: 6) {
+                            Text(r.kind).font(fm.font(9))
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(Capsule().fill(theme.current.textTertiary.opacity(0.1)))
+                                .foregroundStyle(theme.current.textSecondary)
+                            Text(r.path).font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(theme.current.textMuted)
+                                .lineLimit(1).truncationMode(.middle)
+                            Spacer(minLength: 4)
+                            Text(r.detail).font(fm.font(9))
+                                .foregroundStyle(r.exists ? theme.current.textSecondary : Color(hex: "#d94f4f"))
+                        }
+                    }
+                }
+                .padding(9)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 9).fill(theme.current.cardFill.opacity(theme.current.cardFillOpacity * 0.82)))
+            }
         }
     }
 

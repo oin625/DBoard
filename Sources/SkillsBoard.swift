@@ -49,6 +49,10 @@ struct SkillItem: Identifiable {
     var definitionHash: Int = 0       // 本次扫描内用于识别同名异定义，不作持久化身份
     var divergentDefinitions = false  // 同名 skill 的 SKILL.md 内容不一致，需按运行时分别治理
     var readOnly: Bool = false       // 插件和遗留资产只展示，不移动目录
+    /// 已在 ~/.codex/config.toml 的 [[skills.config]] 里 enabled=false —— 真禁用：
+    /// 文件留在原地，但 Codex 不加载。对 readOnly 的 Codex/插件资产也能用，
+    /// 且能扛住同步工具把文件重新生成回来（归档式移动会被重建，这个不会）。
+    var codexDisabled: Bool = false
     var id: String { dir }
 
     var refCount: Int { hardRefs.count }
@@ -96,6 +100,109 @@ final class SkillsViewModel: ObservableObject {
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let d = try? enc.encode(st) else { return }
         try? d.write(to: URL(fileURLWithPath: Self.overrideFile))
+    }
+
+    // MARK: - Codex 真禁用（写 ~/.codex/config.toml，文件保留但 Codex 不加载）
+    //
+    // 与"归档"（移动目录）的区别：归档把文件移走，但养车卫士/鲁班这类同步工具
+    // 会在下次启动时把文件重新生成回来，归档就失效了。真禁用只往 config.toml
+    // 写一条 [[skills.config]] enabled=false —— 同步工具不碰 config.toml，
+    // 文件即使被重建，Codex 仍按规则不加载它。对 readOnly 的插件资产同样有效。
+
+    static let codexConfigFile = NSHomeDirectory() + "/.codex/config.toml"
+    /// config.toml 中所有 enabled=false 的 skills.config name 集合。
+    @Published var codexDisabledNames: Set<String> = []
+
+    func loadCodexDisabled() {
+        guard let txt = try? String(contentsOfFile: Self.codexConfigFile, encoding: .utf8) else {
+            codexDisabledNames = []
+            return
+        }
+        codexDisabledNames = Self.parseDisabledNames(txt)
+    }
+
+    /// 切换某 skill 在 Codex 的启用状态。按 frontmatter name 匹配（与目录名解耦）。
+    func setCodexDisabled(_ item: SkillItem, _ disabled: Bool) {
+        let name = item.name.isEmpty ? item.dir : item.name
+        var txt = (try? String(contentsOfFile: Self.codexConfigFile, encoding: .utf8)) ?? ""
+        if let flipped = Self.flipEnabled(in: txt, name: name, to: !disabled) {
+            txt = flipped
+        } else if disabled {
+            let block = "[[skills.config]]\nname = \"\(name)\"\nenabled = false\n"
+            txt = txt.hasSuffix("\n") ? txt + "\n" + block : txt + "\n\n" + block
+        } else {
+            actionMsg = "\(name) 本就处于启用状态"
+            return
+        }
+        do {
+            try txt.write(to: URL(fileURLWithPath: Self.codexConfigFile),
+                          atomically: true, encoding: .utf8)
+        } catch {
+            actionMsg = "写入 config.toml 失败: \(error.localizedDescription)"
+            return
+        }
+        loadCodexDisabled()
+        for idx in items.indices
+        where (items[idx].name.isEmpty ? items[idx].dir : items[idx].name) == name {
+            items[idx].codexDisabled = disabled
+        }
+        actionMsg = disabled
+            ? "已在 Codex 配置禁用 \(name)（下次新会话生效）"
+            : "已恢复 \(name)"
+    }
+
+    /// 解析 config.toml，取出所有 enabled=false 的 [[skills.config]] name。
+    private static func parseDisabledNames(_ text: String) -> Set<String> {
+        var names = Set<String>()
+        for block in text.components(separatedBy: "[[skills.config]]").dropFirst() {
+            var name: String? = nil
+            var enabled = true
+            for raw in block.split(separator: "\n", omittingEmptySubsequences: false) {
+                let line = raw.trimmingCharacters(in: .whitespaces)
+                if line.hasPrefix("[") { break }   // 下一个 section，本块结束
+                if let n = skillNameIn(line) { name = n }
+                if line.range(of: #"^enabled\s*=\s*false\b"#, options: .regularExpression) != nil { enabled = false }
+                if line.range(of: #"^enabled\s*=\s*true\b"#, options: .regularExpression) != nil { enabled = true }
+            }
+            if let n = name, !enabled { names.insert(n) }
+        }
+        return names
+    }
+
+    /// 翻转某 name 对应块的 enabled；找不到该块返回 nil（调用方决定是否新增）。
+    private static func flipEnabled(in text: String, name: String, to enabled: Bool) -> String? {
+        let parts = text.components(separatedBy: "[[skills.config]]")
+        guard parts.count > 1 else { return nil }
+        var out = parts[0]
+        var found = false
+        for block in parts.dropFirst() {
+            var lines = block.components(separatedBy: "\n")
+            var blockName: String? = nil
+            var endIdx = lines.count
+            for (i, raw) in lines.enumerated() {
+                let line = raw.trimmingCharacters(in: .whitespaces)
+                if line.hasPrefix("[") { endIdx = i; break }
+                if let n = skillNameIn(line) { blockName = n }
+            }
+            if blockName == name {
+                found = true
+                for i in 0..<endIdx where lines[i].trimmingCharacters(in: .whitespaces)
+                    .range(of: #"^enabled\s*="#, options: .regularExpression) != nil {
+                    lines[i] = "enabled = \(enabled)"
+                }
+            }
+            out += "[[skills.config]]" + lines.joined(separator: "\n")
+        }
+        return found ? out : nil
+    }
+
+    /// 从 `name = "xxx"` 这一行取出 xxx。
+    private static func skillNameIn(_ line: String) -> String? {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        guard t.hasPrefix("name"), let eq = t.firstIndex(of: "=") else { return nil }
+        let rhs = t[t.index(after: eq)...].trimmingCharacters(in: .whitespaces)
+        guard rhs.count >= 2, rhs.first == "\"", rhs.last == "\"" else { return nil }
+        return String(rhs.dropFirst().dropLast())
     }
 
     /// 全部可选分类 = 内置分类 + 当前已用分类 + 用户新建的; 尾部三类不可作为目标
@@ -271,10 +378,14 @@ final class SkillsViewModel: ObservableObject {
             let result = Self.performScan()
             DispatchQueue.main.async {
                 guard let self = self else { return }
+                self.loadCodexDisabled()
                 // 覆盖表只作用于启用中的 skill; 归档/分享/禁用保持来源分类不被改写
                 self.items = result.map { it -> SkillItem in
-                    guard it.origin == "启用", let c = self.overrides[it.dir] else { return it }
-                    var m = it; m.category = c; return m
+                    var m = it
+                    let idName = m.name.isEmpty ? m.dir : m.name
+                    m.codexDisabled = self.codexDisabledNames.contains(idName)
+                    if m.origin == "启用", let c = self.overrides[m.dir] { m.category = c }
+                    return m
                 }
                 self.loading = false
                 self.lastScan = Date()
@@ -287,6 +398,17 @@ final class SkillsViewModel: ObservableObject {
     private static func performScan() -> [SkillItem] {
         let fm = FileManager.default
         var out: [SkillItem] = []
+
+        // ⏱ 临时计时埋点（定位慢的根因后可删）
+        let __t0 = Date(); var __marks: [(String, Double)] = []
+        func __mark(_ s: String) { __marks.append((s, Date().timeIntervalSince(__t0))) }
+
+        // 预热命令缓存：把 7 个候选命令的存在性一次性查完（单次登录 shell），
+        // 避免每个 skill 各自触发一次 `/bin/zsh -lic`（每次 0.5~1.5s，是首扫最大开销）。
+        warmCliCache()
+        // 第三方插件 skill 名集合：一次性遍历 plugins/cache，替代逐 skill 重复遍历整棵树。
+        let externalNames = Self.externalPluginSkillNames()
+        __mark("setup(warmCli+extNames)")
 
         // 外部引用来源: crontab + LaunchAgents
         let cronRefs = externalRefSet(from: runCmd("/bin/sh", ["-c", "crontab -l 2>/dev/null"]), tag: "定时任务")
@@ -328,10 +450,11 @@ final class SkillsViewModel: ObservableObject {
         addRoot(qoderCNRoot, source: "Qoder CN", readOnly: true)
         addNestedSkills(codexRoot + "/.system", source: "Codex 系统")
         addNestedSkills(NSHomeDirectory() + "/.codex/plugins/cache", source: "Codex 插件")
-        // Qoder CN 企业插件（如 Luban）按版本扫描其 skills 目录。
+        // Qoder CN 企业插件（如 Luban）只扫最新版本: 旧版本目录是升级残留,
+        // 内容与最新版几乎一致, 全扫只会给同名卡片制造重复安装噪音。
         if let plugins = try? fm.contentsOfDirectory(atPath: qoderCNLubanRoot) {
-            for version in plugins {
-                addRoot(qoderCNLubanRoot + "/" + version + "/skills",
+            if let latest = plugins.sorted(by: versionLess).last {
+                addRoot(qoderCNLubanRoot + "/" + latest + "/skills",
                         source: "Qoder CN 插件", readOnly: true)
             }
         }
@@ -435,7 +558,7 @@ final class SkillsViewModel: ObservableObject {
                 it.verify = v
                 break
             }
-            it.external = Self.isExternalPlugin(d)
+            it.external = externalNames.contains(d)
 
             // ===== 软性检查 =====
             // 第三方插件的 description 由上游维护, 本地改了会被插件更新覆盖, 不提示。
@@ -464,20 +587,26 @@ final class SkillsViewModel: ObservableObject {
             let identity = it.name.isEmpty ? d : it.name
             if let idx = out.firstIndex(where: { ($0.name.isEmpty ? $0.dir : $0.name) == identity }) {
                 if !out[idx].sources.contains(source) { out[idx].sources.append(source) }
-                if !out[idx].installPaths.contains(p) { out[idx].installPaths.append(p) }
-                if !out[idx].installations.contains(SkillInstallation(source: source, path: p)) {
-                    out[idx].installations.append(SkillInstallation(source: source, path: p))
-                }
-                if out[idx].definitionHash != it.definitionHash {
-                    out[idx].divergentDefinitions = true
-                    if !out[idx].hints.contains("同名 Skill 在不同来源的定义不一致；需按运行时分别确认路由结果") {
-                        out[idx].hints.append("同名 Skill 在不同来源的定义不一致；需按运行时分别确认路由结果")
+                // 指向同一实体目录的软链视为同一份副本: 只并入来源标签, 不计重复安装,
+                // 否则多运行时软链布局(各运行时链到同一实体)会满屏 "+N" 重复徽章。
+                let pReal = realPath(p)
+                if !out[idx].installPaths.contains(where: { realPath($0) == pReal }) {
+                    if !out[idx].installPaths.contains(p) { out[idx].installPaths.append(p) }
+                    if !out[idx].installations.contains(SkillInstallation(source: source, path: p)) {
+                        out[idx].installations.append(SkillInstallation(source: source, path: p))
+                    }
+                    if out[idx].definitionHash != it.definitionHash {
+                        out[idx].divergentDefinitions = true
+                        if !out[idx].hints.contains("同名 Skill 在不同来源的定义不一致；需按运行时分别确认路由结果") {
+                            out[idx].hints.append("同名 Skill 在不同来源的定义不一致；需按运行时分别确认路由结果")
+                        }
                     }
                 }
             } else {
                 out.append(it)
             }
         }
+        __mark("readLoop")
 
         // 第二轮: 交叉引用 —— 分硬依赖 / 软提及两级
         // 旧实现用 txt.contains(other) 裸匹配, 导致 skill/open/canvas 这类
@@ -485,11 +614,28 @@ final class SkillsViewModel: ObservableObject {
         let allDirs = Set(out.map { $0.dir })
         var hardRefs: [String: [String]] = [:]   // 被依赖者 -> [依赖方]
         var mentions: [String: Int] = [:]
+        // 关键提速: 旧实现对每对 (d, other) 都在整段 txt 上跑 String.contains,
+        // 是 O(n² × 文本长度) 的 Unicode 扫描 —— 107 个 skill 实测要 10.7s。
+        // 现在每段 txt 只扫一遍, 预先抽出三类 token 集合, 两两比对退化为 O(1) 查集合。
+        var wordTokens: [String: Set<String>] = [:]   // 完整词 token -> 软提及判定
+        var pathRefs: [String: Set<String>] = [:]     // "skills/xxx" 的 xxx -> 硬依赖判定
+        var dirEnvRefs: [String: Set<String>] = [:]   // "XXX_DIR" 环境变量 -> 硬依赖判定
         for (d, txt) in texts {
+            wordTokens[d] = Self.wordTokenSet(txt)
+            pathRefs[d] = Set(Self.skillNames(in: txt))
+            dirEnvRefs[d] = Self.dirEnvTokenSet(txt)
+        }
+        for (d, _) in texts {
+            let words = wordTokens[d] ?? []
+            let paths = pathRefs[d] ?? []
+            let envs = dirEnvRefs[d] ?? []
             for other in allDirs where other != d {
-                if isHardDependency(txt, on: other) {
+                let envKey = other.replacingOccurrences(of: "-", with: "_").uppercased() + "_DIR"
+                let hard = paths.contains(where: { $0 == other || $0.hasPrefix(other) })
+                    || envs.contains(where: { $0.hasSuffix(envKey) })
+                if hard {
                     hardRefs[other, default: []].append(d)
-                } else if mentionsWord(txt, other) {
+                } else if other.count >= 3, words.contains(other) {
                     mentions[other, default: 0] += 1
                 }
             }
@@ -501,6 +647,12 @@ final class SkillsViewModel: ObservableObject {
             // 软性提示汇总后定级
             if out[i].health == .healthy && !out[i].hints.isEmpty { out[i].health = .warn }
         }
+        __mark("crossRef")
+        let __total = Date().timeIntervalSince(__t0)
+        let __txt = "total: \(String(format: "%.2f", __total))s\n" +
+            __marks.map { "\($0.0): \(String(format: "%.2f", $0.1))s" }.joined(separator: "\n") +
+            "\nskills: \(out.count)\n"
+        try? __txt.write(toFile: "/tmp/dboard_scan_timing.txt", atomically: true, encoding: .utf8)
         return out
     }
 
@@ -555,6 +707,24 @@ final class SkillsViewModel: ObservableObject {
     private static func isDir(_ p: String) -> Bool {
         var isD: ObjCBool = false
         return FileManager.default.fileExists(atPath: p, isDirectory: &isD) && isD.boolValue
+    }
+
+    /// 解析软链后的真实路径 —— 多个链接指向同一实体目录时视为同一份副本
+    private static func realPath(_ p: String) -> String {
+        URL(fileURLWithPath: p).resolvingSymlinksInPath().path
+    }
+
+    /// 点分数字版本号比较(1.1.9 < 1.1.10); 段非纯数字时退化为字符串比较
+    private static func versionLess(_ a: String, _ b: String) -> Bool {
+        let pa = a.split(separator: "."), pb = b.split(separator: ".")
+        for i in 0..<max(pa.count, pb.count) {
+            let sa = i < pa.count ? String(pa[i]) : "0"
+            let sb = i < pb.count ? String(pb[i]) : "0"
+            if let na = Int(sa), let nb = Int(sb) {
+                if na != nb { return na < nb }
+            } else if sa != sb { return sa < sb }
+        }
+        return false
     }
 
     private static func field(_ front: String, _ key: String) -> String? {
@@ -626,10 +796,13 @@ final class SkillsViewModel: ObservableObject {
     }
 
     /// 从文本里找依赖的 CLI, 检查是否安装
+    /// 需要探测是否安装的的外部命令清单（warmCliCache 与 missingCommands 共用）。
+    private static let cliCandidates = ["dws", "qodercli", "px", "kubectl",
+                                        "defuddle", "obsidian-cli", "gh"]
+
     private static func missingCommands(in txt: String) -> [String] {
-        let candidates = ["dws", "qodercli", "px", "kubectl", "defuddle", "obsidian-cli", "gh"]
         var missing: [String] = []
-        for c in candidates {
+        for c in cliCandidates {
             // 必须像命令调用那样出现(行首/反引号/$后), 避免误判普通词
             let patterns = ["`\(c) ", "$ \(c) ", "\n\(c) ", "```\(c)"]
             guard patterns.contains(where: { txt.contains($0) }) else { continue }
@@ -660,26 +833,72 @@ final class SkillsViewModel: ObservableObject {
         return exists
     }
 
-    /// 第三方插件: 由 marketplace 安装并在 plugins/cache 下有同名副本 ——
+    /// 第三方插件 skill 名集合: 由 marketplace 安装、在 plugins/cache 下有副本 ——
     /// 其 description 属上游资产, 本地修改会在插件升级时丢失, 因此不做描述质量检查。
-    private static func isExternalPlugin(_ dir: String) -> Bool {
+    /// 一次遍历整棵 cache 树收集所有 skill 名, 供本次扫描 O(1) 查询;
+    /// 旧实现是"每个 skill 都重新遍历一遍整棵树", 是重复扫描的主要开销之一。
+    private static func externalPluginSkillNames() -> Set<String> {
         let fm = FileManager.default
         let cacheRoot = NSHomeDirectory() + "/.claude/plugins/cache"
-        guard let markets = try? fm.contentsOfDirectory(atPath: cacheRoot) else { return false }
-        for market in markets {
-            let marketPath = cacheRoot + "/" + market
-            guard let plugins = try? fm.contentsOfDirectory(atPath: marketPath) else { continue }
-            for plugin in plugins {
-                let base = marketPath + "/" + plugin
-                guard let versions = try? fm.contentsOfDirectory(atPath: base) else { continue }
-                for v in versions {
-                    if fm.fileExists(atPath: base + "/" + v + "/skills/" + dir + "/SKILL.md") {
-                        return true
-                    }
-                }
+        var names = Set<String>()
+        guard let walk = fm.enumerator(at: URL(fileURLWithPath: cacheRoot),
+                                       includingPropertiesForKeys: [.isDirectoryKey],
+                                       options: [.skipsHiddenFiles, .skipsPackageDescendants])
+        else { return names }
+        for case let url as URL in walk where url.lastPathComponent == "SKILL.md" {
+            names.insert(url.deletingLastPathComponent().lastPathComponent)
+        }
+        return names
+    }
+
+    /// 预热命令存在性缓存。GUI App 继承 launchd 的最小 PATH, 直接 `command -v`
+    /// 会把 brew / ~/.local/bin 里的命令误判为未安装, 故先看常见目录, 再用一次
+    /// 登录 shell 批量兜底 —— 把原本"每个命令各起一次登录 shell"压成一次。
+    /// 命令探测的磁盘缓存。登录 shell 探一次要 ~4s，用缓存把它压到最多 1 小时一次。
+    private static let cliProbeFile = NSHomeDirectory() + "/.claude/skills-cli-probe.json"
+    private static var cliCacheWarmed = false
+    private struct CliProbeCache: Codable {
+        var ts: TimeInterval
+        var results: [String: Bool]
+    }
+
+    private static func warmCliCache() {
+        guard !cliCacheWarmed else { return }
+        cliCacheWarmed = true
+        let home = NSHomeDirectory()
+        let extraDirs = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin",
+                         home + "/.local/bin", home + "/.qoderwork/bin",
+                         home + "/.nvm/versions/node/v16.20.2/bin"]
+        var toCheck: [String] = []
+        for c in cliCandidates {
+            if cliCache[c] != nil { continue }
+            if extraDirs.contains(where: { FileManager.default.isExecutableFile(atPath: $0 + "/" + c) }) {
+                cliCache[c] = true
+            } else {
+                toCheck.append(c)
             }
         }
-        return false
+        guard !toCheck.isEmpty else { return }
+        // 缓存新鲜就直接读, 不起 shell; 过期才重新探测并回写。
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: cliProbeFile)),
+           let cache = try? JSONDecoder().decode(CliProbeCache.self, from: data),
+           Date().timeIntervalSince1970 - cache.ts < 3600 {
+            for c in toCheck { cliCache[c] = cache.results[c] ?? false }
+            return
+        }
+        let script = "for c in " + toCheck.joined(separator: " ") +
+            "; do command -v \"$c\" >/dev/null 2>&1 && echo \"Y $c\" || echo \"N $c\"; done"
+        let out = runCmd("/bin/zsh", ["-lic", script])
+        var results: [String: Bool] = [:]
+        for line in out.split(separator: "\n") {
+            let parts = line.split(separator: " ")
+            if parts.count == 2 { results[String(parts[1])] = (parts[0] == "Y") }
+        }
+        for (k, v) in results { cliCache[k] = v }
+        let cache = CliProbeCache(ts: Date().timeIntervalSince1970, results: results)
+        if let d = try? JSONEncoder().encode(cache) {
+            try? d.write(to: URL(fileURLWithPath: cliProbeFile))
+        }
     }
 
     /// 是否声明了触发条件。除英文 Use when / 中文"当用户说"外,
@@ -708,6 +927,9 @@ final class SkillsViewModel: ObservableObject {
     /// 避免 "skill" 命中 "skills"、"open" 命中 "opened" 这类假引用。
     private static func mentionsWord(_ txt: String, _ word: String) -> Bool {
         guard word.count >= 3 else { return false }   // 太短的名字无法可靠判定
+        // 快速短路: 绝大多数 (skill, 文本) 对根本不含该词, 用高度优化的
+        // contains 先挡掉, 避免对 ~50×50 对全部做逐字符扫描。
+        guard txt.contains(word) else { return false }
         let chars = Array(txt)
         let w = Array(word)
         func isWordChar(_ c: Character) -> Bool {
@@ -716,7 +938,15 @@ final class SkillsViewModel: ObservableObject {
         var i = 0
         let n = chars.count, m = w.count
         while i + m <= n {
-            if chars[i] == w[0], Array(chars[i..<(i + m)]) == w {
+            if chars[i] == w[0] {
+                // 就地逐字符比较, 不再对每个候选位置切一段子数组(旧实现的主要开销)。
+                var match = true
+                var j = 1
+                while j < m {
+                    if chars[i + j] != w[j] { match = false; break }
+                    j += 1
+                }
+                if !match { i += 1; continue }
                 let leftOK  = i == 0 || !isWordChar(chars[i - 1])
                 let rightOK = i + m >= n || !isWordChar(chars[i + m])
                 if leftOK && rightOK { return true }
@@ -724,6 +954,40 @@ final class SkillsViewModel: ObservableObject {
             i += 1
         }
         return false
+    }
+
+    /// 把文本切成"完整词 token"集合: 连续的 字母/数字/-/_ 视为一个 token。
+    /// 与 mentionsWord 的词边界语义一致(token 本身就是被非词字符包围的完整词),
+    /// 但一段 txt 只需扫一遍, 之后 O(1) 判定某 skill 名是否作为完整词出现。
+    private static func wordTokenSet(_ txt: String) -> Set<String> {
+        var set = Set<String>()
+        var cur = ""
+        for ch in txt {
+            if ch.isLetter || ch.isNumber || ch == "-" || ch == "_" {
+                cur.append(ch)
+            } else if !cur.isEmpty {
+                set.insert(cur); cur = ""
+            }
+        }
+        if !cur.isEmpty { set.insert(cur) }
+        return set
+    }
+
+    /// 抽出所有形如 XXX_DIR 的环境变量 token(硬依赖判定用)。
+    /// 环境变量只含 字母/数字/下划线, 故以这三类字符切分 token。
+    private static func dirEnvTokenSet(_ txt: String) -> Set<String> {
+        var set = Set<String>()
+        var cur = ""
+        for ch in txt {
+            if ch.isLetter || ch.isNumber || ch == "_" {
+                cur.append(ch)
+            } else {
+                if cur.count > 4, cur.hasSuffix("_DIR") { set.insert(cur) }
+                cur = ""
+            }
+        }
+        if cur.count > 4, cur.hasSuffix("_DIR") { set.insert(cur) }
+        return set
     }
 
     private static func skillNames(in text: String) -> [String] {
@@ -992,8 +1256,10 @@ struct SkillsBoardView: View {
                 statusDot(item)
                 Text(item.dir)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(item.enabled ? theme.current.textPrimary : theme.current.textMuted)
-                    .strikethrough(!item.enabled, color: theme.current.textMuted.opacity(0.6))
+                    .foregroundStyle((item.enabled && !item.codexDisabled)
+                                       ? theme.current.textPrimary : theme.current.textMuted)
+                    .strikethrough(!item.enabled || item.codexDisabled,
+                                     color: theme.current.textMuted.opacity(0.6))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 2)
@@ -1007,6 +1273,10 @@ struct SkillsBoardView: View {
                 if item.duplicateCount > 0 {
                     miniBadge("+\(item.duplicateCount)", "square.stack.3d.up",
                               item.divergentDefinitions ? Color(hex: "#c8863c") : theme.current.textMuted)
+                }
+                if item.codexDisabled {
+                    miniBadge("禁", "poweroff", Color(hex: "#8a8f98"))
+                        .help("已在 Codex 配置中禁用：文件仍在，但 Codex 不加载")
                 }
                 // 只给"未验证"打标 —— 已验证是期望状态, 满屏打勾等于没有信息量
                 if item.verify == "未验证" && item.origin == "启用" {
@@ -1255,6 +1525,14 @@ struct SkillsBoardView: View {
                         flatBtn("SKILL.md", "doc.text") { vm.openSkillMD(item) }
                         flatBtn("Finder", "folder") { vm.revealInFinder(item) }
                         Spacer()
+                    }
+                    // Codex 真禁用：写 config.toml，对 readOnly 的 Codex/插件资产也能用，
+                    // 且不怕同步工具把文件重新生成回来（这是它区别于"归档"的关键）。
+                    if item.origin == "启用" {
+                        HStack {
+                            Spacer()
+                            codexDisableControl(item)
+                        }
                     }
                     HStack {
                         Spacer()
@@ -1588,6 +1866,25 @@ struct SkillsBoardView: View {
         .animation(.spring(response: 0.28, dampingFraction: 1.0), value: pending)
     }
 
+    /// Codex 真禁用开关：写 ~/.codex/config.toml 的 [[skills.config]]。
+    /// 与"归档"（移动目录）互补：归档适合彻底收起来；这里适合"文件留着、
+    /// 只是别让 Codex 加载"，尤其适合会被同步工具重建的 readOnly 资产。
+    @ViewBuilder
+    private func codexDisableControl(_ item: SkillItem) -> some View {
+        if item.codexDisabled {
+            HStack(spacing: 6) {
+                Text("Codex 已禁用").font(fm.font(10)).foregroundStyle(theme.current.textMuted)
+                flatBtn("恢复", "power", tint: Color(hex: "#5aa86c")) {
+                    vm.setCodexDisabled(item, false)
+                }
+            }
+        } else {
+            flatBtn("禁用", "poweroff", tint: Color(hex: "#8a8f98")) {
+                vm.setCodexDisabled(item, true)
+            }
+        }
+    }
+
     private func riskText(_ item: SkillItem) -> String {
         var p: [String] = []
         if !item.externalRefs.isEmpty { p.append(item.externalRefs.joined(separator: "/") + "会静默失败") }
@@ -1716,8 +2013,10 @@ final class SkillsBoardWindowController {
         win.styleMask = [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView]
         win.isReleasedWhenClosed = false
         // 原生毛玻璃需要窗口透明才能透出桌面壁纸
-        win.isOpaque = false
-        win.backgroundColor = .clear
+        // 窗口透明度: 只在 nativeBlur 主题下透出桌面壁纸, 其它主题保持不透明避免顶栏透视
+        let _needsTransparent = ThemeManager.shared.current.nativeBlur
+        win.isOpaque = !_needsTransparent
+        win.backgroundColor = _needsTransparent ? .clear : .windowBackgroundColor
         win.collectionBehavior = [.moveToActiveSpace, .fullScreenPrimary]
         win.contentMinSize = NSSize(width: 620, height: 440)
         win.contentMaxSize = NSSize(width: 2600, height: 2200)

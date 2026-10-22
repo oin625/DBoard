@@ -114,7 +114,27 @@ extension DBoardTheme {
         overlayOpacity: 0, overlayColor: .clear, glowEnabled: false, nativeBlur: true
     )
 
-    static let all: [DBoardTheme] = [.kraft, .cyberpunk, .qqClassic, .starfield, .glass]
+    // 极简紫 (minimal): 参考 Linear/Proxyman 的专业工具审美——
+    // 纯灰阶 + 单一紫色强调, 无背景图/无 orb/无毛玻璃, 全靠留白和字重建立层次。
+    // 用来对冲另外 5 套皮肤过度装饰、把工具搞得像海报的问题。
+    static let minimal = DBoardTheme(
+        id: "minimal", name: "极简紫", icon: "circle.hexagongrid",
+        background: Color(hex: "#FAFAFB"),
+        orbA: .clear, orbB: .clear, orbC: .clear,
+        cardFill: .white, cardFillOpacity: 1.0,
+        accentPrimary: Color(hex: "#5E6AD7"),      // Linear 紫
+        accentSecondary: Color(hex: "#8B93E8"),    // 强调色的浅色变体, 需要渐变时用
+        textPrimary: Color(hex: "#0F172A"),        // 近黑, 保证正文对比度
+        textSecondary: Color(hex: "#334155"),
+        textTertiary: Color(hex: "#64748B"),
+        textMuted: Color(hex: "#94A3B8"),
+        chrome: Color(hex: "#94A3B8"),      // slate-400: 加深, 保证在浅底上可辨识
+        separator: Color(hex: "#CBD5E1"),   // slate-300: 从 E2E8F0 加深, 边框不再发虚
+        backgroundImage: nil, backgroundBlur: 0, cardMaterial: false,
+        overlayOpacity: 0, overlayColor: .clear, glowEnabled: false, nativeBlur: false
+    )
+
+    static let all: [DBoardTheme] = [.minimal, .kraft, .cyberpunk, .qqClassic, .starfield, .glass]
 }
 
 // MARK: - Theme Manager
@@ -122,12 +142,18 @@ final class ThemeManager: ObservableObject {
     static let shared = ThemeManager()
 
     @Published var current: DBoardTheme {
-        didSet { UserDefaults.standard.set(current.id, forKey: "dboard_theme_id") }
+        didSet {
+            UserDefaults.standard.set(current.id, forKey: "dboard_theme_id")
+            // 通知窗口层: 从毛玻璃主题切到不透明主题时要同步 isOpaque / backgroundColor
+            NotificationCenter.default.post(name: .init("DBoardThemeChanged"), object: nil)
+        }
     }
 
     private init() {
-        let savedID = UserDefaults.standard.string(forKey: "dboard_theme_id") ?? "kraft"
-        self.current = DBoardTheme.all.first { $0.id == savedID } ?? .kraft
+        // 默认落到 minimal 紫: 新皮肤上线时旧用户第一次启动会看到, 老用户手动切走后
+        // savedID 会覆盖回原选择。
+        let savedID = UserDefaults.standard.string(forKey: "dboard_theme_id") ?? "minimal"
+        self.current = DBoardTheme.all.first { $0.id == savedID } ?? .minimal
     }
 
     func cycle() {

@@ -261,8 +261,10 @@ final class TechScoutWindowController {
         win.center()
         win.isReleasedWhenClosed = false
         // 原生毛玻璃需要窗口透明才能透出桌面壁纸
-        win.isOpaque = false
-        win.backgroundColor = .clear
+        // 窗口透明度: 只在 nativeBlur 主题下透出桌面壁纸, 其它主题保持不透明避免顶栏透视
+        let _needsTransparent = ThemeManager.shared.current.nativeBlur
+        win.isOpaque = !_needsTransparent
+        win.backgroundColor = _needsTransparent ? .clear : .windowBackgroundColor
         win.contentMinSize = NSSize(width: 480, height: 420)
         win.contentMaxSize = NSSize(width: 2600, height: 2200)
         win.setFrameAutosaveName("DBoardTechScoutWindow")

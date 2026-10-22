@@ -349,6 +349,7 @@ final class DBoardViewModel: ObservableObject {
             ("折叠全部需求", "arrow.down.right.and.arrow.up.left", { self.collapseAll(); self.paletteOpen = false }),
             ("同步钉钉", "bolt", { self.doSyncNow(); self.paletteOpen = false }),
             ("刷新", "arrow.clockwise", { self.reload(); self.paletteOpen = false }),
+            ("应用发布台 (⌃Q)", "paperplane", { NotificationCenter.default.post(name: .init("openAppRelease"), object: nil); self.paletteOpen = false }),
         ]
         for a in acts {
             if q.isEmpty || a.0.lowercased().contains(q) {
@@ -814,6 +815,9 @@ struct HeaderView: View {
 
     var body: some View {
         HStack(spacing: 10) {
+            HeaderIconButton(icon: "wand.and.stars", help: "Skills 看板") {
+                NotificationCenter.default.post(name: .init("openSkillsBoard"), object: nil)
+            }
             // 双击标题可脱出为独立窗口, hover 时显示提示图标
             Image(systemName: "arrow.up.left.and.arrow.down.right")
                 .font(.system(size: 9, weight: .medium))

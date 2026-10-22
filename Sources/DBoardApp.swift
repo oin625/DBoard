@@ -9,7 +9,7 @@ struct DBoardApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        Settings { EmptyView() }
+        Settings { DayPlanSettingsView() }
     }
 }
 
@@ -30,8 +30,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var sysStatusItem: NSStatusItem!
     private var sysMonTimer: Timer?
     private var prevSysSwap: (ins: UInt64, outs: UInt64, at: Date)?
-    private var skillsStatusItem: NSStatusItem!
     private var bizMapStatusItem: NSStatusItem!
+    private var benchSkillsVM: SkillsViewModel?   // ⏱ 临时基准用，定位后可删
+
+    private var clipHotKey: HotKey?
+    private var logHotKey: HotKey?
+    private var logClipHotKey: HotKey?
+    private var codexHotKey: HotKey?
+    private var reqFlowHotKey: HotKey?
+    private var dayPlanHotKey: HotKey?
+    private var appReleaseHotKey: HotKey?
+    private var audiHomeHotKey: HotKey?
+    private var debugTriggerTimer: Timer?
+
     private var isDetached = false   // 面板脱出为独立窗口(不置顶)
     private let panelTearOff = TearOffObserver()
     private var cancellables = Set<AnyCancellable>()
@@ -42,11 +53,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 通知中心代理
         UNUserNotificationCenter.current().delegate = self
 
+        // Chrome cookie 桥接本地监听 (App 启动即监听, 不等面板打开)
+        CookieBridgeServer.shared.start()
+
+        // 预热 ReqFlow 数据层: 触发单例 init → 读项目表缓存 + 后台静默刷新
+        _ = BizMapBoardWindowController.shared
+
         // 创建 statusItem 并保持强引用
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         NSLog("DBoard: statusItem created: \(statusItem != nil)")
 
         viewModel = DBoardViewModel()
+        _ = DayPlanWindowController.shared
+
+        // ⏱ 临时基准：启动后自动跑一次 Skills 扫描，把分阶段耗时写到
+        // /tmp/dboard_scan_timing.txt，用于定位"开面板很慢"的根因。定位后删除。
+        benchSkillsVM = SkillsViewModel()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.benchSkillsVM?.scan()
+        }
 
         if let button = statusItem.button {
             NSLog("DBoard: statusItem button exists")
@@ -65,17 +90,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 sb.target = self
                 sb.action = #selector(openSysMonFromStatusBar)
             }
-            // Skills 看板独立菜单栏入口
-            skillsStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-            if let kb = skillsStatusItem.button {
-                let kimg = NSImage(systemSymbolName: "wand.and.stars", accessibilityDescription: "Skills 看板")
-                kimg?.isTemplate = true
-                kb.image = kimg
-                kb.imagePosition = .imageOnly
-                kb.toolTip = "Skills 看板"
-                kb.target = self
-                kb.action = #selector(openSkillsFromStatusBar)
-            }
             // BizMap 业务地图独立菜单栏入口: 接需求时搜关键词→路由到服务→直达作战地图
             bizMapStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
             if let mb = bizMapStatusItem.button {
@@ -87,6 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 mb.target = self
                 mb.action = #selector(openBizMapFromStatusBar)
             }
+
             let smt = Timer(timeInterval: 5, repeats: true) { [weak self] _ in self?.updateSysStatusTitle() }
             RunLoop.main.add(smt, forMode: .common)
             sysMonTimer = smt
@@ -121,10 +136,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         win.level = .floating
         win.hidesOnDeactivate = false
         win.isReleasedWhenClosed = false
-        // 原生毛玻璃需要窗口透明才能透出桌面壁纸
-        win.isOpaque = false
-        win.backgroundColor = .clear
+        // 窗口透明度: 只在原生毛玻璃 (nativeBlur) 主题下才需要 clear 背景透出桌面壁纸
+        // 其它主题 (minimal / kraft / kraft-lite) 保持不透明, 否则 fullSizeContentView 下
+        // 顶部标题栏区域会因窗口 backing 透明而看穿桌面
+        let needsTransparent = ThemeManager.shared.current.nativeBlur
+        win.isOpaque = !needsTransparent
+        win.backgroundColor = needsTransparent ? .clear : NSColor(named: "WindowBg") ?? .windowBackgroundColor
         win.contentViewController = hosting
+
+        // 主题切换时同步窗口透明度: 从毛玻璃切到 minimal, 或反过来
+        NotificationCenter.default.addObserver(forName: .init("DBoardThemeChanged"),
+                                                object: nil, queue: .main) { [weak win] _ in
+            guard let w = win else { return }
+            let needTrans = ThemeManager.shared.current.nativeBlur
+            w.isOpaque = !needTrans
+            w.backgroundColor = needTrans ? .clear : .windowBackgroundColor
+        }
         win.minSize = NSSize(width: 380, height: 480)
         win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         // 关闭时改为隐藏而不是销毁
@@ -158,6 +185,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             self?.replyInboxWindow.show()
         }
 
+        // 监听应用发布台入口(命令面板等)，WKWebView 内嵌 audi 线上版
+        NotificationCenter.default.addObserver(forName: .init("openAppRelease"), object: nil, queue: .main) { [weak self] _ in
+            self?.hidePanelWindow()
+            AppReleaseWindowController.shared.show()
+        }
+
         // 监听 52etf.site 入口点击
         NotificationCenter.default.addObserver(forName: .init("openETF"), object: nil, queue: .main) { [weak self] _ in
             self?.hidePanelWindow()   // 看板是置顶浮动层, 不收起会一直盖在行情窗口上
@@ -166,6 +199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         // 系统监控入口
         NotificationCenter.default.addObserver(forName: .init("openSkillsBoard"), object: nil, queue: .main) { [weak self] _ in
+            self?.closeMainPopover()
             self?.hidePanelWindow()
             SkillsBoardWindowController.shared.show()
         }
@@ -174,21 +208,101 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             SysMonWindowController.shared.show()
         }
 
-        // 全局快捷键 Ctrl+D
-        HotKey.shared.register(keyCode: UInt32(kVK_ANSI_D), modifiers: UInt32(controlKey)) { [weak self] in
-            DispatchQueue.main.async { self?.togglePopover() }
+        // 全局快捷键 ⌥V: 剪切板历史(D012)
+        clipHotKey = HotKey()
+        clipHotKey?.register(keyCode: UInt32(kVK_ANSI_V), modifiers: UInt32(optionKey)) { [weak self] in
+            DispatchQueue.main.async {
+                // 剪切板不留菜单栏图标, ⌥V 直接弹窗口
+                _ = self
+                NSLog("DBoard: clip hotkey fired")
+                ClipboardBoardWindowController.shared.show()
+            }
         }
-    }
 
-    @objc private func openSkillsFromStatusBar() {
-        guard let btn = skillsStatusItem?.button else { return }
-        SkillsBoardWindowController.shared.togglePopover(relativeTo: btn)
+        // 全局快捷键 ⌥C: Codex 供应商切换面板(csw 可视化)
+        codexHotKey = HotKey()
+        codexHotKey?.register(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(optionKey)) {
+            DispatchQueue.main.async { CodexSwitchWindowController.shared.toggle() }
+        }
+
+        // 全局快捷键 ⌃E: 居中浮窗弹 ReqFlow(需求视角), 不贴菜单栏图标
+        reqFlowHotKey = HotKey()
+        reqFlowHotKey?.register(keyCode: UInt32(kVK_ANSI_E), modifiers: UInt32(controlKey)) {
+            DispatchQueue.main.async {
+                BizMapBoardWindowController.shared.toggleWindow(requirements: true)
+            }
+        }
+
+
+        // 全局快捷键 Ctrl+O: 今日规划，不占用独立菜单栏入口
+        dayPlanHotKey = HotKey()
+        dayPlanHotKey?.register(keyCode: UInt32(kVK_ANSI_O), modifiers: UInt32(controlKey)) {
+            DispatchQueue.main.async { DayPlanWindowController.shared.toggle() }
+        }
+
+        // 全局快捷键 Ctrl+L: Audi 内嵌日志页
+        logHotKey = HotKey()
+        logHotKey?.register(keyCode: UInt32(kVK_ANSI_L), modifiers: UInt32(controlKey)) {
+            DispatchQueue.main.async { AppReleaseWindowController.shared.toggleLogs() }
+        }
+
+        // 全局快捷键 ⌃Q: 应用发布台(WKWebView 内嵌 audi 线上版)
+        appReleaseHotKey = HotKey()
+        appReleaseHotKey?.register(keyCode: UInt32(kVK_ANSI_Q), modifiers: UInt32(controlKey)) {
+            DispatchQueue.main.async { AppReleaseWindowController.shared.toggle() }
+        }
+
+        // 全局快捷键 Ctrl+W: Audi 首页
+        audiHomeHotKey = HotKey()
+        audiHomeHotKey?.register(keyCode: UInt32(kVK_ANSI_W), modifiers: UInt32(controlKey)) {
+            DispatchQueue.main.async { AppReleaseWindowController.shared.toggleHome() }
+        }
+
+        // 全局快捷键 Ctrl+Shift+L: 取剪切板文本直接搜日志
+        logClipHotKey = HotKey()
+        logClipHotKey?.register(keyCode: UInt32(kVK_ANSI_L), modifiers: UInt32(controlKey | shiftKey)) {
+            DispatchQueue.main.async { LogSearchWindowController.shared.searchWithClipboard() }
+        }
+
+        // 调试触发: echo optv|mbpanel > /tmp/dboard-debug-trigger → 等价于按 ⌥V / 点菜单栏管家图标
+        debugTriggerTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            let path = "/tmp/dboard-debug-trigger"
+            guard FileManager.default.fileExists(atPath: path),
+                  let cmd = try? String(contentsOfFile: path, encoding: .utf8) else { return }
+            try? FileManager.default.removeItem(atPath: path)
+            let c = cmd.trimmingCharacters(in: .whitespacesAndNewlines)
+            NSLog("DBoard: debug trigger cmd=\(c)")
+            switch c {
+            case "optv": ClipboardBoardWindowController.shared.show()
+            case "ctrlr": BizMapBoardWindowController.shared.toggleWindow(requirements: true)
+            case "logsearch": LogSearchWindowController.shared.show()
+            case "codex": CodexSwitchWindowController.shared.toggle()
+            case "apprelease": AppReleaseWindowController.shared.show()
+            case "dayplan": DayPlanWindowController.shared.toggle()
+            case let cmd where c.hasPrefix("logsearchq="):
+                LogSearchWindowController.shared.debugSearch(String(cmd.dropFirst("logsearchq=".count)))
+
+            case "report":
+                let w = ClipboardBoardWindowController.shared.debugWindowInfo()
+                try? w.write(toFile: "/tmp/dboard-debug-report.txt", atomically: true, encoding: .utf8)
+            case "hkreport":
+                let r = "clip(⌥V)=\(self?.clipHotKey?.isRegistered ?? false) log(Ctrl+L)=\(self?.logHotKey?.isRegistered ?? false) logClip(Ctrl+⇧L)=\(self?.logClipHotKey?.isRegistered ?? false) codex(⌥C)=\(self?.codexHotKey?.isRegistered ?? false) reqflow(⌃E)=\(self?.reqFlowHotKey?.isRegistered ?? false) dayPlan(⌃O)=\(self?.dayPlanHotKey?.isRegistered ?? false) audiHome(Ctrl+W)=\(self?.audiHomeHotKey?.isRegistered ?? false)"
+                try? r.write(toFile: "/tmp/dboard-debug-report.txt", atomically: true, encoding: .utf8)
+            default: break
+            }
+        }
+
+        // 剪切板后台监控(D012): changeCount 轮询, 纯本地
+        ClipboardMonitor.shared.start()
     }
 
     @objc private func openBizMapFromStatusBar() {
         guard let btn = bizMapStatusItem?.button else { return }
         BizMapBoardWindowController.shared.togglePopover(relativeTo: btn)
     }
+
+
+
 
     @objc private func openSysMonFromStatusBar() {
         guard let btn = sysStatusItem?.button else { return }
