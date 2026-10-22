@@ -245,6 +245,7 @@ final class DBoardViewModel: ObservableObject {
     func expandAll() { expandedIDs = Set(items.map { $0.id }) }
     func collapseAll() { expandedIDs = [] }
     func setViewMode(_ m: ViewMode) { viewMode = m }
+    func markSelfWrite() { lastSelfWrite = Date() }
 
     func toggleTodo(_ idx: Int) {
         guard let sec = todaySec, idx < sec.items.count else { return }
@@ -471,225 +472,6 @@ final class DBoardViewModel: ObservableObject {
         }
     }
 
-    // MARK: - AI 对话
-    struct AIMessage: Identifiable {
-        let id = UUID()
-        let role: Role
-        let text: String
-        let time: Date
-        enum Role { case user, assistant }
-    }
-
-    @Published var aiInput = ""
-    @Published var aiReply = ""
-    @Published var aiLoading = false
-    @Published var aiStatus = "" // 实时状态：思考中/正在读文件/调用工具…
-    @Published var aiHistory: [AIMessage] = []
-    @Published var aiHistoryExpanded: Bool = false
-    /// 会话 ID：第一次调用创建，后续 --resume 续接
-    private var aiSessionID: String? = nil
-    /// 是否已首次创建过会话（决定用 --session-id 还是 --resume）
-    @Published private(set) var aiSessionCreated: Bool = false
-    var hasAISession: Bool { aiSessionCreated }
-
-    func resetAIConversation() {
-        aiSessionID = nil
-        aiSessionCreated = false
-        aiReply = "🔄 已开启新会话"
-        aiHistory = []
-        aiHistoryExpanded = false
-    }
-
-    /// 手滑把待办打进 AI 框的纠错出口：⌘⏎ 或点 ➕ 直接落今日零碎，不发 AI
-    func addTodoFromAIBar() {
-        let text = aiInput.trimmingCharacters(in: .whitespaces)
-        guard !text.isEmpty, !aiLoading else { return }
-        aiInput = ""
-        addTodo(text)
-        aiReply = "➕ 已加为今日零碎：\(text)"
-    }
-
-    func runAI() {
-        let prompt = aiInput.trimmingCharacters(in: .whitespaces)
-        guard !prompt.isEmpty, !aiLoading else { return }
-        aiInput = ""
-        aiLoading = true
-        aiReply = ""
-        aiStatus = "启动中…"
-        aiHistory.append(AIMessage(role: .user, text: prompt, time: Date()))
-
-        // 首次调用生成 UUID；后续复用
-        if aiSessionID == nil {
-            aiSessionID = UUID().uuidString.lowercased()
-        }
-        let sid = aiSessionID!
-        let firstTime = !aiSessionCreated
-
-        let systemPrompt = """
-        你现在是 DBoard 菜单栏 App 的对话助手，用户对你说的每一句话都是关于 D板 的操作。
-
-        必做第一步：立即用 Read 工具读取 ~/.claude/skills/d-board/SKILL.md，然后严格按里面的规则执行本次任务。这个对话框里的所有请求都必须走 d-board skill 的流程（本地缓存 + 钉钉进行中文档 + 钉钉已完成归档三处同步）。
-
-        本地缓存路径：\(CacheFile.path)
-
-        直接执行，不要询问用户。完成后用一两句中文简短汇报做了什么。不要输出文件全文，不要长篇解释。
-        """
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
-            // 强模型只用于用户主动发起的 D板对话；失败时不回退到 Codex。
-            let provider = DBoardAIProvider.shared
-            let arguments: [String]
-            if firstTime {
-                arguments = ["-p", prompt, "--append-system-prompt", systemPrompt,
-                             "--session-id", sid, "--output-format", "stream-json",
-                             "--dangerously-skip-permissions"]
-            } else {
-                arguments = ["-p", prompt, "--resume", sid,
-                             "--output-format", "stream-json", "--dangerously-skip-permissions"]
-            }
-            let task = provider.makeProcess(tier: .strong, arguments: arguments)
-
-            let outPipe = Pipe()
-            let errPipe = Pipe()
-            task.standardOutput = outPipe
-            task.standardError = errPipe
-
-            var finalReply = ""
-            var lineBuffer = ""
-            var timedOut = false
-
-            // 流式读取 stdout
-            let handle = outPipe.fileHandleForReading
-            handle.readabilityHandler = { fh in
-                let data = fh.availableData
-                guard !data.isEmpty else { return }
-                if let chunk = String(data: data, encoding: .utf8) {
-                    lineBuffer += chunk
-                    while let nlRange = lineBuffer.range(of: "\n") {
-                        let line = String(lineBuffer[..<nlRange.lowerBound])
-                        lineBuffer.removeSubrange(..<nlRange.upperBound)
-                        if let (status, replyText) = Self.parseStreamLine(line) {
-                            DispatchQueue.main.async {
-                                if !status.isEmpty { self.aiStatus = status }
-                                if let r = replyText { finalReply = r }
-                            }
-                        }
-                    }
-                }
-            }
-
-            do {
-                try task.run()
-                let group = DispatchGroup()
-                group.enter()
-                DispatchQueue.global().async {
-                    task.waitUntilExit()
-                    group.leave()
-                }
-                if group.wait(timeout: .now() + .seconds(180)) == .timedOut {
-                    timedOut = true
-                    task.terminate()
-                    _ = group.wait(timeout: .now() + .seconds(3))
-                    if task.isRunning { kill(task.processIdentifier, SIGKILL) }
-                }
-                handle.readabilityHandler = nil
-                let success = !timedOut && task.terminationStatus == 0
-                if success && firstTime {
-                    DispatchQueue.main.async { self.aiSessionCreated = true }
-                } else if !success {
-                    DispatchQueue.main.async {
-                        self.aiSessionID = nil
-                        self.aiSessionCreated = false
-                    }
-                }
-            } catch {
-                finalReply = "⚠️ Qoder CLI 调用失败: \(error.localizedDescription)（未回退 Codex）"
-                DispatchQueue.main.async {
-                    self.aiSessionID = nil
-                    self.aiSessionCreated = false
-                }
-            }
-
-            if timedOut {
-                finalReply = "⏱ 超过 180s 未返回，已中断。" + (finalReply.isEmpty ? "" : "\n" + finalReply)
-            }
-
-            DispatchQueue.main.async {
-                let reply = finalReply.isEmpty ? "✅ 已完成（无输出）" : finalReply
-                self.aiReply = reply
-                self.aiHistory.append(AIMessage(role: .assistant, text: reply, time: Date()))
-                self.aiLoading = false
-                self.aiStatus = ""
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.reload() }
-            }
-        }
-    }
-
-    /// 解析 stream-json 单行，返回 (状态描述, 最终回复文本?)
-    /// 状态描述用于实时更新 UI；最终回复只在 assistant message 出现时返回
-    private static func parseStreamLine(_ line: String) -> (String, String?)? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard trimmed.hasPrefix("{") else { return nil }
-        guard let data = trimmed.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let type = json["type"] as? String else {
-            return nil
-        }
-
-        switch type {
-        case "system":
-            let subtype = (json["subtype"] as? String) ?? ""
-            if subtype == "init" { return ("初始化会话…", nil) }
-            if subtype == "hook_started" { return ("加载 hook…", nil) }
-            if subtype == "thinking_tokens" {
-                let tokens = json["estimated_tokens"] as? Int ?? 0
-                return ("思考中… (\(tokens) tokens)", nil)
-            }
-            return ("", nil)
-
-        case "assistant":
-            // message.content 是数组，可能有 text/tool_use 等
-            if let message = json["message"] as? [String: Any],
-               let content = message["content"] as? [[String: Any]] {
-                for block in content {
-                    let btype = block["type"] as? String ?? ""
-                    if btype == "tool_use" {
-                        let name = block["name"] as? String ?? "工具"
-                        var detail = ""
-                        if let input = block["input"] as? [String: Any] {
-                            if let path = input["file_path"] as? String { detail = " \((path as NSString).lastPathComponent)" }
-                            else if let cmd = input["command"] as? String { detail = " \(cmd.prefix(30))" }
-                        }
-                        return ("🔧 调用 \(name)\(detail)", nil)
-                    }
-                    if btype == "text", let text = block["text"] as? String {
-                        return ("✨ 生成回复中…", text)
-                    }
-                }
-            }
-            return ("", nil)
-
-        case "user":
-            // tool_result 回来了
-            return ("📥 收到工具结果", nil)
-
-        case "result":
-            // 最终结果，通常包含 result 字段
-            if let result = json["result"] as? String {
-                return ("✅ 完成", result)
-            }
-            return ("✅ 完成", nil)
-
-        default:
-            return nil
-        }
-    }
-
-    private static func shellEscape(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
     deinit {
         fileMonitor?.cancel()
         if fileDescriptor >= 0 { close(fileDescriptor) }
@@ -714,13 +496,13 @@ struct DBoardRootView: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 0) {
                         CockpitSection()
+                        NewItemRow()
                         NeedsSection()
                         PrevSection()
                         TodaySection()
                     }
                     .padding(.bottom, 12)
                 }
-                AIChatBar()  // 国内版 Qoder CLI 强模型 + d-board skill；用户主动触发才调用
                 FooterView()
             }
             if vm.paletteOpen {
@@ -980,15 +762,16 @@ struct ItemCardView: View {
     var hasProgress: Bool { !item.milestones.isEmpty }
     var hasDetail: Bool { showDesc || hasBranch || hasCycle || hasProgress }
 
+    @State private var editing = false
+    @State private var progressBuf = ""
+
     var body: some View {
-        Button(action: { vm.toggleExpanded(item.id) }) {
-            cardContent
-        }
-        .buttonStyle(SmoothButtonStyle(scale: 0.985, hoverScale: 1.0))
+        cardContent
         .contextMenu { contextMenuContent }
         .opacity(appeared ? 1 : 0)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hovered)
         .animation(.spring(response: 0.4, dampingFraction: 0.75), value: expanded)
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: editing)
         .onHover { hovered = $0 }
         .onAppear {
             withAnimation(.easeOut(duration: 0.3).delay(appearDelay)) { appeared = true }
@@ -998,20 +781,75 @@ struct ItemCardView: View {
     @ViewBuilder
     private var cardContent: some View {
         VStack(alignment: .leading, spacing: 6) {
-            cardHeader
-            cardMeta
-            if expanded {
-                cardDetails
+            if editing {
+                DItemEditForm(draft: DItemDraft(from: item), onSave: { d in
+                    vm.saveItem(d, original: item); editing = false
+                }, onCancel: { editing = false })
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    cardHeader
+                    cardMeta
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { vm.toggleExpanded(item.id) }
+                if expanded {
+                    cardDetails
+                    progressInput
+                    actionBar
+                }
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
         .cardStyle(theme.current)
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .fill(vm.selectedID == item.id || hovered ? theme.current.textPrimary.opacity(0.035) : Color.clear)
+                .fill(!editing && (vm.selectedID == item.id || hovered) ? theme.current.textPrimary.opacity(0.035) : Color.clear)
+                .allowsHitTesting(false)
         )
         .padding(.horizontal, 16)
         .contentShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var progressInput: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "plus.circle").font(.system(size: 12)).foregroundStyle(theme.current.textMuted)
+            TextField("追加今日进度，回车保存", text: $progressBuf)
+                .textFieldStyle(.plain).font(.system(size: 13))
+                .onSubmit {
+                    vm.appendProgress(item.id, progressBuf); progressBuf = ""
+                }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 6).fill(theme.current.textPrimary.opacity(0.05)))
+    }
+
+    private var actionBar: some View {
+        HStack(spacing: 12) {
+            actionBtn("编辑", "pencil") { editing = true }
+            Menu {
+                ForEach(ItemPriority.allCases, id: \.self) { p in
+                    Button { if p != item.priority { vm.setPriority(item.id, p) } } label: {
+                        Label(p.title, systemImage: p == item.priority ? "checkmark" : "circle")
+                    }
+                }
+            } label: {
+                Label("优先级", systemImage: "flag").font(.system(size: 12))
+            }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .foregroundStyle(theme.current.textTertiary)
+            actionBtn("完成并归档", "archivebox") { vm.archiveItem(item) }
+            Spacer()
+            actionBtn("删除", "trash", tint: .red) { vm.deleteItem(item) }
+        }
+        .padding(.top, 2)
+    }
+
+    private func actionBtn(_ t: String, _ icon: String, tint: Color? = nil, _ a: @escaping () -> Void) -> some View {
+        Button(action: a) {
+            Label(t, systemImage: icon).font(.system(size: 12))
+                .foregroundStyle(tint ?? theme.current.textTertiary)
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -1087,7 +925,7 @@ struct ItemCardView: View {
                     .padding(.leading, 4)
                 }
             } else {
-                Text("暂无详情，对 Claude 说「更新 \(item.id)」补充").font(fm.font(14)).foregroundStyle(theme.current.textMuted)
+                Text("暂无详情，点「编辑」补充").font(fm.font(14)).foregroundStyle(theme.current.textMuted)
             }
         }
         .padding(.top, 4)
@@ -1098,6 +936,9 @@ struct ItemCardView: View {
     private var contextMenuContent: some View {
         Button { vm.toggleExpanded(item.id) } label: {
             Label(expanded ? "折叠" : "展开详情", systemImage: expanded ? "chevron.up" : "chevron.down")
+        }
+        Button { if !expanded { vm.toggleExpanded(item.id) }; editing = true } label: {
+            Label("编辑", systemImage: "pencil")
         }
         Divider()
         if let b = item.branch, !b.isEmpty, b != "待定" {
@@ -1127,6 +968,16 @@ struct ItemCardView: View {
                 }
             }
         }
+        Menu("调整优先级") {
+            ForEach(ItemPriority.allCases, id: \.self) { p in
+                Button { if p != item.priority { vm.setPriority(item.id, p) } } label: {
+                    HStack { Text(p.title); if item.priority == p { Image(systemName: "checkmark") } }
+                }
+            }
+        }
+        Divider()
+        Button { vm.archiveItem(item) } label: { Label("完成并归档", systemImage: "archivebox") }
+        Button(role: .destructive) { vm.deleteItem(item) } label: { Label("删除", systemImage: "trash") }
     }
 }
 
@@ -1475,194 +1326,6 @@ struct IconBtn: View {
     }
 }
 
-// MARK: - AI 对话栏
-struct AIChatBar: View {
-    @EnvironmentObject var vm: DBoardViewModel
-    @EnvironmentObject var theme: ThemeManager
-    @EnvironmentObject var fm: FontManager
-    @State private var shimmer: CGFloat = 0
-
-    private static let timeFmt: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm"
-        return f
-    }()
-
-    var body: some View {
-        VStack(spacing: 6) {
-            // 历史面板（点击徽章展开）
-            if vm.aiHistoryExpanded && !vm.aiHistory.isEmpty {
-                VStack(spacing: 0) {
-                    HStack {
-                        Text("对话历史 · \(vm.aiHistory.count) 条").font(fm.font(13)).foregroundStyle(theme.current.textTertiary)
-                        Spacer()
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.2)) { vm.aiHistoryExpanded = false }
-                        } label: {
-                            Image(systemName: "chevron.down").font(fm.font(13)).foregroundStyle(theme.current.textMuted)
-                        }.buttonStyle(.plain)
-                    }
-                    .padding(.horizontal, 12).padding(.vertical, 6)
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 6) {
-                                ForEach(vm.aiHistory) { msg in
-                                    HStack(alignment: .top, spacing: 6) {
-                                        Text(msg.role == .user ? "🙋" : "✨")
-                                            .font(fm.font(13))
-                                            .frame(width: 14)
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(msg.text)
-                                                .font(fm.font(14))
-                                                .foregroundStyle(msg.role == .user ? theme.current.textSecondary : theme.current.textPrimary)
-                                                .textSelection(.enabled)
-                                                .fixedSize(horizontal: false, vertical: true)
-                                            Text(Self.timeFmt.string(from: msg.time))
-                                                .font(.system(size: 8, design: .monospaced))
-                                                .foregroundStyle(theme.current.chrome)
-                                        }
-                                    }
-                                    .id(msg.id)
-                                    .padding(.horizontal, 12).padding(.vertical, 3)
-                                }
-                            }
-                        }
-                        .frame(maxHeight: 200)
-                        .onChange(of: vm.aiHistory.count) { _ in
-                            if let last = vm.aiHistory.last {
-                                withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
-                            }
-                        }
-                    }
-                }
-                .background(
-                    RoundedRectangle(cornerRadius: 10)
-                        .fill(theme.current.cardFill.opacity(0.75))
-                        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(theme.current.accentPrimary.opacity(0.15)))
-                )
-                .padding(.horizontal, 12)
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
-
-            // AI 回复区域
-            if vm.aiLoading || !vm.aiReply.isEmpty {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(
-                            LinearGradient(colors: [theme.current.accentPrimary, theme.current.accentSecondary], startPoint: .topLeading, endPoint: .bottomTrailing)
-                        )
-                    if vm.aiLoading {
-                        HStack(spacing: 4) {
-                            Text(vm.aiStatus.isEmpty ? "思考中" : vm.aiStatus).font(fm.font(14)).foregroundStyle(theme.current.textTertiary)
-                                .lineLimit(1)
-                                .animation(.easeInOut(duration: 0.2), value: vm.aiStatus)
-                            ProgressView().scaleEffect(0.5).frame(width: 12, height: 12)
-                        }
-                    } else {
-                        Text(vm.aiReply)
-                            .font(fm.font(14))
-                            .foregroundStyle(theme.current.textSecondary)
-                            .lineLimit(3)
-                            .textSelection(.enabled)
-                    }
-                    Spacer()
-                    if !vm.aiLoading && !vm.aiReply.isEmpty {
-                        Button { vm.aiReply = "" } label: {
-                            Image(systemName: "xmark").font(fm.font(13))
-                                .foregroundStyle(theme.current.textMuted)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 14).padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(theme.current.accentPrimary.opacity(0.05))
-                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(theme.current.accentPrimary.opacity(0.1)))
-                )
-                .padding(.horizontal, 12)
-            }
-
-            // 输入栏
-            HStack(spacing: 8) {
-                Button {
-                    guard !vm.aiHistory.isEmpty else { return }
-                    withAnimation(.easeInOut(duration: 0.2)) { vm.aiHistoryExpanded.toggle() }
-                } label: {
-                    ZStack(alignment: .topTrailing) {
-                        Image(systemName: "sparkles")
-                            .font(fm.font(15))
-                            .foregroundStyle(
-                                LinearGradient(colors: [theme.current.accentPrimary, theme.current.accentSecondary], startPoint: .leading, endPoint: .trailing)
-                            )
-                        if !vm.aiHistory.isEmpty {
-                            Text("\(vm.aiHistory.count)")
-                                .font(.system(size: 7, weight: .bold, design: .monospaced))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 3).padding(.vertical, 0.5)
-                                .background(Capsule().fill(LinearGradient(colors: [theme.current.accentPrimary, theme.current.accentSecondary], startPoint: .leading, endPoint: .trailing)))
-                                .offset(x: 6, y: -6)
-                        }
-                    }
-                    .frame(width: 18, height: 18)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(vm.aiHistory.isEmpty ? "AI 对话" : (vm.aiHistoryExpanded ? "收起历史" : "查看对话历史"))
-                TextField(vm.hasAISession ? "继续问 AI…" : "问 AI：改需求状态、查看板…", text: $vm.aiInput)
-                    .font(fm.font(13))
-                    .textFieldStyle(.plain)
-                    .onSubmit { vm.runAI() }
-                    .disabled(vm.aiLoading)
-                if vm.hasAISession && !vm.aiLoading {
-                    Button { vm.resetAIConversation() } label: {
-                        Image(systemName: "arrow.counterclockwise.circle")
-                            .font(.system(size: 14))
-                            .foregroundStyle(theme.current.textMuted)
-                    }
-                    .buttonStyle(.plain)
-                    .help("开启新会话")
-                }
-                if vm.aiLoading {
-                    ProgressView().scaleEffect(0.6).frame(width: 16, height: 16)
-                } else if !vm.aiInput.trimmingCharacters(in: .whitespaces).isEmpty {
-                    // 打错框的纠错出口：绿色 ➕ 直接加为今日零碎，不发 AI
-                    Button { vm.addTodoFromAIBar() } label: {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.system(size: 18))
-                            .foregroundStyle(Color.green)
-                    }
-                    .buttonStyle(.plain)
-                    .keyboardShortcut(.return, modifiers: .command)
-                    .help("⌘⏎ 加为今日零碎（不问 AI）")
-                    Button { vm.runAI() } label: {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 18))
-                            .foregroundStyle(
-                                LinearGradient(colors: [theme.current.accentPrimary, theme.current.accentSecondary], startPoint: .top, endPoint: .bottom)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .help("⏎ 发送给 AI")
-                }
-            }
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(theme.current.cardFill.opacity(theme.current.cardFillOpacity))
-                    .shadow(color: .black.opacity(0.04), radius: 4, y: 1)
-            )
-            .padding(.horizontal, 12)
-        }
-        .padding(.vertical, 8)
-        .overlay(alignment: .top) {
-            theme.current.separator.frame(height: 0.5)
-        }
-    }
-}
-
-// MARK: - Footer
 struct FooterView: View {
     @EnvironmentObject var vm: DBoardViewModel
     @EnvironmentObject var theme: ThemeManager

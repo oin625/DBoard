@@ -282,6 +282,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             case "apprelease": AppReleaseWindowController.shared.show()
             case "dayplan": DayPlanWindowController.shared.toggle()
             case "panel": self?.detachPanel()
+            case let cmd where c.hasPrefix("expand="):
+                self?.viewModel.expandedIDs.insert(String(cmd.dropFirst("expand=".count)))
+                self?.detachPanel()
             case let cmd where c.hasPrefix("logsearchq="):
                 LogSearchWindowController.shared.debugSearch(String(cmd.dropFirst("logsearchq=".count)))
 

@@ -388,18 +388,14 @@ enum CacheParser {
             if currentDItem != nil {
                 if trimmed.hasPrefix("- **分支**") {
                     let branch = trimmed
-                        .replacingOccurrences(of: "- **分支**", with: "")
-                        .replacingOccurrences(of: "：", with: "")
-                        .replacingOccurrences(of: ":", with: "")
+                        .replacingOccurrences(of: "^- \\*\\*分支\\*\\*\\s*[：:]?\\s*", with: "", options: .regularExpression)
                         .trimmingCharacters(in: .whitespaces)
                     currentDItem?.branch = branch
                     inProgressBlock = false
                 }
                 if trimmed.hasPrefix("- **描述**") {
                     currentDescription = trimmed
-                        .replacingOccurrences(of: "- **描述**", with: "")
-                        .replacingOccurrences(of: "：", with: "")
-                        .replacingOccurrences(of: ":", with: "")
+                        .replacingOccurrences(of: "^- \\*\\*描述\\*\\*\\s*[：:]?\\s*", with: "", options: .regularExpression)
                         .trimmingCharacters(in: .whitespaces)
                     inProgressBlock = false
                 }
