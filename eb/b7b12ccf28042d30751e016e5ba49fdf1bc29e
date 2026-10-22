@@ -1,0 +1,23 @@
+Sources/LogSearch.swift
+  s_29d33ca0341273::t_9d5bc92e755dcc 1-10
+Sources/AIProvider.swift
+  s_29d33ca0341273::t_2228ec7aac8237 76-77,93,103,105,127-131,147
+  s_29d33ca0341273::t_18fb0a2a0add21 2,9,66-75,78-92,94-102,104,106-126,132-146,148-166
+  s_29d33ca0341273::t_a4529a8d513939 167
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ebb7b12ccf28042d30751e016e5ba49fdf1bc29e",
+  "prompts": {},
+  "sessions": {
+    "s_29d33ca0341273": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05cee-cdb6-7d92-94ea-eecebb22593f",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "zhouzihan <zzh02513336@taobao.com>"
+    }
+  }
+}
