@@ -1,0 +1,20 @@
+Sources/DBoardApp.swift
+  h_6bb6240c74d11f 285-287
+Sources/DBoardView.swift
+  h_6bb6240c74d11f 248,499,765-767,769,774,784-799,806-807,813-854,928,940-942,971-980
+Sources/DItemEditor.swift
+  h_6bb6240c74d11f 1-433
+Sources/Models.swift
+  h_6bb6240c74d11f 391,398
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7cfbe4370dd0a4a84c5b5c6f0201bc2fbbb72b7b",
+  "prompts": {},
+  "humans": {
+    "h_6bb6240c74d11f": {
+      "author": "zhouzihan <zzh02513336@taobao.com>"
+    }
+  }
+}
