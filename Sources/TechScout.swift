@@ -62,8 +62,7 @@ final class TechScoutViewModel: ObservableObject {
     @Published var items: [TechScoutItem] = []
     @Published var lastUpdate: Date? = nil
 
-    private var fileMonitor: DispatchSourceFileSystemObject?
-    private var fileDescriptor: Int32 = -1
+    private var fileObserver: FileRefreshObserver?
     private var lastNotifyTime: TimeInterval = 0  // 0 表示从未通知过
     private let notifyDebounce: TimeInterval = 300  // 5 分钟防抖, 同一批资讯分片写入时只弹一次通知
     private var lastProcessedTimestamp: Double = 0  // 记录上次处理的 pending.json 时间戳
@@ -187,35 +186,7 @@ final class TechScoutViewModel: ObservableObject {
     }
 
     private func startWatching() {
-        let path = Self.pendingPath
-        // 确保文件存在
-        if !FileManager.default.fileExists(atPath: path) {
-            try? "".write(toFile: path, atomically: true, encoding: .utf8)
-        }
-
-        fileDescriptor = open(path, O_EVTONLY)
-        guard fileDescriptor >= 0 else { return }
-
-        fileMonitor = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fileDescriptor,
-            eventMask: [.write, .rename],
-            queue: .main
-        )
-
-        fileMonitor?.setEventHandler { [weak self] in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                self?.reload()
-            }
-        }
-
-        fileMonitor?.setCancelHandler { [weak self] in
-            if let fd = self?.fileDescriptor, fd >= 0 {
-                close(fd)
-                self?.fileDescriptor = -1
-            }
-        }
-
-        fileMonitor?.resume()
+        fileObserver = FileRefreshObserver(url: URL(fileURLWithPath: Self.pendingPath)) { [weak self] in self?.reload() }
     }
 
     func openURL(_ urlString: String) {
@@ -223,16 +194,14 @@ final class TechScoutViewModel: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
-    deinit {
-        fileMonitor?.cancel()
-        if fileDescriptor >= 0 { close(fileDescriptor) }
-    }
+    deinit { fileObserver = nil }
 }
 
 // MARK: - 窗口控制器
 
 final class TechScoutWindowController {
     private var window: NSWindow?
+    private var windowInteraction: WorkspaceWindowInteraction?
     private var viewModel: TechScoutViewModel
 
     init(viewModel: TechScoutViewModel) {
@@ -274,6 +243,7 @@ final class TechScoutWindowController {
         NSApp.activate(ignoringOtherApps: true)
 
         window = win
+        windowInteraction = WorkspaceWindowInteraction(window: win, id: "techscout")
     }
 }
 
@@ -294,8 +264,8 @@ struct TechScoutView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("前线科技资讯")
-                        .font(fm.font(26))
-                        .foregroundStyle(theme.current.accentGradient)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.primary)
                     HStack(spacing: 6) {
                         Text("自动聚合全网科技热点")
                         if !vm.items.isEmpty {
@@ -365,8 +335,9 @@ struct TechScoutView: View {
             }
         }
         .frame(minWidth: 520, minHeight: 600)
+        .workspaceToolbar(id: "techscout")
         .focusEffectDisabled()
-        .background(ThemeBackground().environmentObject(theme).environmentObject(ThemeManager.shared))
+        .background(theme.current.background)
     }
 
     private var currentDay: String {

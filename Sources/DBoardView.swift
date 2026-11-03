@@ -1,5 +1,6 @@
 import SwiftUI
 import Cocoa
+import Combine
 
 /// 原生毛玻璃: NSVisualEffectView 透出桌面壁纸
 struct NativeBlurView: NSViewRepresentable {
@@ -173,18 +174,76 @@ final class DBoardViewModel: ObservableObject {
     @Published var paletteQuery = ""
     @Published var paletteSel = 0
     @Published var selectedID: String? = nil
+    @Published var editingFormCount = 0
+    @Published var newItemDraft: DItemDraft?
+    @Published var newItemFormOpen = false
+    @Published var demandEditor: DemandCardEditor?
+    @Published var newItemDraftError: String?
+    let newItemDraftStore: NewDemandDraftStore?
+    let promptDraftStore: DemandPromptDraftStore
+    let changeDraftStore: DemandChangeDraftStore
+    lazy var deliveryCoordinator = DemandDeliveryCoordinator()
+    @Published var feedback: WorkspaceFeedback?
+    private var feedbackDismiss: DispatchWorkItem?
+    @Published var workspacePage: WorkspacePage? = .overview
+    @Published var demandFilter: DemandFilter = .all
+    @Published var demandQuery = ""
+    @Published var archivingIDs: Set<String> = []
+    lazy var archiveJournal = ArchiveJournal()
+    lazy var demandArchives = DemandArchiveStore(allowsRemote: allowsRemoteOperations)
+    var attentionItems: [DItem] { items.filter { $0.isUrgent || $0.status == .inProgress }.sorted { $0.priority < $1.priority } }
 
     enum SyncKind { case idle, pending, syncing, done, fail }
 
-    private var fileMonitor: DispatchSourceFileSystemObject?
-    private var fileDescriptor: Int32 = -1
+    private var fileObserver: FileRefreshObserver?
+    private var syncRunning = false
+    private var syncQueued = false
+    private let allowsRemoteOperations: Bool
     private var lastSelfWrite: Date = .distantPast
     private var syncDebounce: DispatchWorkItem?
     private let syncDelay: TimeInterval = 30
+    let reqFlow: BizMapViewModel
+    private var reqFlowObservation: AnyCancellable?
+    private var calendarObservations: [AnyCancellable] = []
 
-    init() {
-        reload()
-        startWatching()
+    init(loadCache: Bool = true, reqFlow: BizMapViewModel? = nil,
+         newItemDraftStore: NewDemandDraftStore? = nil,
+         promptDraftStore: DemandPromptDraftStore? = nil,
+         changeDraftStore: DemandChangeDraftStore? = nil) {
+        self.allowsRemoteOperations = loadCache
+        self.newItemDraftStore = newItemDraftStore ?? (loadCache ? NewDemandDraftStore() : nil)
+        self.promptDraftStore = promptDraftStore ?? DemandPromptDraftStore(url: loadCache ? DemandPromptDraftStore.defaultURL : nil)
+        self.changeDraftStore = changeDraftStore ?? DemandChangeDraftStore(url: loadCache ? DemandChangeDraftStore.defaultURL : nil)
+        self.newItemDraft = self.newItemDraftStore?.draft
+        self.newItemDraftError = self.newItemDraftStore?.error
+        self.reqFlow = reqFlow ?? (loadCache
+            ? BizMapBoardWindowController.shared.vm : BizMapViewModel(loadBackgroundData: false))
+        reqFlowObservation = self.reqFlow.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+        if loadCache { reload(); startWatching(); observeCalendarChanges() }
+    }
+
+    func openDemandEditor(_ kind: DemandCardEditor.Kind, item: DItem) {
+        NotificationCenter.default.post(name: .init("DBoardEditorWillOpen"), object: nil)
+        demandEditor = DemandCardEditor(kind: kind, item: item)
+    }
+
+    func focusItem(_ id: String) {
+        showDemands()
+        selectedID = id
+        expandedIDs.insert(id)
+    }
+
+    func showFeedback(_ message: String, failed: Bool = false) {
+        feedbackDismiss?.cancel()
+        let value = WorkspaceFeedback(message: message, failed: failed)
+        feedback = value
+        let work = DispatchWorkItem { [weak self] in
+            if self?.feedback?.id == value.id { self?.feedback = nil }
+        }
+        feedbackDismiss = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + (failed ? 8 : 3), execute: work)
     }
 
     @Published var newTodoText = ""
@@ -197,7 +256,18 @@ final class DBoardViewModel: ObservableObject {
     var allDone: Bool { totalCount > 0 && doneCount == totalCount }
 
     func reload() {
-        let r = CacheParser.parse()
+        reqFlow.load()
+        // 读取、按周期改状态、写回在同一把锁内，避免覆盖同步脚本刚写入的内容
+        let outcome: (content: String, started: Bool, failed: Bool) = CacheFile.withLock { () -> (content: String, started: Bool, failed: Bool) in
+            let source = CacheFile.read() ?? ""
+            let update = DemandCycle.reconcile(source)
+            guard !update.startedIDs.isEmpty else { return (source, false, false) }
+            return CacheFile.write(update.content) ? (update.content, true, false) : (source, false, true)
+        } ?? (CacheFile.read() ?? "", false, false)
+        let content = outcome.content
+        if outcome.started { markSelfWrite(); scheduleSync() }
+        if outcome.failed { showFeedback("周期已开始，但自动更新状态失败，请检查本地数据文件", failed: true) }
+        let r = CacheParser.parse(content: content)
         items = r.items
         syncTime = r.syncTime
 
@@ -206,7 +276,7 @@ final class DBoardViewModel: ObservableObject {
         for sec in r.prevSecs {
             for item in sec.items where !item.isCompleted {
                 var carried = item
-                carried.text = "[\(sec.shortDate)顺延] " + carried.text
+                guard sec.dateLabel < DemandDates.today() else { continue }
                 carried.isCarriedOver = true
                 carriedOver.append(carried)
             }
@@ -226,10 +296,20 @@ final class DBoardViewModel: ObservableObject {
 
         // 保留所有历史块用于展示（不过滤）
         prevSecs = r.prevSecs
-        updateSyncDisplay()
+        updateSyncDisplay(content: content)
     }
 
-    func updateSyncDisplay() {
+    func updateSyncDisplay(content: String? = nil) {
+        if syncKind == .syncing || syncKind == .pending { return }
+        if syncKind == .fail {
+            // CLI 或后台同步成功后，仅凭与当前正文一致的凭证清除旧失败状态。
+            guard syncText == "同步失败，改动保留在本机",
+                  let content, ContentRevision.matchesSyncReceipt(content) else { return }
+            if feedback?.failed == true && feedback?.message == "同步失败，改动保留在本机" {
+                feedbackDismiss?.cancel()
+                feedback = nil
+            }
+        }
         if let t = syncTime, let time = t.split(separator: "T").last {
             let parts = time.split(separator: ":")
             if parts.count >= 2 { syncText = "最近同步 \(parts[0]):\(parts[1])"; syncKind = .idle; return }
@@ -247,86 +327,42 @@ final class DBoardViewModel: ObservableObject {
     func setViewMode(_ m: ViewMode) { viewMode = m }
     func markSelfWrite() { lastSelfWrite = Date() }
 
-    func toggleTodo(_ idx: Int) {
-        guard let sec = todaySec, idx < sec.items.count else { return }
-        let item = sec.items[idx]
-        lastSelfWrite = Date()
+    func toggleTodo(_ item: TodoItem) {
+        afterWrite(TodoStore.change(item, .toggle).ok, fail: "事项已变化或存在重复，请刷新后核对原日期",
+            success: item.isCompleted ? "已恢复为未完成" : "事项已完成")
+    }
 
-        if item.isCarriedOver {
-            // 顺延项：按原始文本在文件中匹配（去掉"[X月X日顺延] "前缀）
-            var originalText = item.text
-            if let r = originalText.range(of: "^\\[.*?顺延\\]\\s*", options: .regularExpression) {
-                originalText = String(originalText[r.upperBound...])
-            }
-            _ = FileMutator.toggleTodoByText(originalText)
-        } else {
-            // 今日项：计算真实 index（排除 carriedOver 项）
-            let realIdx = sec.items.prefix(idx).filter { !$0.isCarriedOver }.count
-            _ = FileMutator.toggleTodo(index: realIdx)
+    @discardableResult
+    func addTodo(_ text: String) -> Bool {
+        afterWrite(TodoStore.add(text), fail: "添加失败，请使用单行文字并检查本地数据", success: "事项已添加")
+    }
+
+    @discardableResult
+    func editTodo(_ item: TodoItem, newText: String) -> Bool {
+        afterWrite(TodoStore.change(item, .edit(newText)).ok,
+            fail: "保存失败：事项可能已变化，请刷新核对；输入仍保留")
+    }
+
+    func deleteTodo(_ item: TodoItem) {
+        let result = TodoStore.change(item, .delete)
+        guard afterWrite(result.ok, fail: "删除失败，请刷新核对原日期", success: "事项已删除，可撤销") else { return }
+        if let removal = result.removal { offerUndo("恢复删除的事项") { TodoStore.restore(removal) } }
+    }
+
+    @discardableResult
+    func addNote(_ item: TodoItem, note: String) -> Bool {
+        afterWrite(TodoStore.change(item, .note(note)).ok,
+            fail: "备注未保存，请使用单行文字或刷新核对；输入仍保留")
+    }
+
+    @Published var undoTitle: String?
+    private var undoAction: (() -> Bool)?
+    func offerUndo(_ title: String, action: @escaping () -> Bool) { undoTitle = title; undoAction = action }
+    func undoLastDeletion() {
+        guard let action = undoAction else { return }
+        if afterWrite(action(), fail: "恢复失败：原编号或记录已存在，请核对后重试", success: "已恢复删除的记录") {
+            undoTitle = nil; undoAction = nil
         }
-
-        var arr = sec.items
-        arr[idx].isCompleted.toggle()
-        todaySec = TodoSection(dateLabel: sec.dateLabel, items: arr, isToday: sec.isToday)
-        scheduleSync()
-    }
-
-    func addTodo(_ text: String) {
-        guard !text.isEmpty else { return }
-        lastSelfWrite = Date()
-        _ = FileMutator.addTodo(text: text)
-        if var sec = todaySec {
-            sec = TodoSection(dateLabel: sec.dateLabel, items: sec.items + [TodoItem(text: text, isCompleted: false, linkedDItem: nil, note: nil)], isToday: sec.isToday)
-            todaySec = sec
-        } else {
-            let todayStr = Self.todayStr()
-            todaySec = TodoSection(dateLabel: todayStr, items: [TodoItem(text: text, isCompleted: false, linkedDItem: nil, note: nil)], isToday: true)
-        }
-        scheduleSync()
-    }
-
-    func editTodo(_ idx: Int, newText: String) {
-        guard let sec = todaySec, idx < sec.items.count, !newText.isEmpty else { return }
-        lastSelfWrite = Date()
-        _ = FileMutator.editTodo(index: idx, newText: newText)
-        var arr = sec.items
-        arr[idx].text = newText
-        todaySec = TodoSection(dateLabel: sec.dateLabel, items: arr, isToday: sec.isToday)
-        scheduleSync()
-    }
-
-    func deleteTodo(_ idx: Int) {
-        guard let sec = todaySec, idx < sec.items.count else { return }
-        let item = sec.items[idx]
-        lastSelfWrite = Date()
-
-        if item.isCarriedOver {
-            // 顺延项：按原始文本在历史块中删除（去掉"[X月X日顺延] "前缀）
-            var originalText = item.text
-            if let r = originalText.range(of: "^\\[.*?顺延\\]\\s*", options: .regularExpression) {
-                originalText = String(originalText[r.upperBound...])
-            }
-            _ = FileMutator.deleteTodoByText(originalText)
-        } else {
-            // 今日项：计算真实 index（排除 carriedOver 项）
-            let realIdx = sec.items.prefix(idx).filter { !$0.isCarriedOver }.count
-            _ = FileMutator.deleteTodo(index: realIdx)
-        }
-
-        var arr = sec.items
-        arr.remove(at: idx)
-        todaySec = TodoSection(dateLabel: sec.dateLabel, items: arr, isToday: sec.isToday)
-        scheduleSync()
-    }
-
-    func addNote(_ idx: Int, note: String) {
-        guard let sec = todaySec, idx < sec.items.count else { return }
-        lastSelfWrite = Date()
-        _ = FileMutator.addNote(index: idx, note: note)
-        var arr = sec.items
-        arr[idx].note = note.isEmpty ? nil : note
-        todaySec = TodoSection(dateLabel: sec.dateLabel, items: arr, isToday: sec.isToday)
-        scheduleSync()
     }
 
     private static func todayStr() -> String {
@@ -335,7 +371,7 @@ final class DBoardViewModel: ObservableObject {
 
     // MARK: 命令面板
     struct PaletteEntry: Identifiable {
-        let id = UUID()
+        let id: String
         let label: String
         let sub: String
         let icon: String
@@ -343,49 +379,50 @@ final class DBoardViewModel: ObservableObject {
     }
     var paletteEntries: [PaletteEntry] {
         var es: [PaletteEntry] = []
-        let q = paletteQuery.lowercased()
+        let q = paletteQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let acts: [(String, String, () -> Void)] = [
             ("切换视图", "command", { self.setViewMode(self.viewMode == .priority ? .project : .priority); self.paletteOpen = false }),
             ("展开全部需求", "arrow.up.left.and.arrow.down.right", { self.expandAll(); self.paletteOpen = false }),
             ("折叠全部需求", "arrow.down.right.and.arrow.up.left", { self.collapseAll(); self.paletteOpen = false }),
             ("同步钉钉", "bolt", { self.doSyncNow(); self.paletteOpen = false }),
+            ("设置", "gearshape", { self.paletteOpen = false; NotificationCenter.default.post(name: .init("openDBoardSettings"), object: nil) }),
             ("刷新", "arrow.clockwise", { self.reload(); self.paletteOpen = false }),
             (FeatureFlags.shared.replyEnabled ? "关闭钉钉值守" : "开启钉钉值守", "bubble.left.and.bubble.right", {
                 FeatureFlags.shared.setReplyEnabled(!FeatureFlags.shared.replyEnabled); self.paletteOpen = false
             }),
-            ("模块使用统计(近14天)", "chart.bar", {
+            ("使用记录", "chart.bar", {
                 self.paletteOpen = false
-                let names = Dictionary(uniqueKeysWithValues: DBoardModule.all.map { ($0.id, $0.title) })
-                let rows = UsageStats.summary().map { "\(names[$0.0] ?? $0.0)：\($0.1) 次" }
-                let alert = NSAlert()
-                alert.messageText = "模块使用统计（近 14 天）"
-                alert.informativeText = rows.isEmpty ? "还没有记录" : rows.joined(separator: "\n")
-                NSApp.activate(ignoringOtherApps: true)
-                alert.runModal()
+                WorkspacePreferences.shared.settingsPage = .usage
+                NotificationCenter.default.post(name: .init("openDBoardSettings"), object: nil)
             }),
         ]
         // 一键运维: 写生产的动作仍走 Runner 的二次确认
         for op in OpsAction.all where q.isEmpty || op.title.lowercased().contains(q) || "cookie 抖音 douyin 运维".contains(q) {
-            es.append(PaletteEntry(label: op.title, sub: "运维", icon: op.icon, action: {
+            es.append(PaletteEntry(id: "ops:" + op.id, label: op.title, sub: "运维", icon: op.icon, action: {
                 self.paletteOpen = false
                 DispatchQueue.main.async { OpsRunner.shared.requestRun(op) }
             }))
         }
-        for m in DBoardModule.visible where q.isEmpty || m.title.lowercased().contains(q) || m.id.contains(q) {
-            es.append(PaletteEntry(label: m.title, sub: m.shortcut.isEmpty ? "模块" : m.shortcut, icon: m.icon, action: {
+        let prefs = WorkspacePreferences.shared
+        let preferred = prefs.favorites + prefs.recentModules.filter { !prefs.favorites.contains($0) }
+        let modules = DBoardModule.visible.sorted {
+            (preferred.firstIndex(of: $0.id) ?? 999) < (preferred.firstIndex(of: $1.id) ?? 999)
+        }
+        for m in modules where q.isEmpty || q.split(separator: " ").allSatisfy({ m.searchText.contains($0) }) {
+            es.append(PaletteEntry(id: "module:" + m.id, label: m.title, sub: (prefs.favorites.contains(m.id) ? "常用" : prefs.recentModules.contains(m.id) ? "最近" : "模块") + (m.shortcut.isEmpty ? "" : " · " + m.shortcut), icon: m.icon, action: {
                 self.paletteOpen = false
                 m.launch()
             }))
         }
         for a in acts {
             if q.isEmpty || a.0.lowercased().contains(q) {
-                es.append(PaletteEntry(label: a.0, sub: "动作", icon: a.1, action: a.2))
+                es.append(PaletteEntry(id: "action:" + a.0, label: a.0, sub: "动作", icon: a.1, action: a.2))
             }
         }
-        for it in items {
-            if q.isEmpty || it.displayTitle.lowercased().contains(q) || it.id.lowercased().contains(q) {
+        for it in items where !q.isEmpty {
+            if it.displayTitle.lowercased().contains(q) || it.id.lowercased().contains(q) {
                 let id = it.id
-                es.append(PaletteEntry(label: it.displayTitle, sub: id, icon: "doc.text", action: { self.expandedIDs.insert(id); self.paletteOpen = false }))
+                es.append(PaletteEntry(id: "demand:" + id, label: it.displayTitle, sub: id, icon: "doc.text", action: { self.focusItem(id); self.paletteOpen = false }))
             }
         }
         return es
@@ -402,7 +439,7 @@ final class DBoardViewModel: ObservableObject {
 
     // MARK: 键盘选中导航
     func moveSel(_ d: Int) {
-        let ids = items.map { $0.id }
+        let ids = filteredItems.map { $0.id }
         guard !ids.isEmpty else { return }
         let cur = selectedID.flatMap { ids.firstIndex(of: $0) } ?? -1
         selectedID = ids[(cur + d + ids.count) % ids.count]
@@ -414,70 +451,80 @@ final class DBoardViewModel: ObservableObject {
         let order: [ItemStatus] = [.pending, .inProgress, .completed, .suspended]
         let cur = order.firstIndex(of: item.status) ?? 0
         let next = order[(cur + 1) % order.count]
-        lastSelfWrite = Date()
-        _ = FileMutator.setStatus(id: id, newStatusRaw: next.rawValue)
-        var arr = items
-        if let i = arr.firstIndex(where: { $0.id == id }) { arr[i].status = next }
-        items = arr
-        scheduleSync()
+        cycleToStatus(id, target: next)
     }
 
     func cycleToStatus(_ id: String, target: ItemStatus) {
-        lastSelfWrite = Date()
-        _ = FileMutator.setStatus(id: id, newStatusRaw: target.rawValue)
-        var arr = items
-        if let i = arr.firstIndex(where: { $0.id == id }) { arr[i].status = target }
-        items = arr
-        scheduleSync()
+        guard let item = items.first(where: { $0.id == id }), item.status != target else { return }
+        if target == .pending, DemandCycle.hasStarted(start: item.startDate, deadline: item.deadline) {
+            showFeedback("开始日期已到；要恢复待开始，请在编辑里调整开始日期", failed: true)
+            return
+        }
+        markSelfWrite()
+        afterWrite(FileMutator.setStatus(id: id, newStatusRaw: target.rawValue),
+                   fail: "状态更新失败", success: "已改为「\(target.label)」")
+    }
+
+    private func observeCalendarChanges() {
+        let dayChanged = NotificationCenter.default.publisher(for: .NSCalendarDayChanged)
+        let timeZoneChanged = NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)
+        let clockChanged = NotificationCenter.default.publisher(for: .NSSystemClockDidChange)
+        let woke = NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)
+        let active = NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.sessionDidBecomeActiveNotification)
+        dayChanged.merge(with: timeZoneChanged, clockChanged, woke, active)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.reload() }
+            .store(in: &calendarObservations)
     }
 
     private func startWatching() {
-        let path = CacheFile.path
-        fileDescriptor = open(path, O_EVTONLY)
-        guard fileDescriptor >= 0 else { return }
-        fileMonitor = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fileDescriptor, eventMask: [.write, .rename, .delete], queue: .main)
-        fileMonitor?.setEventHandler { [weak self] in
-            guard let self = self else { return }
-            if Date().timeIntervalSince(self.lastSelfWrite) < 0.6 { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.reload() }
-        }
-        fileMonitor?.setCancelHandler { [weak self] in
-            if let fd = self?.fileDescriptor, fd >= 0 { close(fd); self?.fileDescriptor = -1 }
-        }
-        fileMonitor?.resume()
+        fileObserver = FileRefreshObserver(url: URL(fileURLWithPath: CacheFile.path)) { [weak self] in self?.reload() }
     }
 
     func scheduleSync() {
         syncDebounce?.cancel()
-        syncText = "⏳ \(Int(syncDelay))s 后同步"; syncKind = .pending
+        if let content = CacheFile.read(), DemandOverview.matchesReceipt(content) {
+            if !syncRunning { syncText = "概况已同步，其他资料保存在本机"; syncKind = .idle }
+            return
+        }
+        if syncRunning { syncQueued = true; return }
+        syncText = "\(Int(syncDelay))s 后同步"; syncKind = .pending
+        guard allowsRemoteOperations else { return }
         let work = DispatchWorkItem { [weak self] in self?.doSync() }
         syncDebounce = work
         DispatchQueue.main.asyncAfter(deadline: .now() + syncDelay, execute: work)
     }
-    func doSyncNow() { syncDebounce?.cancel(); syncDebounce = nil; doSync() }
+    func doSyncNow() { syncDebounce?.cancel(); syncDebounce = nil; doSync(force: true) }
 
-    private func doSync() {
+    private func doSync(force: Bool = false) {
+        guard allowsRemoteOperations else { return }
+        if syncRunning { syncQueued = true; return }
+        syncRunning = true; syncQueued = false
+        let source = CacheFile.read() ?? ""
+        let revision = (try? DemandOverview.hash(source)) ?? ContentRevision.hash(source)
         syncText = "正在同步钉钉…"; syncKind = .syncing
         DispatchQueue.global(qos: .userInitiated).async {
-            let task = Process()
-            task.launchPath = "/bin/bash"
-            task.arguments = [CacheFile.syncScript]
-            task.standardOutput = Pipe()
-            task.standardError = Pipe()
-            var ok = false
-            do { try task.run(); task.waitUntilExit(); ok = (task.terminationStatus == 0) } catch { ok = false }
+            let result = ProcessRunner.run("/bin/bash", arguments: [CacheFile.syncScript] + (force ? ["--force"] : []), timeout: 105)
             DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                self.syncText = ok ? "✅ 已同步钉钉" : "⚠ 同步失败"
-                self.syncKind = ok ? .done : .fail
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { self.reload() }
+                guard let self else { return }
+                self.syncRunning = false
+                let current = CacheFile.read() ?? ""
+                let changed = revision != ((try? DemandOverview.hash(current)) ?? ContentRevision.hash(current))
+                let again = self.syncQueued || result.exitCode == 75 || (result.businessSucceeded && changed)
+                self.syncQueued = false
+                self.syncText = result.businessSucceeded ? "已同步钉钉" : "同步失败，改动保留在本机"
+                self.syncKind = result.businessSucceeded ? .done : .fail
+                if again { self.scheduleSync() }
+                else { self.showFeedback(self.syncText, failed: !result.businessSucceeded) }
+                self.reload()
             }
         }
     }
 
     deinit {
-        fileMonitor?.cancel()
-        if fileDescriptor >= 0 { close(fileDescriptor) }
+        feedbackDismiss?.cancel()
+        syncDebounce?.cancel()
+        fileObserver = nil
     }
 }
 
@@ -485,76 +532,183 @@ final class DBoardViewModel: ObservableObject {
 struct DBoardRootView: View {
     @EnvironmentObject var vm: DBoardViewModel
     @EnvironmentObject var theme: ThemeManager
+    @ObservedObject private var prefs = WorkspacePreferences.shared
+    @ObservedObject private var flags = FeatureFlags.shared
+    @Environment(\.openSettings) private var openSettings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var monitor: Any?
-    var popoverMode: Bool = false   // popover 模式才挂下拉撕出手势
+    @State private var windowNumber: Int?
+    var popoverMode: Bool = false
 
     var body: some View {
         ZStack {
-            // 皮肤背景(背景图 + 遮罩 + orb 光球)
-            ThemeBackground()
-                .environmentObject(theme)
-
-            VStack(spacing: 0) {
-                HeaderView(popoverMode: popoverMode)
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(spacing: 0) {
-                        CockpitSection()
-                        NewItemRow()
-                        NeedsSection()
-                        PrevSection()
-                        TodaySection()
+            if popoverMode {
+                VStack(spacing: 0) {
+                    HeaderView(popoverMode: true)
+                    if vm.workspacePage != .overview {
+                        HStack {
+                            Button { vm.workspacePage = .overview } label: { Label("概览", systemImage: "chevron.left") }
+                            Spacer()
+                            Text((vm.workspacePage ?? .overview).title).font(.system(size: 13, weight: .semibold))
+                        }
+                        .buttonStyle(.plain).padding(.horizontal, 20).padding(.vertical, 12)
                     }
-                    .padding(.bottom, 12)
+                    workspaceContent
+                    FooterView()
                 }
-                FooterView()
+            } else {
+                NavigationSplitView {
+                    List(selection: $vm.workspacePage) {
+                        Section("工作台") {
+                            ForEach(WorkspacePage.allCases) { page in
+                                NavigationLink(value: page) { Label(page.title, systemImage: page.icon) }
+                            }
+                        }
+                        Section("常用入口") {
+                            ForEach(prefs.favorites.compactMap { id in DBoardModule.visible.first { $0.id == id } }) { module in
+                                Button { module.launch() } label: { Label(module.title, systemImage: module.icon) }
+                                    .buttonStyle(.plain)
+                            }
+                        }
+                        Section {
+                            Button { openSettings() } label: { Label("设置", systemImage: "gearshape") }
+                                .buttonStyle(.plain)
+                        }
+                    }
+                    .listStyle(.sidebar)
+                    .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
+                } detail: {
+                    VStack(spacing: 0) {
+                        workspaceContent
+                        FooterView()
+                    }
+                    .frame(minWidth: 480)
+                    .navigationTitle((vm.workspacePage ?? .overview).title)
+                    .toolbar {
+                        ToolbarItemGroup(placement: .automatic) {
+                            if vm.workspacePage == .demands {
+                                Picker("排序", selection: $vm.viewMode) {
+                                    Text("按优先级").tag(ViewMode.priority)
+                                    Text("按项目").tag(ViewMode.project)
+                                }.pickerStyle(.menu)
+                            }
+                            Button { vm.paletteQuery = ""; vm.paletteSel = 0; vm.paletteOpen = true } label: {
+                                Image(systemName: "magnifyingglass")
+                            }.help("命令面板 ⌘K")
+                            DBoardModuleMenu()
+                            WorkspacePinButton(id: "dboard")
+                            DBoardSettingsButton()
+                        }
+                    }
+                }
+                .navigationSplitViewStyle(.balanced)
             }
             if vm.paletteOpen {
-                ZStack {
-                    Color.black.opacity(0.4).ignoresSafeArea().onTapGesture { vm.paletteOpen = false }
-                    CommandPalette().environmentObject(vm).padding(.top, 50)
-                }
-                .transition(.opacity)
+                Color.black.opacity(0.2).ignoresSafeArea().onTapGesture { vm.paletteOpen = false }
+                CommandPalette().environmentObject(vm)
+                    .transition(.opacity)
             }
         }
-        .frame(minWidth: 380, idealWidth: 420, maxWidth: .infinity, minHeight: 480, idealHeight: 640, maxHeight: .infinity)
-        .focusEffectDisabled()
+        .overlay(alignment: .bottom) {
+            VStack(spacing: 8) {
+                if let title = vm.undoTitle {
+                    HStack(spacing: 12) {
+                        Image(systemName: "arrow.uturn.backward.circle").foregroundStyle(.secondary)
+                        Text("已删除，可从本机恢复").font(.system(size: 12))
+                        Button(title) { vm.undoLastDeletion() }.controlSize(.small)
+                        Button { vm.undoTitle = nil } label: { Image(systemName: "xmark") }
+                            .buttonStyle(.plain).foregroundStyle(.secondary).help("不再提示恢复")
+                    }
+                    .padding(12).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                }
+                if let feedback = vm.feedback {
+                    WorkspaceFeedbackView(feedback: feedback) { vm.feedback = nil }
+                }
+            }
+            .padding(16).padding(.bottom, 36)
+            .transition(.opacity)
+        }
+        .background(theme.current.background)
+        .frame(minWidth: popoverMode ? 420 : 760, minHeight: popoverMode ? 480 : 560)
+        .background(WindowNumberReader { windowNumber = $0 })
+        .animation(reduceMotion ? nil : DBoardUI.spring, value: vm.paletteOpen)
+        .demandEditorPresentation(enabled: !popoverMode)
+        .onReceive(NotificationCenter.default.publisher(for: .init("openDBoardSettings"))) { _ in openSettings() }
         .onAppear {
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak vm] event in
-                return Self.handleKey(event, vm: vm)
+                guard event.window?.windowNumber == windowNumber else { return event }
+                return Self.handleKey(event, vm: vm) {
+                    guard let app = NSApp.delegate as? AppDelegate else { return }
+                    if popoverMode { app.closeMainPopover() } else { app.hidePanelWindow() }
+                }
             }
         }
         .onDisappear {
-            if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
+            if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
         }
     }
 
-    static func handleKey(_ event: NSEvent, vm: DBoardViewModel?) -> NSEvent? {
-        guard let vm = vm else { return event }
+    private var workspaceContent: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                VStack(spacing: 0) {
+                    switch vm.workspacePage ?? .overview {
+                    case .overview:
+                        WorkspaceOverview()
+                    case .demands:
+                        DemandFilterBar()
+                        NewItemRow()
+                        if vm.filteredItems.isEmpty {
+                            EmptyWorkspaceState(icon: "magnifyingglass", title: vm.items.isEmpty ? "还没有需求" : "没有符合筛选的需求",
+                                detail: vm.items.isEmpty ? "点上方「新增需求」开始记录。" : "可清除筛选，或换个关键词。",
+                                actionTitle: vm.items.isEmpty ? nil : "查看全部", action: { vm.showDemands() })
+                        } else { NeedsSection() }
+                    case .todos:
+                        TodaySection()
+                    case .history:
+                        DemandArchiveSection(store: vm.demandArchives)
+                        if !vm.prevSecs.isEmpty {
+                            Divider().padding(16)
+                            Text("零碎历史").font(.system(size: 14, weight: .semibold))
+                                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16)
+                            ForEach(vm.prevSecs, id: \.dateLabel) { HistoryBlockView(sec: $0) }
+                        }
+                    }
+                }.padding(.bottom, 16)
+            }
+            .id(vm.workspacePage ?? .overview)
+            .onChange(of: vm.selectedID) { _, id in
+                if let id { proxy.scrollTo(id, anchor: .center) }
+            }
+        }
+    }
+
+    static func handleKey(_ event: NSEvent, vm: DBoardViewModel?, dismiss: (() -> Void)? = nil) -> NSEvent? {
+        guard let vm, event.window?.attachedSheet == nil else { return event }
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let c = (event.charactersIgnoringModifiers ?? "").lowercased()
-        // ⌘K
-        if mods.contains(.command) && c == "k" { vm.paletteOpen.toggle(); vm.paletteQuery = ""; vm.paletteSel = 0; return nil }
+        if mods.contains(.command) && c == "k" {
+            vm.paletteOpen.toggle(); vm.paletteQuery = ""; vm.paletteSel = 0; return nil
+        }
         if vm.paletteOpen {
             switch event.keyCode {
-            case 53: vm.paletteOpen = false; return nil      // esc
-            case 125: vm.paletteMove(1); return nil          // ↓
-            case 126: vm.paletteMove(-1); return nil         // ↑
-            case 36: vm.paletteRun(); return nil             // enter
+            case 53: vm.paletteOpen = false; return nil
+            case 125: vm.paletteMove(1); return nil
+            case 126: vm.paletteMove(-1); return nil
+            case 36: vm.paletteRun(); return nil
             default: return event
             }
         }
-        let typing = event.window?.firstResponder is NSTextView
-        if typing { return event }
-        if c == "j" { vm.moveSel(1); return nil }
-        if c == "k" { vm.moveSel(-1); return nil }
-        if event.keyCode == 36 { vm.activateSel(); return nil }   // enter
-        if event.keyCode == 53 {  // esc
-            if vm.selectedID != nil {
-                vm.selectedID = nil
-            } else {
-                // 没有选中项，关闭窗口
-                event.window?.orderOut(nil)
-            }
+        if event.keyCode == 53 && vm.editingFormCount > 0 { return event }
+        if event.window?.firstResponder is NSTextView { return event }
+        if mods.isEmpty && (c == "j" || c == "k") {
+            vm.workspacePage = .demands; vm.moveSel(c == "j" ? 1 : -1); return nil
+        }
+        if mods.isEmpty && event.keyCode == 36 { vm.activateSel(); return nil }
+        if event.keyCode == 53 {
+            if vm.selectedID != nil { vm.selectedID = nil }
+            else if let dismiss { dismiss() }
+            else { event.window?.orderOut(nil) }
             return nil
         }
         return event
@@ -569,26 +723,35 @@ struct CommandPalette: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("搜索需求或动作…", text: $vm.paletteQuery)
-                    .textFieldStyle(.plain).font(.system(size: 14)).focused($focused)
-            }
-            .padding(13)
-            .overlay(Divider(), alignment: .bottom)
-            ScrollView {
-                VStack(spacing: 0) {
-                    ForEach(Array(vm.paletteEntries.enumerated()), id: \.element.id) { i, e in
-                        PaletteRow(entry: e, selected: i == vm.paletteSel)
-                    }
+                TextField("搜索需求、模块或动作…", text: $vm.paletteQuery)
+                    .textFieldStyle(.plain).font(.system(size: 13)).focused($focused)
+            }.padding(16)
+            Divider()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(Array(vm.paletteEntries.enumerated()), id: \.element.id) { index, entry in
+                            PaletteRow(entry: entry, selected: index == vm.paletteSel).id(index)
+                        }
+                        if vm.paletteEntries.isEmpty {
+                            EmptyWorkspaceState(icon: "magnifyingglass", title: "没有匹配项",
+                                detail: "试试需求编号、服务、日志、发布或技能。",
+                                actionTitle: "清空搜索", action: { vm.paletteQuery = "" })
+                        }
+                    }.padding(8)
                 }
-                .padding(5)
+                .onChange(of: vm.paletteSel) { _, index in proxy.scrollTo(index, anchor: .center) }
             }
+            Divider()
+            Text("↑↓ 选择 · Enter 打开 · Esc 收起")
+                .font(.system(size: 11)).foregroundStyle(.secondary).padding(12)
         }
-        .frame(width: 320, height: 360)
-        .focusEffectDisabled()
-        .background(RoundedRectangle(cornerRadius: 13).fill(.regularMaterial))
-        .shadow(color: .black.opacity(0.35), radius: 30, y: 10)
+        .frame(width: 400, height: 440)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.12), radius: 16, y: 8)
         .onAppear { focused = true }
-        .onChange(of: vm.paletteQuery) { _ in vm.paletteSel = 0 }
+        .onChange(of: vm.paletteQuery) { _, _ in vm.paletteSel = 0 }
     }
 }
 
@@ -597,25 +760,29 @@ struct PaletteRow: View {
     let entry: DBoardViewModel.PaletteEntry
     let selected: Bool
     var body: some View {
+        Button(action: entry.action) {
         HStack(spacing: 9) {
             Image(systemName: entry.icon).font(fm.font(14))
-                .foregroundStyle(selected ? Color.blue : Color.gray.opacity(0.6)).frame(width: 14)
-            Text(entry.label).font(fm.font(16))
-                .foregroundStyle(selected ? Color.blue : Color.primary)
+                .foregroundStyle(selected ? Color.accentColor : Color.secondary).frame(width: 14)
+            Text(entry.label).font(.system(size: 13))
+                .foregroundStyle(selected ? Color.accentColor : Color.primary)
             Spacer()
-            Text(entry.sub).font(.system(size: 10, design: .monospaced))
+            Text(entry.sub).font(.system(size: 11))
                 .foregroundStyle(Color.gray.opacity(0.6))
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(selected ? Color.blue.opacity(0.1) : Color.clear)
+        .background(selected ? Color.accentColor.opacity(0.1) : Color.clear)
         .contentShape(Rectangle())
-        .onTapGesture { entry.action() }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(entry.label + "，" + entry.sub)
     }
 }
 
 // MARK: - Header
 struct HeaderView: View {
     @ObservedObject private var flags = FeatureFlags.shared
+    @ObservedObject private var shortcuts = ShortcutPreferences.shared
     @EnvironmentObject var vm: DBoardViewModel
     @EnvironmentObject var theme: ThemeManager
     @EnvironmentObject var fm: FontManager
@@ -648,29 +815,21 @@ struct HeaderView: View {
                     .foregroundStyle(theme.current.textTertiary)
                     .contentTransition(.numericText())
             }
+            if popoverMode {
+                HeaderIconButton(icon: "arrow.up.left.and.arrow.down.right", help: "打开工作窗口") {
+                    (NSApp.delegate as? AppDelegate)?.detachPanel()
+                }
+            }
             HeaderIconButton(icon: "magnifyingglass", help: "命令面板 ⌘K") {
                 vm.paletteQuery = ""; vm.paletteSel = 0; vm.paletteOpen = true
             }
             // 入口收敛: 所有模块收进一个菜单, 不再在头部平铺一排图标
-            Menu {
-                ForEach(DBoardModule.visible) { m in
-                    Button { m.launch() } label: {
-                        Label(m.shortcut.isEmpty ? m.title : "\(m.title)  \(m.shortcut)", systemImage: m.icon)
-                    }
-                }
-            } label: {
-                Image(systemName: "square.grid.2x2").font(.system(size: 13))
-                    .foregroundStyle(theme.current.textTertiary)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("全部模块")
+            DBoardModuleMenu()
         }
         .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 6)
         .contentShape(Rectangle())
         .onHover { showHandle = $0 }
-        // 下拉撕出(与 Skills/BizMap/SysMon 同一套手感); 双击脱出作为旧入口保留
+        // 下拉撕出(与 Skills/BizMap 同一套手感); 双击脱出作为旧入口保留
         .tearOffHandle("DBoardPanel", enabled: popoverMode)
         .onTapGesture(count: 2) {
             // 双击标题区 -> 脱出为独立窗口
@@ -709,19 +868,21 @@ struct NeedsSection: View {
     @EnvironmentObject var vm: DBoardViewModel
     @EnvironmentObject var theme: ThemeManager
     @EnvironmentObject var fm: FontManager
+    var focused = false
+    private var displayedItems: [DItem] { focused ? Array(vm.attentionItems.prefix(6)) : vm.filteredItems }
 
     var groups: [(String, Color, [DItem])] {
         if vm.viewMode == .project {
             var order: [String] = []
             var g: [String: [DItem]] = [:]
-            for it in vm.items {
+            for it in displayedItems {
                 if g[it.project] == nil { order.append(it.project) }
                 g[it.project, default: []].append(it)
             }
-            return order.map { ($0, Color(hex: projColor($0)), g[$0]!) }
+            return order.map { ($0, Color.secondary, g[$0]!) }
         } else {
             return ItemPriority.allCases.compactMap { p in
-                let arr = vm.items.filter { $0.priority == p }
+                let arr = displayedItems.filter { $0.priority == p }
                 return arr.isEmpty ? nil : (p.title, p.color, arr)
             }
         }
@@ -739,12 +900,48 @@ struct NeedsSection: View {
             .transition(.move(edge: .top).combined(with: .opacity))
             VStack(spacing: 6) {
                 ForEach(Array(grp.2.enumerated()), id: \.element.id) { i, item in
-                    ItemCardView(item: item, appearDelay: Double(i) * 0.04 + Double(gi) * 0.02)
+                    ItemCardView(item: item, appearDelay: 0).id(item.id)
                 }
             }
             .padding(.horizontal, 4)
         }
         .animation(.spring(response: 0.5, dampingFraction: 0.8), value: vm.items.count)
+    }
+}
+
+/// Display the most recently appended record first; dates can repeat within the same day.
+struct DemandProgressHistoryView: View {
+    @EnvironmentObject var theme: ThemeManager
+    @EnvironmentObject var fm: FontManager
+    let milestones: [Milestone]
+    @Binding var expanded: Bool
+
+    private var visibleRecords: [Milestone] {
+        expanded ? Array(milestones.reversed()) : Array(milestones.suffix(1))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(Array(visibleRecords.enumerated()), id: \.offset) { _, record in
+                DemandProgressRow(record: record).id(record.date + record.fullContent)
+            }
+            if milestones.count > 1 {
+                Button { expanded.toggle() } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: expanded ? "chevron.up" : "ellipsis")
+                            .font(.system(size: 11, weight: .semibold)).frame(width: 16)
+                        Text(expanded ? "收起历史记录" : "查看全部记录（\(milestones.count) 条）")
+                            .font(.system(size: 12))
+                    }
+                    .foregroundStyle(theme.current.textTertiary)
+                    .padding(.vertical, 5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(expanded ? "只显示最新一条记录" : "展开更早的 \(milestones.count - 1) 条记录")
+            }
+        }
     }
 }
 
@@ -756,58 +953,68 @@ struct ItemCardView: View {
     let item: DItem
     var appearDelay: Double = 0
     @State private var hovered = false
-    @State private var appeared = false
     var expanded: Bool { vm.expandedIDs.contains(item.id) }
     var pcolor: Color { item.priority.color }
-    var projC: Color { Color(hex: projColor(item.project)) }
+    var projC: Color { .secondary }
     var showDesc: Bool { !item.title.isEmpty && item.title != "（待补充）" && item.title != item.displayTitle }
     var hasBranch: Bool { (item.branch?.isEmpty == false && item.branch != "待定") }
     var hasCycle: Bool { item.startDate != nil }
     var hasProgress: Bool { !item.milestones.isEmpty }
-    var hasDetail: Bool { showDesc || hasBranch || hasCycle || hasProgress }
+    var hasDetail: Bool { showDesc || hasBranch || hasCycle || hasProgress || !item.changes.isEmpty || item.changeReadError != nil }
 
-    @State private var editing = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var progressBuf = ""
+    @State private var progressDetails = ""
+    @State private var addingProgressDetails = false
+    @State private var showingAllProgress = false
 
     var body: some View {
         cardContent
         .contextMenu { contextMenuContent }
-        .opacity(appeared ? 1 : 0)
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hovered)
-        .animation(.spring(response: 0.4, dampingFraction: 0.75), value: expanded)
-        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: editing)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: hovered)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: expanded)
         .onHover { hovered = $0 }
-        .onAppear {
-            withAnimation(.easeOut(duration: 0.3).delay(appearDelay)) { appeared = true }
-        }
+        .onChange(of: expanded) { _, open in if !open { showingAllProgress = false } }
     }
 
     @ViewBuilder
     private var cardContent: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if editing {
-                DItemEditForm(draft: DItemDraft(from: item), onSave: { d in
-                    vm.saveItem(d, original: item); editing = false
-                }, onCancel: { editing = false })
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    cardHeader
+            VStack(alignment: .leading, spacing: 6) {
+                    Button { vm.toggleExpanded(item.id) } label: {
+                        cardHeader
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                        .buttonStyle(.plain).accessibilityLabel("\(expanded ? "收起" : "展开") \(item.id) \(item.displayTitle)")
                     cardMeta
+                    if let version = item.version {
+                        Label("\(version.label) · 基于 \(version.parentID)「\(version.parentTitle)」", systemImage: "arrow.triangle.branch")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let link = item.reqFlow {
+                        ReqFlowLinkedRequirementView(link: link, flow: vm.reqFlow) {
+                            BizMapBoardWindowController.shared.showRequirement(link: link)
+                        }
+                    }
                 }
-                .contentShape(Rectangle())
-                .onTapGesture { vm.toggleExpanded(item.id) }
+                if vm.archivingIDs.contains(item.id) {
+                    HStack(spacing: 8) { ProgressView().controlSize(.small); Text("归档处理中…").font(.system(size: 11)) }
+                }
                 if expanded {
+                    DemandContextView(item: item)
                     cardDetails
+                    DemandDebuggingView(item: item)
                     progressInput
                     actionBar
                 }
-            }
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
         .cardStyle(theme.current)
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .fill(!editing && (vm.selectedID == item.id || hovered) ? theme.current.textPrimary.opacity(0.035) : Color.clear)
+                .fill((vm.selectedID == item.id || hovered) ? theme.current.textPrimary.opacity(0.035) : Color.clear)
                 .allowsHitTesting(false)
         )
         .padding(.horizontal, 16)
@@ -815,42 +1022,65 @@ struct ItemCardView: View {
     }
 
     private var progressInput: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "plus.circle").font(.system(size: 12)).foregroundStyle(theme.current.textMuted)
-            TextField("追加今日进度，回车保存", text: $progressBuf)
-                .textFieldStyle(.plain).font(.system(size: 13))
-                .onSubmit {
-                    vm.appendProgress(item.id, progressBuf); progressBuf = ""
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
+                Image(systemName: "plus.circle").font(.system(size: 12)).foregroundStyle(theme.current.textMuted)
+                TextField("一句话记录今日进度，回车保存", text: $progressBuf)
+                    .textFieldStyle(.plain).font(.system(size: 13)).onSubmit { saveProgress() }
+                Button(addingProgressDetails ? "收起明细" : "补充明细") { addingProgressDetails.toggle() }
+                    .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
+                    .frame(minHeight: 28)
+                if !addingProgressDetails {
+                    Button("保存", action: saveProgress).controlSize(.small).disabled(progressBuf.trimmed.isEmpty)
                 }
+            }
+            if addingProgressDetails {
+                TextField("明细（可选，仅保留在本地）", text: $progressDetails, axis: .vertical)
+                    .textFieldStyle(.plain).font(.system(size: 13)).lineLimit(3...12)
+                HStack {
+                    Text("钉钉只同步一句话概括").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("保存") { saveProgress() }.controlSize(.small).disabled(progressBuf.trimmed.isEmpty)
+                }
+            }
         }
-        .padding(.horizontal, 8).padding(.vertical, 5)
+        .padding(.horizontal, 8).padding(.vertical, 7)
         .background(RoundedRectangle(cornerRadius: 6).fill(theme.current.textPrimary.opacity(0.05)))
     }
 
+    private func saveProgress() {
+        if vm.appendProgress(item.id, progressBuf, details: progressDetails) {
+            progressBuf = ""
+            progressDetails = ""
+            addingProgressDetails = false
+        }
+    }
+
     private var actionBar: some View {
-        HStack(spacing: 12) {
-            actionBtn("编辑", "pencil") { editing = true }
+        HStack(spacing: 10) {
+            actionBtn("编辑需求", "pencil") { vm.openDemandEditor(.details, item: item) }
+            actionBtn("追加变更", "wand.and.stars") { vm.openDemandEditor(.changes, item: item) }
+            Spacer()
             Menu {
-                ForEach(ItemPriority.allCases, id: \.self) { p in
-                    Button { if p != item.priority { vm.setPriority(item.id, p) } } label: {
-                        Label(p.title, systemImage: p == item.priority ? "checkmark" : "circle")
+                Menu("调整优先级") {
+                    ForEach(ItemPriority.allCases, id: \.self) { p in
+                        Button { if p != item.priority { vm.setPriority(item.id, p) } } label: {
+                            Label(p.title, systemImage: p == item.priority ? "checkmark" : "circle")
+                        }
                     }
                 }
-            } label: {
-                Label("优先级", systemImage: "flag").font(.system(size: 12))
-            }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-            .foregroundStyle(theme.current.textTertiary)
-            actionBtn("完成并归档", "archivebox") { vm.archiveItem(item) }
-            Spacer()
-            actionBtn("删除", "trash", tint: .red) { vm.deleteItem(item) }
-        }
-        .padding(.top, 2)
+                Button("完成并归档", systemImage: "archivebox") { vm.archiveItem(item) }
+                Divider()
+                Button("删除需求", systemImage: "trash", role: .destructive) { vm.deleteItem(item) }
+            } label: { Label("更多", systemImage: "ellipsis").font(.system(size: 12)) }
+            .menuStyle(.borderlessButton).fixedSize()
+        }.padding(.top, 4)
     }
 
     private func actionBtn(_ t: String, _ icon: String, tint: Color? = nil, _ a: @escaping () -> Void) -> some View {
         Button(action: a) {
             Label(t, systemImage: icon).font(.system(size: 12))
+                .padding(.horizontal, 6).frame(minHeight: 30).contentShape(Rectangle())
                 .foregroundStyle(tint ?? theme.current.textTertiary)
         }
         .buttonStyle(.plain)
@@ -865,16 +1095,10 @@ struct ItemCardView: View {
                 .lineLimit(expanded ? nil : 2)
                 .foregroundStyle(theme.current.textPrimary)
             Spacer()
-            if let dl = item.daysRemaining {
-                if item.isUrgent {
-                    Text("\(dl)天")
-                        .font(fm.font(13))
-                        .foregroundStyle(Color.red)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Capsule().fill(Color.red.opacity(0.1)))
-                } else {
-                    Text("\(dl)天").font(fm.font(13)).foregroundStyle(theme.current.textTertiary)
-                }
+            if let label = item.deadlineLabel {
+                Text(label).font(.system(size: 11)).monospacedDigit()
+                    .foregroundStyle(item.isUrgent ? Color.red : Color.secondary)
+                    .fixedSize().help(item.deadline ?? "")
             }
             Image(systemName: "chevron.right").font(fm.font(13))
                 .rotationEffect(.degrees(expanded ? 90 : 0))
@@ -889,14 +1113,53 @@ struct ItemCardView: View {
             Text("·").font(fm.font(13)).foregroundStyle(theme.current.separator)
             Text(item.project).font(fm.font(13)).foregroundStyle(theme.current.textTertiary)
             Text("·").font(fm.font(13)).foregroundStyle(theme.current.separator)
-            StatusPill(status: item.status) { vm.cycleStatus(item.id) }
+            StatusPill(status: item.status, onTap: {}, onSelect: { vm.cycleToStatus(item.id, target: $0) })
             Spacer()
+            Button { vm.copyCurrentState(item.id) } label: {
+                Label("复制现状", systemImage: "doc.on.doc").font(.system(size: 12))
+                    .padding(.horizontal, 6).frame(minHeight: 28).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).foregroundStyle(.secondary)
+            .accessibilityLabel("复制现状").accessibilityIdentifier("demand-copy-" + item.id)
+            .help("复制短指令，让 AI 通过 CLI 读取最新现状并继续")
+            Button { vm.openDemandEditor(.prompt, item: item) } label: {
+                Label("咒言", systemImage: "wand.and.stars")
+                    .font(.system(size: 12)).padding(.horizontal, 6).frame(minHeight: 28).contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityIdentifier("demand-prompt-" + item.id).foregroundStyle(.secondary).help("编写咒言，准备给 AI 的上下文")
         }
     }
 
     @ViewBuilder
     private var cardDetails: some View {
         VStack(alignment: .leading, spacing: 5) {
+            Button { vm.openDemandEditor(.chats, item: item) } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "bubble.left.and.bubble.right")
+                    Text(item.chatLinks?.summary ?? "关联群聊").lineLimit(2).multilineTextAlignment(.leading)
+                    Spacer()
+                    Text(item.chatLinks == nil ? "添加" : "管理").font(.system(size: 11))
+                    Image(systemName: "chevron.right").font(.system(size: 10))
+                }
+                .font(.system(size: 12)).foregroundStyle(.secondary)
+                .padding(.horizontal, 8).frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+                .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).accessibilityIdentifier("demand-chats-" + item.id)
+            if let error = item.chatReadError {
+                Text(error).font(.system(size: 12)).foregroundStyle(.orange)
+            }
+            if !item.changes.isEmpty {
+                HStack {
+                    Label("追加变更 " + String(item.changes.count) + " 条", systemImage: "wand.and.stars")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("查看变更") { vm.openDemandEditor(.changes, item: item) }.font(.system(size: 12)).buttonStyle(.plain)
+                }
+            }
+            if let error = item.changeReadError {
+                Text(error).font(.system(size: 12)).foregroundStyle(.red)
+            }
             if hasDetail {
                 if showDesc {
                     HStack(alignment: .top, spacing: 6) {
@@ -917,16 +1180,8 @@ struct ItemCardView: View {
                     }
                 }
                 if hasProgress {
-                    VStack(alignment: .leading, spacing: 3) {
-                        ForEach(Array(item.milestones.enumerated()), id: \.offset) { _, ms in
-                            HStack(spacing: 5) {
-                                Circle().fill(theme.current.accentPrimary).frame(width: 5, height: 5)
-                                Text(ms.date).font(.system(size: 10, design: .monospaced)).foregroundStyle(theme.current.textMuted)
-                                Text(ms.content).font(fm.font(14)).foregroundStyle(theme.current.textSecondary)
-                            }
-                        }
-                    }
-                    .padding(.leading, 4)
+                    DemandProgressHistoryView(milestones: item.milestones, expanded: $showingAllProgress)
+                        .padding(.leading, 4)
                 }
             } else {
                 Text("暂无详情，点「编辑」补充").font(fm.font(14)).foregroundStyle(theme.current.textMuted)
@@ -938,11 +1193,20 @@ struct ItemCardView: View {
 
     @ViewBuilder
     private var contextMenuContent: some View {
+        Button("复制现状", systemImage: "doc.text") { vm.copyCurrentState(item.id) }
+        Button("追加变更咒言", systemImage: "wand.and.stars") { vm.openDemandEditor(.changes, item: item) }
+        Button("编辑咒言", systemImage: "wand.and.stars") { vm.openDemandEditor(.prompt, item: item) }
+        Divider()
         Button { vm.toggleExpanded(item.id) } label: {
             Label(expanded ? "折叠" : "展开详情", systemImage: expanded ? "chevron.up" : "chevron.down")
         }
-        Button { if !expanded { vm.toggleExpanded(item.id) }; editing = true } label: {
+        Button { if !expanded { vm.toggleExpanded(item.id) }; vm.openDemandEditor(.details, item: item) } label: {
             Label("编辑", systemImage: "pencil")
+        }
+        if let link = item.reqFlow {
+            Button { BizMapBoardWindowController.shared.showRequirement(link: link) } label: {
+                Label("打开关联需求 \(link.no)", systemImage: "arrow.up.right.square")
+            }
         }
         Divider()
         if let b = item.branch, !b.isEmpty, b != "待定" {
@@ -987,41 +1251,34 @@ struct ItemCardView: View {
 
 // MARK: - 状态药丸
 struct StatusPill: View {
-    @EnvironmentObject var fm: FontManager
     let status: ItemStatus
     let onTap: () -> Void
-    @State private var pop = false
-    @State private var hovered = false
+    var onSelect: ((ItemStatus) -> Void)? = nil
     var fg: Color {
         switch status {
-        case .pending: return Color.secondary
-        case .inProgress: return Color.blue
-        case .completed: return Color.green
-        case .suspended: return Color.orange
+        case .pending: return .secondary
+        case .inProgress: return .accentColor
+        case .completed: return .green
+        case .suspended: return .orange
         }
     }
     var body: some View {
-        Text(status.label).font(fm.font(13))
-            .foregroundStyle(fg)
-            .padding(.horizontal, 7).padding(.vertical, 1)
-            .background(
-                Capsule().fill(
-                    LinearGradient(colors: [fg.opacity(0.15), fg.opacity(0.06)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                )
-            )
-            .scaleEffect(pop ? 1.15 : (hovered ? 1.08 : 1))
-            .id(status)
-            .contentShape(Capsule())
-            .onHover { hovered = $0 }
-            .onTapGesture {
-                withAnimation(.spring(response: 0.2, dampingFraction: 0.5)) { pop = true }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { pop = false }
+        Menu {
+            ForEach([ItemStatus.pending, .inProgress, .completed, .suspended], id: \.rawValue) { target in
+                Button {
+                    if let onSelect { onSelect(target) }
+                } label: {
+                    if target == status { Label(target.label, systemImage: "checkmark") }
+                    else { Text(target.label) }
                 }
-                onTap()
             }
-            .animation(.spring(response: 0.25, dampingFraction: 0.65), value: hovered)
-            .animation(.spring(response: 0.3, dampingFraction: 0.65), value: status)
+        } label: {
+            Text(status.label).font(.system(size: 11))
+                .foregroundStyle(fg).padding(.horizontal, 8).padding(.vertical, 4)
+                .background(fg.opacity(0.08), in: Capsule())
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .help("选择需求状态")
     }
 }
 
@@ -1125,191 +1382,191 @@ struct TodaySection: View {
     @EnvironmentObject var vm: DBoardViewModel
     @EnvironmentObject var theme: ThemeManager
     @EnvironmentObject var fm: FontManager
+    var compactWhenEmpty = false
+    @State private var adding = false
+    @FocusState private var addFocused: Bool
+    private var compact: Bool { compactWhenEmpty && vm.todayTodos.isEmpty && !adding }
+
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("今日零碎").font(.system(size: 13, weight: .semibold)).foregroundStyle(theme.current.textSecondary)
+            HStack(spacing: 8) {
+                Text("今日零碎")
+                    .font(.system(size: compact ? 12 : 13, weight: compact ? .regular : .semibold))
+                    .foregroundStyle(compact ? theme.current.textTertiary : theme.current.textSecondary)
+                if vm.todayTodos.isEmpty && !adding && !compact {
+                    Text("还没有添加").font(.system(size: 12)).foregroundStyle(.secondary)
+                }
                 Spacer()
-                Text("\(vm.doneCount)/\(vm.totalCount)")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(theme.current.textMuted)
-                    .contentTransition(.numericText())
+                if vm.todayTodos.isEmpty && !adding {
+                    addButton
+                } else {
+                    Text("\(vm.doneCount)/\(vm.totalCount)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(theme.current.textMuted)
+                        .contentTransition(.numericText())
+                }
             }
-            .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 6)
+            .padding(.horizontal, 20)
+            .padding(.top, compact ? 0 : 16).padding(.bottom, compact ? 0 : 6)
 
-            // 醒目的添加行
-            HStack(spacing: 10) {
-                Image(systemName: "plus.circle.fill")
-                    .font(.system(size: 16))
-                    .foregroundStyle(theme.current.accentPrimary)
-                TextField("添加今日零碎…", text: $vm.newTodoText)
-                    .font(fm.font(15))
-                    .textFieldStyle(.plain)
-                    .foregroundStyle(theme.current.textPrimary)
-                    .onSubmit {
-                        let text = vm.newTodoText.trimmingCharacters(in: .whitespaces)
-                        guard !text.isEmpty else { return }
-                        vm.newTodoText = ""
-                        vm.addTodo(text)
+            if adding {
+                HStack(spacing: 10) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 16)).foregroundStyle(theme.current.accentPrimary)
+                    TextField("添加今日零碎…", text: $vm.newTodoText)
+                        .font(fm.font(15)).textFieldStyle(.plain)
+                        .foregroundStyle(theme.current.textPrimary)
+                        .focused($addFocused)
+                        .accessibilityLabel("添加今日零碎")
+                        .onAppear { addFocused = true }
+                        .onSubmit {
+                            let text = vm.newTodoText.trimmingCharacters(in: .whitespaces)
+                            guard !text.isEmpty else { return }
+                            if vm.addTodo(text) { vm.newTodoText = "" }
+                        }
+                    if !vm.newTodoText.trimmed.isEmpty {
+                        Text("回车添加").font(fm.font(12)).foregroundStyle(theme.current.textMuted)
                     }
-                if !vm.newTodoText.trimmingCharacters(in: .whitespaces).isEmpty {
-                    Text("回车添加").font(fm.font(12)).foregroundStyle(theme.current.textMuted)
+                    Button("取消", action: closeInput).controlSize(.small)
                 }
-            }
-            .padding(.horizontal, 12).padding(.vertical, 9)
-            .background(RoundedRectangle(cornerRadius: 8).fill(theme.current.textPrimary.opacity(0.05)))
-            .padding(.horizontal, 16).padding(.vertical, 4)
-
-            if vm.todayTodos.isEmpty {
-                VStack(spacing: 6) {
-                    Image(systemName: "checklist").font(.system(size: 22)).foregroundStyle(theme.current.textMuted)
-                    Text("今天还没有零碎事项，上面一行直接输入").font(.system(size: 12)).foregroundStyle(theme.current.textTertiary)
+                .padding(.horizontal, 12).padding(.vertical, 9)
+                .background(RoundedRectangle(cornerRadius: 8).fill(theme.current.textPrimary.opacity(0.05)))
+                .padding(.horizontal, 16).padding(.vertical, 4)
+                .onExitCommand(perform: closeInput)
+            } else if !vm.todayTodos.isEmpty {
+                HStack {
+                    addButton
+                    Spacer()
                 }
-                .frame(maxWidth: .infinity).padding(.vertical, 18)
+                .padding(.horizontal, 20).padding(.vertical, 8)
             }
 
-            ForEach(Array(vm.todayTodos.enumerated()), id: \.offset) { idx, td in
-                TodoRow(idx: idx, todo: td, readOnly: false)
-                    .id("today-\(idx)")
+            ForEach(Array(vm.todayTodos.enumerated()), id: \.element.id) { idx, td in
+                TodoRow(idx: idx, todo: td, readOnly: false).id(td.id)
             }
         }
         .animation(.spring(response: 0.5, dampingFraction: 0.7), value: vm.allDone)
+        .onDisappear(perform: closeInput)
+    }
+
+    private var addButton: some View {
+        Button {
+            adding = true
+        } label: {
+            Label(vm.newTodoText.isEmpty ? "添加" : "继续添加", systemImage: "plus")
+                .font(.system(size: 12))
+        }
+        .buttonStyle(.plain).foregroundStyle(Color.accentColor)
+        .accessibilityLabel("添加今日零碎")
+    }
+
+    private func closeInput() {
+        addFocused = false
+        adding = false
     }
 }
 
 // MARK: - 零碎行
 struct TodoRow: View {
     @EnvironmentObject var vm: DBoardViewModel
-    @EnvironmentObject var theme: ThemeManager
-    @EnvironmentObject var fm: FontManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let idx: Int
     let todo: TodoItem
     let readOnly: Bool
-    @State private var pop = false
-    @State private var checkBounce = false
-    @State private var hovered = false
     @State private var editingText = false
     @State private var editingNote = false
     @State private var textBuf = ""
     @State private var noteBuf = ""
+    @State private var registeredEditing = false
     @FocusState private var textFocused: Bool
     @FocusState private var noteFocused: Bool
+    private var isEditing: Bool { editingText || editingNote }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .top, spacing: 10) {
-                Button {
-                    if !readOnly {
-                        vm.toggleTodo(idx)
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.5)) { checkBounce = true }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            withAnimation(.spring(response: 0.2, dampingFraction: 0.8)) { checkBounce = false }
-                        }
-                    }
-                } label: {
-                    ZStack {
-                        Circle().stroke(todo.isCompleted ? Color.green : (hovered ? theme.current.accentPrimary : theme.current.textMuted), lineWidth: 1.5)
-                            .frame(width: 18, height: 18)
-                        if todo.isCompleted {
-                            Circle().fill(Color.green.opacity(0.3)).frame(width: 18, height: 18)
-                                .scaleEffect(pop ? 1.7 : 1).opacity(pop ? 0 : 0.6)
-                            Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
-                        }
-                    }
-                    .contentShape(Circle())
-                    .background(todo.isCompleted ? Color.green : .clear, in: Circle())
-                    .scaleEffect(todo.isCompleted && pop ? 1.15 : 1)
+        HStack(alignment: .top, spacing: 12) {
+            Button { vm.toggleTodo(todo) } label: {
+                Image(systemName: todo.isCompleted ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 18)).foregroundStyle(todo.isCompleted ? Color.green : Color.secondary)
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain).disabled(readOnly || isEditing)
+            .accessibilityLabel(todo.isCompleted ? "恢复事项为未完成" : "完成事项")
+            VStack(alignment: .leading, spacing: 8) {
+                if todo.isCarriedOver, let origin = todo.origin {
+                    Label("\(origin.date) 顺延，修改会写回原日期", systemImage: "arrow.turn.down.right")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
-                .disabled(readOnly)
-                .onChange(of: todo.isCompleted) { done in
-                    if done {
-                        pop = false
-                        withAnimation(.easeOut(duration: 0.5)) { pop = true }
-                    }
-                }
-
-                if editingText && !readOnly {
-                    TextField(todo.text, text: $textBuf, onCommit: {
-                        if !textBuf.isEmpty { vm.editTodo(idx, newText: textBuf) }
-                        editingText = false
-                    })
-                    .font(fm.font(15))
-                    .focused($textFocused)
-                    .textFieldStyle(.plain)
-                    .padding(5)
-                    .background(RoundedRectangle(cornerRadius: 6).stroke(Color.blue.opacity(0.4)))
+                if editingText {
+                    TextField("事项内容", text: $textBuf).textFieldStyle(.roundedBorder)
+                        .focused($textFocused).onSubmit(saveText)
+                    editActions(save: saveText)
                 } else {
-                    Text(todo.text).font(fm.font(15))
-                        .strikethrough(todo.isCompleted, color: theme.current.chrome)
-                        .foregroundStyle(todo.isCompleted ? theme.current.textMuted : theme.current.textPrimary)
-                        .animation(.easeInOut(duration: 0.35), value: todo.isCompleted)
-                        .onTapGesture(count: 2) {
-                            if !readOnly { textBuf = todo.text; editingText = true; textFocused = true }
-                        }
+                    Text(todo.text).font(.system(size: 13))
+                        .foregroundStyle(todo.isCompleted ? .secondary : .primary)
+                        .strikethrough(todo.isCompleted).textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .onTapGesture(count: 2) { if !readOnly { beginText() } }
                 }
-
-                Spacer()
-                if !readOnly && hovered && !editingText {
-                    HStack(spacing: 1) {
-                        IconBtn("pencil") { textBuf = todo.text; editingText = true; textFocused = true }
-                        IconBtn("message") { noteBuf = todo.note ?? ""; editingNote = true; noteFocused = true }
-                        IconBtn("xmark", color: .red) { vm.deleteTodo(idx) }
-                    }
-                    .transition(.opacity)
+                if editingNote {
+                    TextField("备注", text: $noteBuf).textFieldStyle(.roundedBorder)
+                        .focused($noteFocused).onSubmit(saveNote)
+                    editActions(save: saveNote)
+                } else if let note = todo.note {
+                    Label(note, systemImage: "message").font(.system(size: 12)).foregroundStyle(.secondary)
+                        .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 }
-            }
-
-            if editingNote && !readOnly {
-                TextField("备注…", text: $noteBuf, axis: .vertical)
-                    .font(fm.font(14))
-                    .focused($noteFocused)
-                    .textFieldStyle(.plain)
-                    .padding(5)
-                    .background(RoundedRectangle(cornerRadius: 5).stroke(Color.blue.opacity(0.4)))
-                    .onSubmit {
-                        vm.addNote(idx, note: noteBuf); editingNote = false
-                    }
-            } else if let note = todo.note {
-                HStack(alignment: .top, spacing: 4) {
-                    Image(systemName: "message").font(.system(size: 9)).foregroundStyle(theme.current.chrome)
-                    Text(note).font(fm.font(14)).foregroundStyle(theme.current.textTertiary)
-                }.padding(.leading, 28)
-            }
-        }
-        .padding(.horizontal, 20).padding(.vertical, 7)
-        .scaleEffect(checkBounce ? 1.02 : 1.0)
-        .background(
-            RoundedRectangle(cornerRadius: 6).fill(hovered && !readOnly ? theme.current.textPrimary.opacity(0.04) : .clear).padding(.horizontal, 12)
-        )
-        .contextMenu {
+                if let link = todo.linkedDItem {
+                    Button {
+                        if vm.items.contains(where: { $0.id == link }) { vm.focusItem(link) }
+                        else { vm.showFeedback("关联需求不在当前本地看板中，请核对历史记录", failed: true) }
+                    } label: { Label("关联 \(link)", systemImage: "link") }
+                    .font(.system(size: 11)).buttonStyle(.plain).foregroundStyle(Color.accentColor)
+                    .help("打开关联需求")
+                }
+                if let time = todo.completedAt {
+                    Text("完成于 \(time)").font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading)
             if !readOnly {
-                Button {
-                    textBuf = todo.text; editingText = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { textFocused = true }
-                } label: {
-                    Label("编辑", systemImage: "pencil")
-                }
-                Button {
-                    noteBuf = todo.note ?? ""; editingNote = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { noteFocused = true }
-                } label: {
-                    Label(todo.note != nil ? "编辑备注" : "添加备注", systemImage: "message")
-                }
-                Divider()
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(todo.text, forType: .string)
-                } label: {
-                    Label("复制内容", systemImage: "doc.on.doc")
-                }
-                Divider()
-                Button(role: .destructive) { vm.deleteTodo(idx) } label: {
-                    Label("删除", systemImage: "trash")
-                }
+                Menu { actions } label: { Image(systemName: "ellipsis").frame(width: 24, height: 24) }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .disabled(isEditing).accessibilityLabel("事项操作").help("编辑、备注、复制或删除")
             }
         }
-        .onHover { hovered = $0 }
+        .padding(.horizontal, 20).padding(.vertical, 12)
+        .contextMenu { if !readOnly { actions } }
+        .animation(reduceMotion ? nil : DBoardUI.spring, value: todo.isCompleted)
+        .onExitCommand { if isEditing { editingText = false; editingNote = false } }
+        // 保存旧记录会换行身份，视图可能在状态回落前消失；只按本行登记过的次数归还
+        .onChange(of: isEditing) { _, editing in
+            guard editing != registeredEditing else { return }
+            registeredEditing = editing
+            vm.editingFormCount = max(0, vm.editingFormCount + (editing ? 1 : -1))
+        }
+        .onDisappear {
+            if registeredEditing { registeredEditing = false; vm.editingFormCount = max(0, vm.editingFormCount - 1) }
+        }
+    }
+
+    private func beginText() { textBuf = todo.text; editingText = true; textFocused = true }
+    private func saveText() { if vm.editTodo(todo, newText: textBuf) { editingText = false } }
+    private func saveNote() { if vm.addNote(todo, note: noteBuf) { editingNote = false } }
+    private func editActions(save: @escaping () -> Void) -> some View {
+        HStack(spacing: 8) {
+            Button("保存", action: save)
+            Button("取消") { editingText = false; editingNote = false }
+        }.controlSize(.small)
+    }
+    @ViewBuilder private var actions: some View {
+        Button("编辑", systemImage: "pencil", action: beginText)
+        Button(todo.note == nil ? "添加备注" : "编辑备注", systemImage: "message") {
+            noteBuf = todo.note ?? ""; editingNote = true; noteFocused = true
+        }
+        Button("复制内容", systemImage: "doc.on.doc") {
+            NSPasteboard.general.clearContents(); NSPasteboard.general.setString(todo.text, forType: .string)
+        }
+        Divider()
+        Button("删除", systemImage: "trash", role: .destructive) { vm.deleteTodo(todo) }
     }
 }
 
@@ -1331,63 +1588,38 @@ struct IconBtn: View {
 }
 
 struct FooterView: View {
-    @ObservedObject private var flags = FeatureFlags.shared
+    @ObservedObject private var cookieReminder = DouyinCookieReminderStore.shared
     @EnvironmentObject var vm: DBoardViewModel
     @EnvironmentObject var theme: ThemeManager
-    @EnvironmentObject var fm: FontManager
+    @Environment(\.openSettings) private var openSettings
     var body: some View {
-        HStack(spacing: 6) {
-            // 引擎心跳: 值守/资讯/同步 三个 daemon 的死活 + 同步动作反馈
+        HStack(spacing: 12) {
             EngineStrip()
-            Spacer()
-            FooterButton(vm.viewMode == .project ? "按项目" : "按优先级") { vm.setViewMode(vm.viewMode == .project ? .priority : .project) }
-            FooterButton(vm.expandedIDs.isEmpty ? "展开" : "折叠") {
-                if vm.expandedIDs.isEmpty { vm.expandAll() } else { vm.collapseAll() }
-            }
-            Button { vm.paletteOpen.toggle() } label: {
-                Text("⌘K").font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(theme.current.textTertiary)
-                    .padding(.horizontal, 5).padding(.vertical, 2)
-                    .background(RoundedRectangle(cornerRadius: 4).fill(theme.current.textPrimary.opacity(0.06)))
-            }.buttonStyle(SmoothButtonStyle(scale: 0.88))
-            FooterButtonIcon("arrow.clockwise") { vm.reload() }
-            FooterButtonIcon("bolt") { vm.doSyncNow() }
+            Spacer(minLength: 4)
+            Text(vm.syncText.isEmpty ? "本地看板" : vm.syncText)
+                .font(.system(size: 11)).foregroundStyle(vm.syncKind == .fail ? Color.orange : Color.secondary)
+                .lineLimit(1)
             Menu {
-                Section("功能") {
-                    Toggle("钉钉值守（自动回复 + 待回复提醒）", isOn: Binding(
-                        get: { flags.replyEnabled },
-                        set: { flags.setReplyEnabled($0) }))
+                Button("刷新看板") { vm.reload() }
+                Button("立即同步钉钉") { vm.doSyncNow() }
+                Button(vm.expandedIDs.isEmpty ? "展开全部需求" : "折叠全部需求") {
+                    if vm.expandedIDs.isEmpty { vm.expandAll() } else { vm.collapseAll() }
                 }
-                Section("主题") {
-                    ForEach(DBoardTheme.all) { t in
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.3)) { ThemeManager.shared.current = t }
-                        } label: {
-                            Label(t.name, systemImage: theme.current.id == t.id ? "checkmark" : t.icon)
-                        }
+                Divider()
+                ForEach(OpsAction.all) { op in
+                    Button(op.title + (op.id == OpsAction.douyinCookie.id
+                        ? cookieReminder.expiry.map { "（" + $0.summary + "）" } ?? "" : "")) {
+                        OpsRunner.shared.requestRun(op)
                     }
                 }
-                Section("字体") {
-                    ForEach(DBoardFont.all) { f in
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.3)) { FontManager.shared.current = f }
-                        } label: {
-                            Label(f.name, systemImage: fm.current.id == f.id ? "checkmark" : "textformat")
-                        }
-                    }
-                }
-            } label: {
-                Image(systemName: "gearshape").font(.system(size: 12)).foregroundStyle(theme.current.textMuted)
-                    .padding(3)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("设置")
+                Divider()
+                Button("设置…") { openSettings() }
+            } label: { Image(systemName: "ellipsis.circle") }
+            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+            .help("更多操作")
         }
-        .padding(.horizontal, 14).padding(.vertical, 7)
-        .overlay(alignment: .top) {
-            Color.black.opacity(0.06).frame(height: 1)
-        }
+        .padding(.horizontal, 20).padding(.vertical, 12)
+        .background(.bar)
     }
 }
 

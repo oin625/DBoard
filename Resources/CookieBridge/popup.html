@@ -16,7 +16,12 @@
 </style>
 </head>
 <body>
-  <h3>DBoard Cookie Bridge v2.4</h3>
+  <h3 id="version">DBoard Cookie Bridge</h3>
+  <button id="canary-pair">连接 Canary / 同步已有登录态</button>
+  <div class="row" id="canary">Canary: -</div>
+  <div class="row">首次连接请在 DBoard 弹窗中允许；以后自动同步，无需选文件或重新登录。</div>
+  <button id="reload-extension">重新加载扩展（更新后台）</button>
+  <hr>
   <button id="open">打开 ai.tmallyc.com（已登录则什么都不用点）</button>
   <button id="push">立即再投递一次</button>
   <div class="row" id="pushed">-</div>

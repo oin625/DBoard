@@ -38,6 +38,8 @@ private final class AppReleaseWebHost: NSViewController {
     private var webViewConstraints: [NSLayoutConstraint] = []
     private let webViewContainer = NSView()
     private let dragHandle: AppReleaseWindowDragHandle
+    private let pinButton = NSButton()
+    var onTogglePin: (() -> Void)?
 
     init(webView: WKWebView, title: String) {
         self.webView = webView
@@ -46,6 +48,16 @@ private final class AppReleaseWebHost: NSViewController {
     }
 
     required init?(coder: NSCoder) { nil }
+
+    func setPinned(_ pinned: Bool) {
+        pinButton.image = NSImage(systemSymbolName: pinned ? "pin.fill" : "pin", accessibilityDescription: nil)
+        pinButton.contentTintColor = pinned ? .controlAccentColor : .secondaryLabelColor
+        pinButton.toolTip = pinned ? "取消置顶" : "置顶窗口（切换应用时保持显示）"
+        pinButton.setAccessibilityLabel(pinButton.toolTip)
+        pinButton.setAccessibilityValue(pinned ? "已置顶" : "未置顶")
+    }
+
+    @objc private func togglePin() { onTogglePin?() }
 
     func setTitle(_ title: String) {
         dragHandle.title = title
@@ -68,7 +80,17 @@ private final class AppReleaseWebHost: NSViewController {
         webViewContainer.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(webViewContainer)
         view.addSubview(dragHandle)
+        pinButton.translatesAutoresizingMaskIntoConstraints = false
+        pinButton.isBordered = false
+        pinButton.target = self
+        pinButton.action = #selector(togglePin)
+        setPinned(false)
+        dragHandle.addSubview(pinButton)
         NSLayoutConstraint.activate([
+            pinButton.trailingAnchor.constraint(equalTo: dragHandle.trailingAnchor, constant: -10),
+            pinButton.centerYAnchor.constraint(equalTo: dragHandle.centerYAnchor),
+            pinButton.widthAnchor.constraint(equalToConstant: 28),
+            pinButton.heightAnchor.constraint(equalToConstant: 28),
             dragHandle.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             dragHandle.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             dragHandle.topAnchor.constraint(equalTo: view.topAnchor),
@@ -186,7 +208,11 @@ final class AppReleaseWindowController: NSObject, WKNavigationDelegate, WKUIDele
     private var outsideClickMonitor: Any?
     private var localClickMonitor: Any?
     private var resignActiveObserver: NSObjectProtocol?
+    private var escapeMonitor: Any?
+    private let focusReturn = PanelFocusReturn()
     private var page: Page = .appRelease
+    private var pinnedPages: Set<Page> = []
+    private var isPinned: Bool { pinnedPages.contains(page) }
     private var loadFailed = false
     private var chromeSession: HTTPCookie?
     private static let diagnosticQueue = DispatchQueue(label: "dboard.audi-diagnostic")
@@ -225,6 +251,7 @@ final class AppReleaseWindowController: NSObject, WKNavigationDelegate, WKUIDele
     func showLogs() { show(.logs) }
 
     private func show(_ target: Page) {
+        focusReturn.capture()
         let pageChanged = page != target
         page = target
         if let window {
@@ -246,6 +273,8 @@ final class AppReleaseWindowController: NSObject, WKNavigationDelegate, WKUIDele
             } else if loadFailed, let chromeSession {
                 install(chromeSession, into: webView)
             }
+            window.hidesOnDeactivate = !isPinned
+            webHost?.setPinned(isPinned)
             centerWindowOnMouseScreen(window)
             NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
@@ -278,6 +307,7 @@ final class AppReleaseWindowController: NSObject, WKNavigationDelegate, WKUIDele
         self.webView = webView
         self.webHost = webHost
         self.window = window
+        webHost.onTogglePin = { [weak self] in self?.togglePin() }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         installDismissMonitors()
@@ -328,31 +358,51 @@ final class AppReleaseWindowController: NSObject, WKNavigationDelegate, WKUIDele
     @objc private func dismissWindow() {
         window?.orderOut(nil)
         teardownDismissMonitors()
+        focusReturn.restore()
+    }
+
+    private func togglePin() {
+        if isPinned { pinnedPages.remove(page) }
+        else { pinnedPages.insert(page) }
+        window?.hidesOnDeactivate = !isPinned
+        webHost?.setPinned(isPinned)
+        installDismissMonitors()
     }
 
     private func installDismissMonitors() {
         teardownDismissMonitors()
+        escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, let window = self.window, window.isVisible, window.isKeyWindow,
+                  event.window === window, event.keyCode == 53, window.attachedSheet == nil else { return event }
+            self.dismissWindow()
+            return nil
+        }
+        guard !isPinned else { return }
         let clickEvents: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown]
         outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: clickEvents) { [weak self] _ in
             DispatchQueue.main.async { self?.dismissIfClickedOutside() }
         }
         localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: clickEvents) { [weak self] event in
+            if let self, event.window !== self.window, event.window != nil { self.focusReturn.discard() }
             self?.dismissIfClickedOutside()
             return event
         }
         resignActiveObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            self?.dismissWindow()
+            guard let self, !self.isPinned else { return }
+            self.dismissWindow()
         }
     }
 
     private func dismissIfClickedOutside() {
-        guard let window, window.isVisible, !window.frame.contains(NSEvent.mouseLocation) else { return }
-        DispatchQueue.main.async { self.dismissWindow() }
+        guard !isPinned, let window, window.isVisible, window.attachedSheet == nil,
+              !window.frame.contains(NSEvent.mouseLocation) else { return }
+        dismissWindow()
     }
 
     private func teardownDismissMonitors() {
+        if let monitor = escapeMonitor { NSEvent.removeMonitor(monitor); escapeMonitor = nil }
         if let monitor = outsideClickMonitor { NSEvent.removeMonitor(monitor); outsideClickMonitor = nil }
         if let monitor = localClickMonitor { NSEvent.removeMonitor(monitor); localClickMonitor = nil }
         if let observer = resignActiveObserver {
@@ -441,10 +491,13 @@ final class AppReleaseWindowController: NSObject, WKNavigationDelegate, WKUIDele
 
     private func showWaitingPage(in webView: WKWebView) {
         webView.loadHTMLString("""
-        <html><meta charset="utf-8"><body style="font:16px -apple-system;padding:48px;color:#334155">
-        <h2>等待 Chrome 登录态</h2>
-        <p>请在 Chrome 登录 audi.tmallyc.com，并在 chrome://extensions 重新加载 DBoard Cookie Bridge 扩展。</p>
-        <p>扩展会自动将当前会话传给这个窗口；此处不会单独登录，以免挤掉 Chrome。</p>
+        <html><meta charset="utf-8"><meta name="color-scheme" content="light dark">
+        <body style="font:13px -apple-system;padding:48px;max-width:520px;margin:auto;color:CanvasText;background:Canvas">
+        <h2 style="font-size:15px">请先在浏览器登录 Audi</h2>
+        <p>登录后，D板会自动同步会话并打开当前页面。</p>
+        <p><a href="dboard-browser://audi" style="display:inline-block;padding:10px 16px;border-radius:6px;background:Highlight;color:HighlightText;text-decoration:none">打开浏览器登录</a></p>
+        <details style="margin-top:24px"><summary>首次使用与登录同步</summary>
+        <p>首次使用需在 Chrome 启用 DBoard Cookie Bridge 扩展。扩展已安装但未同步时，可在 Chrome 的扩展管理页重新加载。</p></details>
         </body></html>
         """, baseURL: nil)
     }
@@ -460,6 +513,14 @@ final class AppReleaseWindowController: NSObject, WKNavigationDelegate, WKUIDele
 
     // SSO 是站点的正常重定向，不能因域名变化而取消；只将用户点击的站外链接外开。
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        if navigationAction.request.url?.scheme == "dboard-browser" {
+            let url = URL(string: "https://audi.tmallyc.com/")!
+            if let chrome = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.google.Chrome") {
+                NSWorkspace.shared.open([url], withApplicationAt: chrome, configuration: NSWorkspace.OpenConfiguration())
+            } else { NSWorkspace.shared.open(url) }
+            decisionHandler(.cancel)
+            return
+        }
         if navigationAction.request.url?.host == "sso-tmyc.tmallyc.com" {
             decisionHandler(.cancel)
             loadFailed = true

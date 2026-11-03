@@ -2,6 +2,8 @@ const $ = (id) => document.getElementById(id);
 
 async function refresh() {
   const st = await chrome.runtime.sendMessage({ cmd: 'status' });
+  $('version').textContent = 'DBoard Cookie Bridge v' + chrome.runtime.getManifest().version;
+  $('canary').textContent = 'Canary: ' + (st.lastCanaryStatus || '尚未配对');
   const h = st.header || '';
   const names = h ? h.split(/;\s*/).map((kv) => kv.split('=')[0]) : [];
   $('count').textContent = names.length ? `${names.length} 条 cookie` : '未读到任何 cookie';
@@ -48,4 +50,20 @@ chrome.cookies.getAll({ domain: 'tmallyc.com' }).then((cs) => {
   $('pre').textContent = `${cs.length} 个 tmallyc.com 相关 cookie（含所有子域）\n` +
     cs.slice(0, 40).map((c) => `${c.domain} ${c.name}`).join('\n');
 });
+$('canary-pair').addEventListener('click', async () => {
+  const button = $('canary-pair');
+  button.disabled = true;
+  try {
+    $('canary').textContent = '正在连接，请处理 DBoard 授权弹窗；完成后可重新打开此面板查看状态';
+    const st = await chrome.runtime.sendMessage({ cmd: 'canary-connect' });
+    if (!st || typeof st.lastCanaryStatus !== 'string') {
+      throw new Error('扩展后台未更新，请点“重新加载扩展”，再打开插件连接');
+    }
+    $('canary').textContent = 'Canary: ' + st.lastCanaryStatus;
+  } catch (e) {
+    $('canary').textContent = e.name === 'TypeError' || e.name === 'TimeoutError'
+      ? '连接未完成，请确认 DBoard 已运行并处理授权弹窗' : e.message;
+  } finally { button.disabled = false; }
+});
+$('reload-extension').addEventListener('click', () => chrome.runtime.reload());
 refresh();

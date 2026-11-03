@@ -1,7 +1,7 @@
 import SwiftUI
 
 // MARK: - Theme Definition
-struct DBoardTheme: Identifiable, Equatable {
+struct DBoardTheme: Identifiable, Equatable, Hashable {
     let id: String
     let name: String
     let icon: String
@@ -38,6 +38,7 @@ struct DBoardTheme: Identifiable, Equatable {
     }
 
     static func == (lhs: DBoardTheme, rhs: DBoardTheme) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
 // MARK: - Presets
@@ -60,38 +61,28 @@ extension DBoardTheme {
         overlayOpacity: 0, overlayColor: .clear, glowEnabled: false, nativeBlur: false
     )
 
-    // 毛玻璃: 抽象光斑 + 系统 Material + 彩色光球
     static let glass = DBoardTheme(
         id: "glass", name: "毛玻璃", icon: "rectangle.on.rectangle",
-        background: .clear,
+        background: Color(nsColor: .windowBackgroundColor),
         orbA: .clear, orbB: .clear, orbC: .clear,
-        // 卡片 0.9: 毛玻璃的"透"体现在窗口背景层, 卡片本身必须够厚才能保证文字可读
-        cardFill: .white, cardFillOpacity: 0.9,
-        accentPrimary: Color(hex: "#0058b0"), accentSecondary: Color(hex: "#0058b0"),
-        // vibrancy: 半透明层上的文字禁用浅灰, 全部收紧到高对比区间
-        textPrimary: Color(hex: "#0a0a0c"), textSecondary: Color(hex: "#2b2b30"),
-        textTertiary: Color(hex: "#4a4a52"), textMuted: Color(hex: "#63636d"),
-        chrome: Color(hex: "#b8b8c0"), separator: Color(hex: "#d0d0d8"),
+        cardFill: Color(nsColor: .controlBackgroundColor), cardFillOpacity: 0.95,
+        accentPrimary: .accentColor, accentSecondary: .accentColor,
+        textPrimary: .primary, textSecondary: .secondary, textTertiary: .secondary,
+        textMuted: Color(nsColor: .tertiaryLabelColor), chrome: Color(nsColor: .tertiaryLabelColor),
+        separator: Color(nsColor: .separatorColor),
         backgroundImage: nil, backgroundBlur: 0, cardMaterial: true,
         overlayOpacity: 0, overlayColor: .clear, glowEnabled: false, nativeBlur: true
     )
 
-    // 极简紫 (minimal): 参考 Linear/Proxyman 的专业工具审美——
-    // 纯灰阶 + 单一紫色强调, 无背景图/无 orb/无毛玻璃, 全靠留白和字重建立层次。
-    // 用来对冲另外 5 套皮肤过度装饰、把工具搞得像海报的问题。
     static let minimal = DBoardTheme(
-        id: "minimal", name: "极简紫", icon: "circle.hexagongrid",
-        background: Color(hex: "#FAFAFB"),
+        id: "minimal", name: "极简", icon: "circle.hexagongrid",
+        background: Color(nsColor: .windowBackgroundColor),
         orbA: .clear, orbB: .clear, orbC: .clear,
-        cardFill: .white, cardFillOpacity: 1.0,
-        accentPrimary: Color(hex: "#5E6AD7"),      // Linear 紫
-        accentSecondary: Color(hex: "#8B93E8"),    // 强调色的浅色变体, 需要渐变时用
-        textPrimary: Color(hex: "#0F172A"),        // 近黑, 保证正文对比度
-        textSecondary: Color(hex: "#334155"),
-        textTertiary: Color(hex: "#64748B"),
-        textMuted: Color(hex: "#94A3B8"),
-        chrome: Color(hex: "#94A3B8"),      // slate-400: 加深, 保证在浅底上可辨识
-        separator: Color(hex: "#CBD5E1"),   // slate-300: 从 E2E8F0 加深, 边框不再发虚
+        cardFill: Color(nsColor: .controlBackgroundColor), cardFillOpacity: 1,
+        accentPrimary: .accentColor, accentSecondary: .accentColor,
+        textPrimary: .primary, textSecondary: .secondary, textTertiary: .secondary,
+        textMuted: Color(nsColor: .tertiaryLabelColor), chrome: Color(nsColor: .tertiaryLabelColor),
+        separator: Color(nsColor: .separatorColor),
         backgroundImage: nil, backgroundBlur: 0, cardMaterial: false,
         overlayOpacity: 0, overlayColor: .clear, glowEnabled: false, nativeBlur: false
     )
@@ -128,6 +119,6 @@ final class ThemeManager: ObservableObject {
     func cycle() {
         guard let idx = DBoardTheme.all.firstIndex(where: { $0.id == current.id }) else { return }
         let next = (idx + 1) % DBoardTheme.all.count
-        withAnimation(.easeInOut(duration: 0.4)) { current = DBoardTheme.all[next] }
+        withAnimation(DBoardUI.spring) { current = DBoardTheme.all[next] }
     }
 }

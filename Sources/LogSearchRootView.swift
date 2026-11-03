@@ -119,10 +119,10 @@ struct LogSearchRootView: View {
                     .foregroundStyle(vm.isPinned ? Color.accentColor : Color.secondary)
             }
             .buttonStyle(HoverButtonStyle())
-            .help("置顶：点击面板外部不再自动收起")
+            .help(vm.isPinned ? "取消保持打开，点击外部可收起" : "保持打开，点击外部时保留面板")
         }
         .padding(.horizontal, 14)
-        .padding(.top, 34)          // 让出红绿灯区
+        .padding(.top, 12)
         .padding(.bottom, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.bar)

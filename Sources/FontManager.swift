@@ -1,13 +1,14 @@
 import SwiftUI
 
 // MARK: - 字体预设
-struct DBoardFont: Identifiable, Equatable {
+struct DBoardFont: Identifiable, Equatable, Hashable {
     let id: String
     let name: String       // 菜单显示名
     let fontName: String   // 实际字体名（PostScript / family）
     let sizeScale: CGFloat // 字号缩放（不同字体视觉大小不同，做补偿）
 
     static func == (lhs: DBoardFont, rhs: DBoardFont) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
 extension DBoardFont {
@@ -19,8 +20,8 @@ extension DBoardFont {
     static let kaiti   = DBoardFont(id: "kaiti",   name: "楷体",     fontName: "Kaiti SC",        sizeScale: 0.95)
     static let pingfang = DBoardFont(id: "pingfang", name: "苹方(标准)", fontName: "PingFang SC", sizeScale: 0.9)
 
-    /// 系统字体(SF Pro + 苹方回退)。各模块的基准字号是按手写体视觉大小定的, 系统字体统一乘 0.9 校正
-    static let system  = DBoardFont(id: "system",  name: "系统字体",  fontName: "",                sizeScale: 0.9)
+    /// 系统字体(SF Pro + 苹方回退)，使用标准字号。
+    static let system  = DBoardFont(id: "system",  name: "系统字体",  fontName: "",                sizeScale: 1.0)
 
     static let all: [DBoardFont] = [.system, .pingfang, .yuanti, .hannotate, .kaiti, .muyao, .xingkai, .baoli]
 }
@@ -41,7 +42,7 @@ final class FontManager: ObservableObject {
 
     /// 按当前字体返回 Font，传入基准字号
     func font(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        if current.id == "system" { return .system(size: size * current.sizeScale, weight: weight) }
+        if current.id == "system" { return .system(size: max(11, min(size, 15)), weight: weight) }
         return .custom(current.fontName, size: size * current.sizeScale).weight(weight)
     }
 }

@@ -53,11 +53,22 @@ final class OpsRunner: ObservableObject {
 
     @Published private(set) var states: [String: RunState] = [:]
     private var processes: [String: Process] = [:]
+    private let defaults: UserDefaults
+    private let cookieReminder: DouyinCookieReminderStore
+    private let notifyCompletion: Bool
+    private let recordUsage: (String) -> Void
 
-    private init() {
+    init(defaults: UserDefaults = .standard,
+         cookieReminder: DouyinCookieReminderStore = .shared,
+         notifyCompletion: Bool = true,
+         recordUsage: @escaping (String) -> Void = UsageStats.hit) {
+        self.defaults = defaults
+        self.cookieReminder = cookieReminder
+        self.notifyCompletion = notifyCompletion
+        self.recordUsage = recordUsage
         // 恢复上次结果(只留摘要, 不留日志)
         for a in OpsAction.all {
-            guard let d = UserDefaults.standard.dictionary(forKey: "ops.last.\(a.id)"),
+            guard let d = defaults.dictionary(forKey: "ops.last.\(a.id)"),
                   let ts = d["at"] as? Double, let raw = d["phase"] as? String,
                   let phase = Phase(rawValue: raw) else { continue }
             var s = RunState()
@@ -74,7 +85,7 @@ final class OpsRunner: ObservableObject {
     /// 入口: 带确认的执行
     func requestRun(_ a: OpsAction) {
         guard state(a).phase != .running else { return }
-        UsageStats.hit("ops:\(a.id)")
+        recordUsage("ops:\(a.id)")
         if let text = a.confirm {
             NSApp.activate(ignoringOtherApps: true)
             let alert = NSAlert()
@@ -133,7 +144,7 @@ final class OpsRunner: ObservableObject {
 
         p.terminationHandler = { [weak self] proc in
             pipe.fileHandleForReading.readabilityHandler = nil
-            let ok = proc.terminationStatus == 0
+            let ok = proc.terminationReason == .exit && proc.terminationStatus == 0
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.processes[a.id] = nil
@@ -184,11 +195,16 @@ final class OpsRunner: ObservableObject {
     private func finish(_ a: OpsAction, ok: Bool, message: String) {
         var s = state(a)
         s.phase = ok ? .success : .failed
-        s.endedAt = Date()
+        let completedAt = Date()
+        s.endedAt = completedAt
         s.message = message
+        if a.id == OpsAction.douyinCookie.id {
+            cookieReminder.recordResult(success: ok, at: completedAt)
+        }
         states[a.id] = s
-        UserDefaults.standard.set(["at": Date().timeIntervalSince1970, "phase": s.phase.rawValue, "msg": message],
-                                  forKey: "ops.last.\(a.id)")
+        defaults.set(["at": completedAt.timeIntervalSince1970, "phase": s.phase.rawValue, "msg": message],
+                     forKey: "ops.last.\(a.id)")
+        guard notifyCompletion else { return }
         let content = UNMutableNotificationContent()
         content.title = (ok ? "已完成：" : "失败：") + a.title
         content.body = message
@@ -201,6 +217,7 @@ final class OpsRunner: ObservableObject {
 // MARK: - 动作行(首屏/详情共用)
 struct OpsActionRow: View {
     @ObservedObject var runner = OpsRunner.shared
+    @ObservedObject private var cookieReminder = DouyinCookieReminderStore.shared
     @EnvironmentObject var theme: ThemeManager
     let action: OpsAction
     @State private var showLog = false
@@ -242,6 +259,11 @@ struct OpsActionRow: View {
                     Text(subtitle).font(.system(size: 11))
                         .foregroundStyle(st.phase == .failed ? Color.red : theme.current.textTertiary)
                         .lineLimit(1).truncationMode(.middle)
+                    if action.id == OpsAction.douyinCookie.id, let expiry = cookieReminder.expiry {
+                        Text(expiry.summary).font(.system(size: 11))
+                            .foregroundStyle(expiry.needsReminder ? Color.orange : theme.current.textTertiary)
+                            .help(expiry.detail)
+                    }
                 }
                 Spacer(minLength: 6)
                 if !st.log.isEmpty {
@@ -299,18 +321,43 @@ struct DBoardModule: Identifiable {
     let id: String
     let title: String
     let icon: String
-    let shortcut: String
+    private let defaultShortcut: String
+    var shortcut: String {
+        guard ShortcutPreferences.defaultsBindings[id] != nil else { return defaultShortcut }
+        return ShortcutPreferences.shared.binding(for: id)?.title ?? ""
+    }
+    var searchText: String { ([title, id] + aliases).joined(separator: " ").lowercased() }
+    private var aliases: [String] {
+        switch id {
+        case "reqflow": return ["需求", "PRD", "项目", "交付物"]
+        case "bizmap": return ["业务", "服务", "地图", "路由"]
+        case "logs", "logsearch": return ["日志", "查日志", "trace", "排查", "log"]
+        case "apprelease": return ["发布", "部署", "制品", "release", "deploy"]
+        case "audihome": return ["首页", "后台", "audi"]
+        case "clipboard": return ["剪贴板", "复制", "粘贴", "clip"]
+        case "skills": return ["技能", "MCP", "Hook", "Agent", "上下文", "Context"]
+        case "activitymonitor": return ["活动监视器", "Activity Monitor", "卡顿", "CPU", "内存", "进程"]
+        case "techscout": return ["资讯", "新闻", "科技"]
+        case "reply": return ["钉钉", "回复", "值守", "白名单", "配方"]
+        default: return []
+        }
+    }
+    init(id: String, title: String, icon: String, shortcut: String, open: @escaping () -> Void) {
+        self.id = id; self.title = title; self.icon = icon
+        defaultShortcut = shortcut; self.open = open
+    }
     let open: () -> Void
 
     func launch() {
+        NotificationCenter.default.post(name: .init("DBoardModuleWillOpen"), object: id)
         UsageStats.hit(id)
+        WorkspacePreferences.shared.remember(id)
         open()
     }
 
     private static func post(_ name: String) { NotificationCenter.default.post(name: .init(name), object: nil) }
 
     static let all: [DBoardModule] = [
-        DBoardModule(id: "dayplan", title: "今日规划", icon: "calendar.day.timeline.left", shortcut: "⌃O") { DayPlanWindowController.shared.toggle() },
         DBoardModule(id: "reply", title: "钉钉待回复", icon: "bubble.left.and.bubble.right", shortcut: "") { post("openReplyInbox") },
         DBoardModule(id: "reqflow", title: "ReqFlow 需求流", icon: "point.3.connected.trianglepath.dotted", shortcut: "⌃E") { BizMapBoardWindowController.shared.toggleWindow(requirements: true) },
         DBoardModule(id: "bizmap", title: "BizMap 业务地图", icon: "map", shortcut: "") { BizMapBoardWindowController.shared.toggleWindow(requirements: false) },
@@ -319,11 +366,11 @@ struct DBoardModule: Identifiable {
         DBoardModule(id: "apprelease", title: "应用发布台", icon: "paperplane", shortcut: "⌃Q") { AppReleaseWindowController.shared.toggle() },
         DBoardModule(id: "audihome", title: "Audi 首页", icon: "house", shortcut: "⌃W") { AppReleaseWindowController.shared.toggleHome() },
         DBoardModule(id: "clipboard", title: "剪切板历史", icon: "doc.on.clipboard", shortcut: "⌥V") { ClipboardBoardWindowController.shared.show() },
-        DBoardModule(id: "codex", title: "Codex 供应商切换", icon: "arrow.left.arrow.right", shortcut: "⌥C") { CodexSwitchWindowController.shared.toggle() },
         DBoardModule(id: "skills", title: "Skills 看板", icon: "wand.and.stars", shortcut: "") { post("openSkillsBoard") },
         DBoardModule(id: "techscout", title: "科技资讯", icon: "antenna.radiowaves.left.and.right", shortcut: "") { post("openTechScout") },
-        DBoardModule(id: "sysmon", title: "系统监控", icon: "gauge.with.needle", shortcut: "") { post("openSysMon") },
-        DBoardModule(id: "market", title: "A股行情", icon: "chart.line.uptrend.xyaxis", shortcut: "") { post("openETF") },
+        DBoardModule(id: "activitymonitor", title: "打开活动监视器", icon: "waveform.path.ecg", shortcut: "") {
+            NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app"))
+        },
     ]
 }
 
@@ -350,7 +397,10 @@ enum UsageStats {
     static func summary(days: Int = 14) -> [(String, Int)] {
         let db = queue.sync { load() }
         let cutoff = dayFmt.string(from: Date().addingTimeInterval(-Double(days) * 86400))
-        return db.map { (id, perDay) in (id, perDay.filter { $0.key >= cutoff }.values.reduce(0, +)) }
+        // 保留历史数据，统计只展示仍在使用的模块和主面板。
+        let activeIDs = Set(DBoardModule.all.map(\.id)).union(["dboard"]).union(OpsAction.all.map { "ops:" + $0.id })
+        return db.filter { activeIDs.contains($0.key) }
+            .map { (id, perDay) in (id, perDay.filter { $0.key >= cutoff }.values.reduce(0, +)) }
             .sorted { $0.1 > $1.1 }
     }
 

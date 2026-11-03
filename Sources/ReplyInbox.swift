@@ -45,9 +45,11 @@ final class ReplyInboxViewModel: ObservableObject {
     @Published var items: [ReplyItem] = []
     @Published var lastUpdate: Date? = nil
 
-    private var fileMonitor: DispatchSourceFileSystemObject?
-    private var fileDescriptor: Int32 = -1
+    private var fileObserver: FileRefreshObserver?
+    private let actionDirectory: URL?
+    @Published var actionFeedback: String?
     private var pollTimer: Timer?
+    private var flagSubscription: AnyCancellable?
     private var lastNotifyTime: TimeInterval = 0
     private let notifyDebounce: TimeInterval = 20
     private var lastProcessedTimestamp: Double = 0
@@ -57,14 +59,19 @@ final class ReplyInboxViewModel: ObservableObject {
         return "\(home)/.dws/reply-pending.json"
     }()
 
-    init() {
-        requestNotificationPermission()
+    init(startObservers: Bool = true, actionDirectory: URL? = nil) {
+        self.actionDirectory = actionDirectory
+        guard startObservers else { return }
         startWatching()
-        startPolling()
-        reload()
+        flagSubscription = FeatureFlags.shared.$replyEnabled.receive(on: RunLoop.main).sink { [weak self] enabled in
+            guard let self else { return }
+            if enabled { self.requestNotificationPermission(); self.startPolling(); self.reload() }
+            else { self.pollTimer?.invalidate(); self.pollTimer = nil; self.items = [] }
+        }
     }
 
     private func startPolling() {
+        guard pollTimer == nil else { return }
         // DispatchSource 对原子替换(os.replace)的文件监听不可靠,用定时轮询兜底,
         // 保证不打开窗口也能第一时间检测到新待回复并弹通知。
         let t = Timer(timeInterval: 3.0, repeats: true) { [weak self] _ in
@@ -141,35 +148,7 @@ final class ReplyInboxViewModel: ObservableObject {
     }
 
     private func startWatching() {
-        let path = Self.pendingPath
-        if !FileManager.default.fileExists(atPath: path) {
-            let dir = (path as NSString).deletingLastPathComponent
-            try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-            try? "".write(toFile: path, atomically: true, encoding: .utf8)
-        }
-        fileDescriptor = open(path, O_EVTONLY)
-        guard fileDescriptor >= 0 else { return }
-        fileMonitor = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fileDescriptor, eventMask: [.write, .rename, .delete], queue: .main)
-        fileMonitor?.setEventHandler { [weak self] in
-            // rename/delete 时(如原子替换)重新绑定文件
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                self?.rebindIfNeeded()
-                self?.reload()
-            }
-        }
-        fileMonitor?.setCancelHandler { [weak self] in
-            if let fd = self?.fileDescriptor, fd >= 0 { close(fd); self?.fileDescriptor = -1 }
-        }
-        fileMonitor?.resume()
-    }
-
-    private func rebindIfNeeded() {
-        // 原子写(os.replace)会让旧 fd 失效, 重新打开监听
-        fileMonitor?.cancel()
-        fileMonitor = nil
-        if fileDescriptor >= 0 { close(fileDescriptor); fileDescriptor = -1 }
-        startWatching()
+        fileObserver = FileRefreshObserver(url: URL(fileURLWithPath: Self.pendingPath)) { [weak self] in self?.reload() }
     }
 
     func copyToClipboard(_ text: String) {
@@ -188,16 +167,27 @@ final class ReplyInboxViewModel: ObservableObject {
     /// 防止 3 秒轮询把旧文件里的条目刷回来造成"消失又复活"。
     private var pendingRemoval: [String: TimeInterval] = [:]
 
-    private func writeAction(_ action: [String: Any], removeKey: String? = nil) {
-        guard let data = try? JSONSerialization.data(withJSONObject: action, options: []) else { return }
-        let path = "\(actionsDir())/\(UUID().uuidString).json"
-        try? data.write(to: URL(fileURLWithPath: path))
-        if let key = removeKey {
-            DispatchQueue.main.async {
-                self.pendingRemoval[key] = Date().timeIntervalSince1970
-                self.items.removeAll { $0.key == key }
-            }
+    @discardableResult
+    func writeAction(_ action: [String: Any], removeKey: String? = nil) -> Bool {
+        let directory = actionDirectory ?? URL(fileURLWithPath: actionsDir())
+        do {
+            let data = try JSONSerialization.data(withJSONObject: action, options: [])
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try data.write(to: directory.appendingPathComponent(UUID().uuidString + ".json"), options: .atomic)
+        } catch {
+            actionFeedback = "提交失败，请检查本地动作目录后重试；事项未移除"
+            return false
         }
+        let notice = "已提交给本地值守，尚不代表钉钉已发送"
+        actionFeedback = notice
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+            if self?.actionFeedback == notice { self?.actionFeedback = nil }
+        }
+        if let key = removeKey {
+            pendingRemoval[key] = Date().timeIntervalSince1970
+            items.removeAll { $0.key == key }
+        }
+        return true
     }
 
     func send(_ item: ReplyItem, text: String, source: String = "") {
@@ -260,9 +250,12 @@ final class ReplyInboxViewModel: ObservableObject {
     func clearAll() {
         let ts = Date().timeIntervalSince1970
         let payload: [String: Any] = ["timestamp": ts, "items": []]
-        if let data = try? JSONSerialization.data(withJSONObject: payload,
-                                                  options: [.prettyPrinted]) {
-            try? data.write(to: URL(fileURLWithPath: Self.pendingPath), options: .atomic)
+        do {
+            let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted])
+            try data.write(to: URL(fileURLWithPath: Self.pendingPath), options: .atomic)
+        } catch {
+            actionFeedback = "清空失败，本地记录保留；请检查文件权限后重试"
+            return
         }
         lastProcessedTimestamp = ts
         DispatchQueue.main.async {
@@ -291,8 +284,7 @@ final class ReplyInboxViewModel: ObservableObject {
 
     deinit {
         pollTimer?.invalidate()
-        fileMonitor?.cancel()
-        if fileDescriptor >= 0 { close(fileDescriptor) }
+        fileObserver = nil
     }
 }
 
@@ -300,6 +292,7 @@ final class ReplyInboxViewModel: ObservableObject {
 
 final class ReplyInboxWindowController {
     private var window: NSWindow?
+    private var windowInteraction: WorkspaceWindowInteraction?
     private var viewModel: ReplyInboxViewModel
 
     init(viewModel: ReplyInboxViewModel) { self.viewModel = viewModel }
@@ -319,7 +312,7 @@ final class ReplyInboxWindowController {
         let win = NSWindow(contentViewController: hosting)
         win.title = "钉钉待回复"
         win.setContentSize(NSSize(width: 500, height: 660))
-        win.styleMask = [.titled, .closable, .resizable, .fullSizeContentView]
+        win.styleMask = [.titled, .closable, .resizable]
         win.titlebarAppearsTransparent = true
         win.titleVisibility = .hidden
         win.isMovableByWindowBackground = true
@@ -337,6 +330,7 @@ final class ReplyInboxWindowController {
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         window = win
+        windowInteraction = WorkspaceWindowInteraction(window: win, id: "reply")
     }
 }
 
@@ -353,25 +347,7 @@ struct ReplyInboxView: View {
 
     var body: some View {
         ZStack {
-            ThemeBackground().environmentObject(theme).environmentObject(ThemeManager.shared)
-            GeometryReader { geo in
-                EllipticalGradient(
-                    colors: [
-                        theme.current.accentPrimary.opacity(0.20),
-                        theme.current.accentSecondary.opacity(0.12),
-                        Color.clear
-                    ],
-                    center: UnitPoint(x: 0.5 + 0.05 * sin(Double(bgPhase) * .pi), y: 0.0),
-                    startRadiusFraction: 0.0, endRadiusFraction: 0.7
-                )
-                .frame(height: geo.size.height * 0.32)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            }
-            .ignoresSafeArea()
-            .onAppear {
-                withAnimation(.easeInOut(duration: 12).repeatForever(autoreverses: true)) { bgPhase = 1 }
-            }
-
+            theme.current.background
             VStack(spacing: 0) {
                 header
                 if vm.items.isEmpty {
@@ -400,7 +376,15 @@ struct ReplyInboxView: View {
                 }
             }
         }
+        .safeAreaInset(edge: .bottom) {
+            if let feedback = vm.actionFeedback {
+                Text(feedback).font(.system(size: 12)).foregroundStyle(.secondary)
+                    .textSelection(.enabled).padding(12).frame(maxWidth: .infinity)
+                    .background(.regularMaterial)
+            }
+        }
         .frame(minWidth: 440, minHeight: 480)
+        .workspaceToolbar(id: "reply")
         .focusEffectDisabled()
         .sheet(isPresented: $showWhitelist) {
             WhitelistPanel(onClose: { showWhitelist = false })

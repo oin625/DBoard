@@ -3,59 +3,75 @@ import AppKit
 
 // MARK: - 首屏驾驶舱
 // 打开 D板 第一眼只回答一个问题: "现在有什么需要我出手?"
-// 来源: 引擎心跳异常 / 钉钉待回复 / 一键运维失败。没有就一行"一切正常", 不占地方。
+// 来源: 引擎心跳异常 / 钉钉待回复 / 一键运维失败 / Cookie 即将到期。没有待处理事项就不显示。
 
 struct CockpitSection: View {
     @EnvironmentObject var theme: ThemeManager
     @ObservedObject private var health = EngineHealthModel.shared
     @ObservedObject private var reply = ReplyInboxViewModel.shared
     @ObservedObject private var ops = OpsRunner.shared
+    @ObservedObject private var cookieReminder = DouyinCookieReminderStore.shared
 
     private var troubled: [EngineStatus] { health.engines.filter { $0.state == .warn || $0.state == .dead } }
-    private var hasAttention: Bool { !troubled.isEmpty || !reply.items.isEmpty }
+    private var activeOperations: [OpsAction] { OpsAction.all.filter { [.running, .failed].contains(ops.state($0).phase) } }
+    private var cookieDue: DouyinCookieExpiry? {
+        guard let expiry = cookieReminder.expiry, expiry.needsReminder,
+              !activeOperations.contains(where: { $0.id == OpsAction.douyinCookie.id }) else { return nil }
+        return expiry
+    }
+    private var hasAttention: Bool {
+        !troubled.isEmpty || !reply.items.isEmpty || !activeOperations.isEmpty || cookieDue != nil
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionHeader(title: "待处理", trailing: hasAttention ? nil : "一切正常")
-
+        Group {
             if hasAttention {
-                VStack(spacing: 0) {
-                    if !reply.items.isEmpty {
-                        AttentionRow(icon: "bubble.left.and.bubble.right.fill", tint: .orange,
-                                     title: "\(reply.items.count) 条钉钉待回复",
-                                     subtitle: reply.items.first.map { "\($0.sender)：\($0.incoming)" } ?? "",
-                                     button: "处理") {
-                            DBoardModule.all.first { $0.id == "reply" }?.launch()
-                        }
-                    }
-                    ForEach(troubled) { e in
-                        if !reply.items.isEmpty || e.id != troubled.first?.id { Divider().padding(.leading, 40) }
-                        AttentionRow(icon: e.icon, tint: e.state == .dead ? .red : .orange,
-                                     title: e.problem ?? e.name,
-                                     subtitle: e.detail,
-                                     button: e.hint == nil ? nil : "复制修复") {
-                            if let h = e.hint {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(h, forType: .string)
-                            }
-                        }
-                    }
+                VStack(alignment: .leading, spacing: 8) {
+                    SectionHeader(title: "待处理")
+                    attentionContent
                 }
-                .cardStyle(theme.current)
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
             }
-
-            SectionHeader(title: "一键运维", trailing: nil)
-            VStack(spacing: 0) {
-                ForEach(Array(OpsAction.all.enumerated()), id: \.element.id) { i, a in
-                    if i > 0 { Divider().padding(.leading, 40) }
-                    OpsActionRow(action: a)
-                        .padding(.horizontal, 12).padding(.vertical, 10)
-                }
-            }
-            .cardStyle(theme.current)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 4)
+        .onAppear { cookieReminder.refresh() }
+    }
+
+    private var attentionContent: some View {
+        VStack(spacing: 0) {
+            if !reply.items.isEmpty {
+                AttentionRow(icon: "bubble.left.and.bubble.right.fill", tint: .orange,
+                             title: "\(reply.items.count) 条钉钉待回复",
+                             subtitle: reply.items.first.map { "\($0.sender)：\($0.incoming)" } ?? "",
+                             button: "处理") {
+                    DBoardModule.all.first { $0.id == "reply" }?.launch()
+                }
+            }
+            ForEach(activeOperations) { op in
+                Divider().padding(.leading, 40)
+                OpsActionRow(action: op).padding(.horizontal, 12).padding(.vertical, 10)
+            }
+            if let expiry = cookieDue {
+                if !reply.items.isEmpty || !activeOperations.isEmpty { Divider().padding(.leading, 40) }
+                AttentionRow(icon: "clock.badge.exclamationmark", tint: expiry.expired ? .red : .orange,
+                             title: expiry.reminderTitle, subtitle: expiry.detail, button: "刷新") {
+                    ops.requestRun(.douyinCookie)
+                }
+            }
+            ForEach(troubled) { e in
+                if !reply.items.isEmpty || !activeOperations.isEmpty || cookieDue != nil || e.id != troubled.first?.id { Divider().padding(.leading, 40) }
+                AttentionRow(icon: e.icon, tint: e.state == .dead ? .red : .orange,
+                             title: e.problem ?? e.name,
+                             subtitle: e.detail,
+                             button: e.hint == nil ? nil : "复制修复") {
+                    if let h = e.hint {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(h, forType: .string)
+                    }
+                }
+            }
+        }
+        .cardStyle(theme.current)
     }
 }
 

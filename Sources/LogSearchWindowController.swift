@@ -54,7 +54,8 @@ final class LogSearchWindowController: NSObject, NSWindowDelegate {
     }
 
     func show() {
-        lastFrontmost = NSWorkspace.shared.frontmostApplication
+        let front = NSWorkspace.shared.frontmostApplication
+        if front?.bundleIdentifier != Bundle.main.bundleIdentifier { lastFrontmost = front }
         if let w = window {
             centerOnMouseScreen(w)
             w.makeKeyAndOrderFront(nil)
@@ -65,10 +66,11 @@ final class LogSearchWindowController: NSObject, NSWindowDelegate {
             .environmentObject(ThemeManager.shared)
         let host = NSHostingController(rootView: rootView)
         let win = LogSearchPanel(contentViewController: host)
-        win.title = "日志搜索"
-        win.titleVisibility = .hidden
+        win.title = "日志快搜"
+        win.titleVisibility = .visible
         win.titlebarAppearsTransparent = true
-        win.styleMask = [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel]
+        win.toolbarStyle = .unified
+        win.styleMask = [.titled, .closable, .resizable, .nonactivatingPanel]
         win.isFloatingPanel = true
         win.level = .floating
         win.hidesOnDeactivate = false
@@ -117,7 +119,7 @@ final class LogSearchWindowController: NSObject, NSWindowDelegate {
             }
         }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
-            guard let self, let w = self.window, w.isVisible, w.isKeyWindow else { return e }
+            guard let self, let w = self.window, w.isVisible, w.isKeyWindow, e.window === w, w.attachedSheet == nil else { return e }
             let flags = e.modifierFlags.intersection(.deviceIndependentFlagsMask)
             switch e.keyCode {
             case 53:  // Esc: 先清输入框里的半截关键词, 再清应用, 最后关窗
@@ -151,7 +153,7 @@ final class LogSearchWindowController: NSObject, NSWindowDelegate {
     }
 
     private func restoreFocus() {
-        if let app = lastFrontmost, !app.isTerminated,
+        if NSApp.isActive, let app = lastFrontmost, !app.isTerminated,
            app.bundleIdentifier != Bundle.main.bundleIdentifier {
             app.activate()
         }

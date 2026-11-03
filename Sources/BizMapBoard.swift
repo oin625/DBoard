@@ -43,6 +43,7 @@ struct BizPRDItem: Codable, Identifiable {
     let name: String
     let code: String        // SJWC / KFZ / CSZ …
     let status: String      // 中文状态名
+    var completedForMe: Bool { code == "CPYSWC" || status == "承接人验收完成" }
     let pri: String?
     let dev: String?
     let scopes: [String]    // pending / mine / dept
@@ -107,7 +108,7 @@ struct BizMapCache: Codable {
 
 // MARK: - ViewModel
 
-enum BizPerspective { case services, requirements }
+enum BizPerspective: Hashable { case services, requirements }
 
 /// 需求流组内分栏: 一次只看一栏, 告别 27 条平铺
 enum ReqTab: String, CaseIterable {
@@ -126,7 +127,6 @@ final class BizMapViewModel: ObservableObject {
     @Published var refreshProgress: (current: Int, total: Int, name: String, status: String)?
     private var progressTimer: Timer?
     @Published var perspective: BizPerspective = .services   // 服务视角 / 需求视角
-    @Published var showUnroutedOnly = false                   // 需求视角: 只看未路由
     @Published var reqTab: ReqTab = .notStarted                // 需求流当前分栏
     @Published var expandedPRD: Set<Int> = []                  // 需求行展开详情
     @Published var syncStatus: [String: String] = [:]          // name → "synced"/"unsynced"/"syncing"/"error"
@@ -135,6 +135,15 @@ final class BizMapViewModel: ObservableObject {
     @Published var tableProjects: [TableProject] = []
     @Published var tableProjectsLoading = false
     @Published var tableProjectsLoaded = false
+
+    func tableProjectRequirement(_ project: TableProject) -> BizPRDItem? {
+        if let id = project.requirementId { return prdItems.first { $0.id == id } }
+        let name = project.name.filter { !$0.isWhitespace }
+        guard !name.isEmpty,
+              tableProjects.filter({ $0.name.filter { !$0.isWhitespace } == name }).count <= 1 else { return nil }
+        let matches = prdItems.filter { $0.name.filter { !$0.isWhitespace } == name }
+        return matches.count == 1 ? matches[0] : nil
+    }
 
     func loadTableProjects() {
         guard !tableProjectsLoading else { return }
@@ -243,7 +252,16 @@ final class BizMapViewModel: ObservableObject {
     private let refreshServicesScript = NSString(string: "~/work/code/other/DBoard/refresh_services.sh").expandingTildeInPath
     private let progressPath = NSString(string: "~/.claude/bizmap-refresh-progress.json").expandingTildeInPath
 
-    init() {
+    init(loadBackgroundData: Bool = true, projectStore: DevelopmentProjectStore = DevelopmentProjectStore(),
+         statusSession: URLSession = .shared,
+         statusCookie: @escaping () -> String? = { BizMapViewModel.readStatusCookie() },
+         statusRefresh: (() -> Void)? = nil) {
+        self.statusSession = statusSession
+        self.statusCookie = statusCookie
+        self.statusRefresh = statusRefresh
+        self.projectStore = projectStore
+        developmentProjectSnapshots = projectStore.records
+        guard loadBackgroundData else { return }
         // 扩展可能在 DBoard 启动前已投递：恢复最近的桥接登录态。
         if let header = try? String(contentsOfFile: CookieBridgeServer.spoolPath, encoding: .utf8),
            !header.isEmpty {
@@ -389,7 +407,6 @@ final class BizMapViewModel: ObservableObject {
     /// 关联 D 单总数(含待开始) —— 与卡片 D× 角标同口径, 避免同屏两个数字两套含义
     var dCount: Int { cache?.dItemsAll.count ?? 0 }
     var prdItems: [BizPRDItem] { cache?.prdItemsAll ?? [] }
-    var prdUnrouted: [BizPRDItem] { prdItems.filter { $0.services.isEmpty } }
 
     // MARK: PRD 快照新鲜度
     // 面板上的 ↻ 只重拼旧快照; 真正拉取需 AI(浏览器登录态 + 语义标注),
@@ -419,22 +436,24 @@ final class BizMapViewModel: ObservableObject {
         return text
     }
 
-    // MARK: 需求视角: 搜索框降级为筛选器(名称/编号/开发/服务/状态)
+    // MARK: 需求视角: 按名称/编号/开发/已声明工程/状态筛选
     var filteredPRD: [BizPRDItem] {
-        var base = prdItems
-        if showUnroutedOnly { base = base.filter { $0.services.isEmpty } }
+        let base = prdItems
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return base }
         return base.filter { p in
             p.name.lowercased().contains(q) || p.no.lowercased().contains(q)
                 || (p.dev ?? "").lowercased().contains(q)
                 || p.status.contains(q)
-                || p.services.contains { $0.lowercased().contains(q) }
+                || developmentProjectSnapshots[p.id]?.projects.contains {
+                    $0.project.lowercased().contains(q) || ($0.branch?.lowercased().contains(q) ?? false)
+                } == true
         }
     }
 
     /// 我参与的(非终态) —— 需求流首屏英雄区, 永远置顶
-    var myActive: [BizPRDItem] { prdItems.filter { $0.scopes.contains("mine") }.sorted(by: Self.prdSort) }
+    var myActive: [BizPRDItem] { prdItems.filter { $0.scopes.contains("mine") && !$0.completedForMe }.sorted(by: Self.prdSort) }
+    var myCompleted: [BizPRDItem] { prdItems.filter { $0.scopes.contains("mine") && $0.completedForMe }.sorted(by: Self.prdSort) }
 
     /// 组内分栏(排除"我的"避免重复): 待开始 / 进行中 / 其他
     func tabItems(_ t: ReqTab) -> [BizPRDItem] {
@@ -447,7 +466,6 @@ final class BizMapViewModel: ObservableObject {
         case .inProgress: out = rest.filter { inProgress.contains($0.code) }
         case .others: out = rest.filter { !notStarted.contains($0.code) && !inProgress.contains($0.code) }
         }
-        if showUnroutedOnly { out = out.filter { $0.services.isEmpty } }
         return out.sorted(by: Self.prdSort)
     }
 
@@ -805,40 +823,127 @@ final class BizMapViewModel: ObservableObject {
 
     // MARK: - 推进状态
 
-    func pushStatus(reqId: Int, toStatus: String, actionName: String) {
-        let cookiePath = NSString(string: "~/.config/dboard/prd-cookie.txt").expandingTildeInPath
-        guard let cookie = try? String(contentsOfFile: cookiePath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
-              !cookie.isEmpty else {
-            flashToast("没有可用登录态，先在横幅里更新 Cookie")
+    @Published var startDevelopmentItem: BizPRDItem?
+    @Published var startDevelopmentDraft: PRDStartDevelopmentDraft?
+    @Published var startDevelopmentLoading = false
+    @Published var startDevelopmentError: String?
+    @Published private(set) var statusSubmitting: Set<Int> = []
+    private var startDevelopmentRequest: UUID?
+    private let statusSession: URLSession
+    private let statusCookie: () -> String?
+    private let statusRefresh: (() -> Void)?
+
+    static func readStatusCookie() -> String? {
+        let path = NSString(string: "~/.config/dboard/prd-cookie.txt").expandingTildeInPath
+        let cookie = try? String(contentsOfFile: path, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+        return cookie?.isEmpty == false ? cookie : nil
+    }
+
+    func beginStartDevelopment(_ item: BizPRDItem) {
+        guard !statusSubmitting.contains(item.id) else { return }
+        startDevelopmentItem = item
+        startDevelopmentDraft = nil
+        startDevelopmentError = nil
+        startDevelopmentLoading = false
+        let token = UUID()
+        startDevelopmentRequest = token
+        guard let cookie = statusCookie(), !cookie.isEmpty else {
+            startDevelopmentError = "没有可用登录态，请先更新 Cookie"
             return
         }
-        let body: [String: Any] = ["id": reqId, "toStatus": toStatus, "operatorId": "current_user", "operatorName": "当前用户", "remark": actionName]
-        guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else { return }
+        startDevelopmentLoading = true
+        var request = URLRequest(url: URL(string: "https://ai.tmallyc.com/prd/api/requirement/detail/\(item.id)")!)
+        request.timeoutInterval = 20
+        request.setValue(cookie, forHTTPHeaderField: "Cookie")
+        statusSession.dataTask(with: request) { [weak self] data, response, error in
+            let result: Result<PRDStartDevelopmentDraft, Error>
+            if let error { result = .failure(error) }
+            else if let http = response as? HTTPURLResponse, http.statusCode == 401 || http.statusCode == 403 {
+                result = .failure(PRDStartDevelopmentDraft.ReadError.message("登录已过期，请先更新 Cookie"))
+            } else if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                result = .failure(PRDStartDevelopmentDraft.ReadError.message("读取需求失败（HTTP \(http.statusCode)）"))
+            } else if let data { result = Result { try PRDStartDevelopmentDraft.decode(data, reqID: item.id) } }
+            else { result = .failure(PRDStartDevelopmentDraft.ReadError.message("服务端无响应，请重试")) }
+            DispatchQueue.main.async {
+                guard let self, self.startDevelopmentRequest == token,
+                      self.startDevelopmentItem?.id == item.id else { return }
+                self.startDevelopmentLoading = false
+                switch result {
+                case .success(let draft): self.startDevelopmentDraft = draft
+                case .failure(let error): self.startDevelopmentError = error.localizedDescription
+                }
+            }
+        }.resume()
+    }
+
+    func cancelStartDevelopment() {
+        guard startDevelopmentItem.map({ !statusSubmitting.contains($0.id) }) ?? true else { return }
+        startDevelopmentRequest = nil
+        startDevelopmentItem = nil
+        startDevelopmentDraft = nil
+        startDevelopmentError = nil
+        startDevelopmentLoading = false
+    }
+
+    func pushStatus(reqId: Int, toStatus: String, actionName: String,
+                    developmentDraft: PRDStartDevelopmentDraft? = nil) {
+        guard !statusSubmitting.contains(reqId) else { return }
+        if toStatus == "KFZ", developmentDraft == nil {
+            guard let item = prdItems.first(where: { $0.id == reqId }) else {
+                flashToast("找不到当前需求，请刷新后重试")
+                return
+            }
+            beginStartDevelopment(item)
+            return
+        }
+        let jsonData: Data
+        do {
+            jsonData = try JSONEncoder().encode(PRDStatusChange(reqID: reqId, toStatus: toStatus,
+                actionName: actionName, development: developmentDraft))
+        } catch {
+            startDevelopmentError = error.localizedDescription
+            flashToast(error.localizedDescription)
+            return
+        }
+        guard let cookie = statusCookie(), !cookie.isEmpty else {
+            let message = "没有可用登录态，先在横幅里更新 Cookie"
+            if startDevelopmentItem?.id == reqId { startDevelopmentError = message }
+            flashToast(message)
+            return
+        }
+        statusSubmitting.insert(reqId)
+        startDevelopmentError = nil
         var req = URLRequest(url: URL(string: "https://ai.tmallyc.com/prd/api/requirement/changeStatus")!)
         req.httpMethod = "POST"
+        req.timeoutInterval = 20
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(cookie, forHTTPHeaderField: "Cookie")
         req.httpBody = jsonData
-        URLSession.shared.dataTask(with: req) { [weak self] data, response, err in
-            guard let self else { return }
-            var toast = "「\(actionName)」失败: "
-            if let e = err {
-                toast += e.localizedDescription
-            } else if let http = response as? HTTPURLResponse, http.statusCode == 401 {
-                toast = "登录已过期，请先更新 Cookie"
+        statusSession.dataTask(with: req) { [weak self] data, response, err in
+            var failure = "「\(actionName)」失败: "
+            var succeeded = false
+            if let err { failure += err.localizedDescription }
+            else if let http = response as? HTTPURLResponse, http.statusCode == 401 || http.statusCode == 403 {
+                failure = "登录已过期，请先更新 Cookie"
+            } else if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                failure += "HTTP \(http.statusCode)，请重试"
             } else if let data, let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                if obj["success"] as? Bool == true {
-                    DispatchQueue.main.async {
-                        self.flashToast("✓ 已\(actionName)")
-                        self.regenerate()
-                    }
-                    return
+                succeeded = obj["success"] as? Bool == true
+                if !succeeded { failure += obj["message"] as? String ?? "接口返回异常" }
+            } else { failure += "服务端无响应" }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.statusSubmitting.remove(reqId)
+                if succeeded {
+                    if self.startDevelopmentItem?.id == reqId { self.cancelStartDevelopment() }
+                    self.flashToast("✓ 已\(actionName)")
+                    if let refresh = self.statusRefresh { refresh() }
+                    else { self.refreshRequirements() }
+                } else {
+                    if self.startDevelopmentItem?.id == reqId { self.startDevelopmentError = failure }
+                    self.flashToast(failure)
                 }
-                toast += obj["message"] as? String ?? "接口返回异常"
-            } else {
-                toast += "服务端无响应"
             }
-            DispatchQueue.main.async { self.flashToast(toast) }
         }.resume()
     }
 
@@ -868,6 +973,11 @@ final class BizMapViewModel: ObservableObject {
     @Published var deliverableToast: String?
     @Published var deliverableStatus: [Int: Set<String>] = [:]  // reqId → {"dev","test","solution"}
     @Published var deliverableItems: [Int: [[String: Any]]] = [:] // reqId → flat list of deliverable items
+    @Published private(set) var developmentProjectSnapshots: [Int: DevelopmentProjectSnapshot] = [:]
+    @Published private(set) var deliverableLoading: Set<Int> = []
+    @Published private(set) var deliverableReadErrors: [Int: String] = [:]
+    private var deliverableRequests: [Int: UUID] = [:]
+    private let projectStore: DevelopmentProjectStore
 
     func uploadDeliverable(reqId: Int, reqNo: String, code: String) {
         deliverableReqId = reqId
@@ -907,7 +1017,11 @@ final class BizMapViewModel: ObservableObject {
                     guard let id = a["id"] as? Int, let name = a["name"] as? String else { return nil }
                     return (id, name)
                 }
-                DispatchQueue.main.async { self?.devAppResults = results }
+                DispatchQueue.main.async {
+                    guard let self, self.devSelectedApp == nil,
+                          self.devAppQuery.trimmingCharacters(in: .whitespaces) == q else { return }
+                    self.devAppResults = results
+                }
             }.resume()
         }
     }
@@ -915,9 +1029,11 @@ final class BizMapViewModel: ObservableObject {
     func searchBranches() {
         branchSearchTimer?.invalidate()
         guard let app = devSelectedApp else { devBranchResults = []; return }
+        let searchQuery = devBranchQuery
+        devBranchResults = []
         branchSearchTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { [weak self] _ in
             guard let self = self else { return }
-            let q = self.devBranchQuery.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+            let q = searchQuery.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
             let cookie = (try? String(contentsOfFile: NSString(string: "~/.config/dboard/prd-cookie.txt").expandingTildeInPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)) ?? ""
             var req = URLRequest(url: URL(string: "https://ai.tmallyc.com/prd/api/devops/app/branch?id=\(app.id)&name=\(q)")!)
             req.setValue(cookie, forHTTPHeaderField: "Cookie")
@@ -928,14 +1044,20 @@ final class BizMapViewModel: ObservableObject {
                 var body = resp["body"]
                 if let s = body as? String { body = try? JSONSerialization.jsonObject(with: s.data(using: .utf8)!) }
                 let branches = ((body as? [String: Any])?["data"] as? [String: Any])?["branch"] as? [String] ?? []
-                DispatchQueue.main.async { self?.devBranchResults = branches }
+                DispatchQueue.main.async {
+                    guard let self, self.devSelectedApp?.id == app.id,
+                          self.devBranchQuery == searchQuery else { return }
+                    self.devBranchResults = branches
+                }
             }.resume()
         }
     }
 
     func addDevProject(branch: String) {
         guard let app = devSelectedApp else { return }
-        deliverableProjects.append((app: app.name, branch: branch))
+        if !deliverableProjects.contains(where: { $0.app == app.name && $0.branch == branch }) {
+            deliverableProjects.append((app: app.name, branch: branch))
+        }
         devSelectedApp = nil
         devAppQuery = ""
         devBranchQuery = ""
@@ -965,9 +1087,20 @@ final class BizMapViewModel: ObservableObject {
 
         DispatchQueue.global().async { [weak self] in
             var attachmentIds: [Int] = []
+            // 选了附件就必须上传并持久化成功，否则整体不提交，表单与附件保留
+            func fail(_ message: String) {
+                DispatchQueue.main.async {
+                    self?.deliverableUploading = false
+                    self?.flashToast(message)
+                }
+            }
+            func accepted(_ response: URLResponse?) -> Bool {
+                guard let http = response as? HTTPURLResponse else { return false }
+                return (200..<300).contains(http.statusCode)
+            }
 
-            // 上传附件（如有）
-            if let fileURL = fileURL, let fileData = try? Data(contentsOf: fileURL) {
+            if let fileURL = fileURL {
+                guard let fileData = try? Data(contentsOf: fileURL) else { fail("无法读取附件，未提交"); return }
                 let fileName = fileURL.lastPathComponent
                 let boundary = "----DBoard\(UInt32.random(in: 0...UInt32.max))"
                 var req1 = URLRequest(url: URL(string: "https://ai.tmallyc.com/prd/api/attachment/uploadTemp")!)
@@ -982,7 +1115,7 @@ final class BizMapViewModel: ObservableObject {
                 body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
                 req1.httpBody = body
 
-                if let (data1, _) = try? URLSession.shared.syncData(for: req1),
+                if let (data1, response1) = try? URLSession.shared.syncData(for: req1), accepted(response1),
                    let resp1 = try? JSONSerialization.jsonObject(with: data1) as? [String: Any],
                    resp1["success"] as? Bool == true,
                    let tempData = resp1["data"] as? [String: Any],
@@ -995,14 +1128,14 @@ final class BizMapViewModel: ObservableObject {
                     req2.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     req2.setValue(cookie, forHTTPHeaderField: "Cookie")
                     req2.httpBody = try? JSONSerialization.data(withJSONObject: persistBody)
-                    if let (data2, _) = try? URLSession.shared.syncData(for: req2),
+                    if let (data2, response2) = try? URLSession.shared.syncData(for: req2), accepted(response2),
                        let resp2 = try? JSONSerialization.jsonObject(with: data2) as? [String: Any],
                        resp2["success"] as? Bool == true,
                        let attData = resp2["data"] as? [String: Any],
                        let attId = attData["id"] as? Int {
                         attachmentIds.append(attId)
-                    }
-                }
+                    } else { fail("附件保存失败，交付物未提交；表单已保留，可重试"); return }
+                } else { fail("附件上传失败，交付物未提交；表单已保留，可重试"); return }
             }
 
             // 提交交付物
@@ -1019,16 +1152,19 @@ final class BizMapViewModel: ObservableObject {
             req3.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req3.setValue(cookie, forHTTPHeaderField: "Cookie")
             req3.httpBody = try? JSONSerialization.data(withJSONObject: delivBody)
-            let (data3, _) = (try? URLSession.shared.syncData(for: req3)) ?? (Data(), URLResponse())
-            let ok = (try? JSONSerialization.jsonObject(with: data3) as? [String: Any])?["success"] as? Bool == true
+            let (data3, response3) = (try? URLSession.shared.syncData(for: req3)) ?? (Data(), URLResponse())
+            let ok = accepted(response3)
+                && (try? JSONSerialization.jsonObject(with: data3) as? [String: Any])?["success"] as? Bool == true
 
             DispatchQueue.main.async {
                 self?.deliverableUploading = false
-                self?.showDeliverablePanel = false
+                // 失败时保留面板和草稿，便于直接重试
+                if ok { self?.showDeliverablePanel = false }
                 if ok {
                     self?.deliverableToast = "✅ 交付物上传成功"
                     let tag: String = typeNum == 1 ? "solution" : (typeNum == 3 ? "dev" : "test")
                     self?.deliverableStatus[reqId, default: []].insert(tag)
+                    self?.loadDeliverableStatus(reqId: reqId, force: true)
                 } else {
                     self?.deliverableToast = "⚠️ 上传失败"
                 }
@@ -1044,32 +1180,45 @@ final class BizMapViewModel: ObservableObject {
         if panel.runModal() == .OK { deliverableFile = panel.url }
     }
 
-    func loadDeliverableStatus(reqId: Int) {
+    @discardableResult
+    func recordDeliverables(_ response: DevelopmentDeliverables.Response, reqID: Int, fetchedAt: Date = Date()) -> Bool {
+        let snapshot = DevelopmentProjectSnapshot(projects: response.projects, fetchedAt: fetchedAt)
+        developmentProjectSnapshots[reqID] = snapshot
+        deliverableStatus[reqID] = response.tags
+        deliverableItems[reqID] = response.items
+        let saved = projectStore.save(snapshot, for: reqID)
+        deliverableReadErrors[reqID] = saved ? nil : "工程已读取，但本地缓存保存失败；重开后需重新读取"
+        return saved
+    }
+
+    func loadDeliverableStatus(reqId: Int, force: Bool = false) {
+        guard force || !deliverableLoading.contains(reqId) else { return }
         let cookie = (try? String(contentsOfFile: NSString(string: "~/.config/dboard/prd-cookie.txt").expandingTildeInPath, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)) ?? ""
+        guard !cookie.isEmpty else {
+            deliverableReadErrors[reqId] = "需要登录后读取开发交付"
+            authExpired = true
+            return
+        }
+        let requestID = UUID()
+        deliverableRequests[reqId] = requestID
+        deliverableLoading.insert(reqId)
+        deliverableReadErrors[reqId] = nil
         var req = URLRequest(url: URL(string: "https://ai.tmallyc.com/prd/api/requirement/deliverable/list/\(reqId)")!)
+        req.timeoutInterval = 20
         req.setValue(cookie, forHTTPHeaderField: "Cookie")
-        URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
-            guard let data = data,
-                  let resp = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  resp["success"] as? Bool == true,
-                  let d = resp["data"] as? [String: Any] else { return }
-            var tags = Set<String>()
-            var allItems: [[String: Any]] = []
-            let typeMap = ["1": "solution", "2": "ui", "3": "dev", "4": "test"]
-            for (key, tag) in typeMap {
-                if let items = d[key] as? [[String: Any]], !items.isEmpty {
-                    tags.insert(tag)
-                    for item in items {
-                        var it = item
-                        it["_tag"] = tag
-                        allItems.append(it)
-                    }
-                }
-            }
-            allItems.sort { ($0["createTime"] as? String ?? "") > ($1["createTime"] as? String ?? "") }
+        URLSession.shared.dataTask(with: req) { [weak self] data, httpResponse, error in
+            let status = (httpResponse as? HTTPURLResponse)?.statusCode
+            let response = error == nil && status == 200 ? data.flatMap { try? DevelopmentDeliverables.decode($0) } : nil
             DispatchQueue.main.async {
-                self?.deliverableStatus[reqId] = tags
-                self?.deliverableItems[reqId] = allItems
+                guard let self, self.deliverableRequests[reqId] == requestID else { return }
+                self.deliverableRequests[reqId] = nil
+                self.deliverableLoading.remove(reqId)
+                if let response { self.recordDeliverables(response, reqID: reqId) }
+                else {
+                    let expired = status == 401 || status == 403
+                    self.deliverableReadErrors[reqId] = expired ? "登录已过期，请重新登录后读取" : "开发交付读取失败，请重试"
+                    if expired { self.authExpired = true }
+                }
             }
         }.resume()
     }
@@ -1098,17 +1247,43 @@ final class BizMapViewModel: ObservableObject {
         }
     }
 
-    func syncOne(name: String) {
+    /// mode: sync 只按已确认身份或唯一精确同名写；create / link 只在用户明确选择后使用
+    func syncOne(name: String, mode: String = "sync", recordID: String? = nil) {
         syncStatus[name] = "syncing"
         DispatchQueue.global().async { [weak self] in
             guard let self = self else { return }
-            let result = self.runSyncScript(args: ["sync", name])
-            let ok = ["ok", "updated", "skip"].contains { result.contains("\"\($0)\"") }
+            let raw = self.runSyncScript(args: [mode, name] + (recordID.map { [$0] } ?? []))
+            let json = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any]
+            let status = json?["status"] as? String ?? ""
             DispatchQueue.main.async {
+                if status == "needs-confirm" {
+                    self.syncStatus[name] = "unsynced"
+                    self.confirmTableRecord(name: name, candidates: json?["candidates"] as? [[String: Any]] ?? [])
+                    return
+                }
+                let ok = ["ok", "updated", "skip"].contains(status)
                 self.syncStatus[name] = ok ? "synced" : "error"
+                if !ok { self.flashToast("项目表同步失败：\(json?["message"] as? String ?? "请稍后重试")") }
                 if ok { self.checkSyncStatus() }
             }
         }
+    }
+
+    private func confirmTableRecord(name: String, candidates: [[String: Any]]) {
+        let options = candidates.compactMap { c -> (String, String)? in
+            guard let id = c["recordId"] as? String, !id.isEmpty else { return nil }
+            return (id, c["name"] as? String ?? id)
+        }.prefix(2)
+        let alert = NSAlert()
+        alert.messageText = "项目表里有名称相近的记录"
+        alert.informativeText = "「\(name)」没有完全同名的记录。请确认是否就是下面某条；确认后会按需求编号记住，不再按名称猜。"
+        for option in options { alert.addButton(withTitle: "关联到「\(option.1)」") }
+        alert.addButton(withTitle: "新建记录")
+        alert.addButton(withTitle: "取消")
+        NSApp.activate(ignoringOtherApps: true)
+        let index = alert.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+        if index < options.count { syncOne(name: name, mode: "link", recordID: Array(options)[index].0) }
+        else if index == options.count { syncOne(name: name, mode: "create") }
     }
 
     func syncAll() {
@@ -1118,32 +1293,25 @@ final class BizMapViewModel: ObservableObject {
         }
         DispatchQueue.global().async { [weak self] in
             guard let self = self else { return }
-            let result = self.runSyncScript(args: ["sync-all"])
+            let raw = self.runSyncScript(args: ["sync-all"])
+            let json = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any]
+            let results = json?["results"] as? [[String: Any]] ?? []
+            let failed = results.filter { !["ok", "updated", "skip"].contains($0["status"] as? String ?? "") }.count
             DispatchQueue.main.async {
                 self.syncAllRunning = false
+                if json?["status"] as? String != "ok" { self.flashToast("项目表读取失败，未做任何写入") }
+                else if failed > 0 { self.flashToast("\(failed) 条未同步：名称相近需单条确认或同步失败") }
                 self.checkSyncStatus()
             }
         }
     }
 
     private func runSyncScript(args: [String]) -> String {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/bash")
-        p.arguments = [syncScript] + args
         var env = ProcessInfo.processInfo.environment
         let home = NSHomeDirectory()
         env["PATH"] = "\(home)/.qoderwork/bin:\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
-        p.environment = env
-        let out = Pipe()
-        p.standardOutput = out
-        p.standardError = FileHandle.nullDevice
-        do {
-            try p.run()
-            p.waitUntilExit()
-            return String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        } catch {
-            return ""
-        }
+        let result = ProcessRunner.run("/bin/bash", arguments: [syncScript] + args, environment: env, timeout: 180)
+        return result.outputComplete && !result.timedOut ? String(decoding: result.stdout, as: UTF8.self) : ""
     }
 }
 
@@ -1151,19 +1319,19 @@ final class BizMapViewModel: ObservableObject {
 
 private func tierColor(_ tier: String) -> Color {
     switch tier {
-    case "t1": return Color(hex: "#DC2626")
-    case "t2": return Color(hex: "#059669")
-    case "t3m": return Color(hex: "#2563EB")
-    case "t3s": return Color(hex: "#0891B2")
-    case "gw": return Color(hex: "#7C3AED")
-    case "adm": return Color(hex: "#EA580C")
-    case "infra": return Color(hex: "#64748B")
-    default: return Color(hex: "#9CA3AF")
+    case "t1": return Color.red
+    case "t2": return Color.green
+    case "t3m": return Color.accentColor
+    case "t3s": return Color.accentColor
+    case "gw": return Color.accentColor
+    case "adm": return Color.orange
+    case "infra": return Color.secondary
+    default: return Color.secondary
     }
 }
 
-private let hitPrimary = Color(hex: "#F59E0B")
-private let hitSecondary = Color(hex: "#A78BFA")
+private let hitPrimary = Color.orange
+private let hitSecondary = Color.accentColor
 // MARK: - 本地 Cookie 桥 (接收 Chrome 扩展投递的登录态, 绕开 App-Bound 加密)
 
 final class CookieBridgeServer {
@@ -1174,6 +1342,7 @@ final class CookieBridgeServer {
 
     func start() {
         guard listener == nil else { return }
+        _ = CanaryCookieBridge.shared
         guard let l = try? NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: Self.port)!) else { return }
         l.newConnectionHandler = { conn in
             guard Self.isLoopback(conn.endpoint) else { conn.cancel(); return }
@@ -1205,35 +1374,67 @@ final class CookieBridgeServer {
         }
     }
 
-    private static func parse(_ data: Data) -> (method: String, path: String, body: Data, origin: String)? {
+    private static func parse(_ data: Data) -> (method: String, path: String, body: Data, origin: String, authorization: String)? {
         guard let sep = data.range(of: Data("\r\n\r\n".utf8)) else { return nil }
         let head = String(data: data[..<sep.lowerBound], encoding: .utf8) ?? ""
         let lines = head.components(separatedBy: "\r\n")
-        guard let first = lines.first?.components(separatedBy: " "), first.count >= 2 else { return ("", "", Data(), "") }
+        guard let first = lines.first?.components(separatedBy: " "), first.count >= 2 else { return ("", "", Data(), "", "") }
         var contentLength = 0
         var origin = ""
+        var authorization = ""
         for line in lines.dropFirst() {
             if line.lowercased().hasPrefix("content-length:") {
                 contentLength = Int(line.components(separatedBy: ":").last?.trimmingCharacters(in: .whitespaces) ?? "") ?? 0
             } else if line.lowercased().hasPrefix("origin:") {
                 origin = String(line.dropFirst(7)).trimmingCharacters(in: .whitespaces)
+            } else if line.lowercased().hasPrefix("authorization:") {
+                authorization = String(line.dropFirst(14)).trimmingCharacters(in: .whitespaces)
             }
         }
         guard contentLength >= 0,
               contentLength <= (first[1] == "/audi-cookie" ? 8192 : 65_536) else {
-            return ("", "", Data(), "")
+            return ("", "", Data(), "", "")
         }
-        guard first[0] == "POST" else { return (first[0], first[1], Data(), origin) }
+        guard first[0] == "POST" else { return (first[0], first[1], Data(), origin, authorization) }
         let bodyLen = data.count - sep.upperBound
         guard bodyLen >= contentLength else { return nil }
-        return (first[0], first[1], data[sep.upperBound..<(sep.upperBound + contentLength)], origin)
+        return (first[0], first[1], data[sep.upperBound..<(sep.upperBound + contentLength)], origin, authorization)
     }
 
-    private func handle(_ conn: NWConnection, _ req: (method: String, path: String, body: Data, origin: String)) {
+    private func handle(_ conn: NWConnection, _ req: (method: String, path: String, body: Data, origin: String, authorization: String)) {
         var status = "200 OK"
         var body = Data("ok".utf8)
         var cors = ""
-        if req.path == "/audi-cookie",
+        if req.path == "/canary-cookie" || req.path.hasPrefix("/canary-cookie/") {
+            cors = "Content-Type: application/json\r\n"
+            let extensionOrigin = req.origin.range(of: #"^chrome-extension://[a-p]{32}$"#, options: .regularExpression) != nil
+            if req.path == "/canary-cookie/pair" {
+                NSLog("Canary bridge pairing method=%@ originPresent=%@ extensionOrigin=%@ bodyBytes=%d", req.method, req.origin.isEmpty ? "no" : "yes", extensionOrigin ? "yes" : "no", req.body.count)
+            }
+            if extensionOrigin {
+                cors += "Access-Control-Allow-Origin: \(req.origin)\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, Authorization\r\nAccess-Control-Allow-Private-Network: true\r\n"
+            }
+            if req.method == "OPTIONS", ["/canary-cookie", "/canary-cookie/pair"].contains(req.path), extensionOrigin {
+                status = "204 No Content"; body = Data()
+            } else if req.method == "POST", req.path == "/canary-cookie/pair", req.body.isEmpty {
+                let result = CanaryCookieBridge.shared.pair(origin: req.origin) {
+                    DispatchQueue.main.sync {
+                        NSApp.activate(ignoringOtherApps: true)
+                        let alert = NSAlert()
+                        alert.messageText = "允许连接 Chrome 的 Canary 登录态？"
+                        alert.informativeText = "仅当你刚点击了 Cookie Bridge 的“连接 Canary”时允许。连接后，该扩展可自动将生产、预发 Canary 登录态同步到本机 DBoard，供本地工具使用。登录态仅保存在内存，不输出或写文件。\n\n扩展：\(req.origin)"
+                        alert.addButton(withTitle: "取消")
+                        alert.addButton(withTitle: "允许连接")
+                        return alert.runModal() == .alertSecondButtonReturn
+                    }
+                }
+                status = result.status; body = result.body
+            } else {
+                let result = CanaryCookieBridge.shared.response(method: req.method, path: req.path,
+                    origin: req.origin, authorization: req.authorization, body: req.body)
+                status = result.status; body = result.body
+            }
+        } else if req.path == "/audi-cookie",
            req.origin.range(of: #"^chrome-extension://[a-p]{32}$"#, options: .regularExpression) != nil {
             AppReleaseWindowController.shared.recordDiagnostic("bridge audi-cookie method=\(req.method) origin=extension")
             cors = "Access-Control-Allow-Origin: \(req.origin)\r\nAccess-Control-Allow-Methods: POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nAccess-Control-Allow-Private-Network: true\r\n"
@@ -1282,12 +1483,12 @@ final class CookieBridgeServer {
         } else {
             status = "404 Not Found"; body = Data("noop".utf8)
         }
-        let resp = "HTTP/1.1 \(status)\r\n\(cors)Content-Length: \(body.count)\r\nConnection: close\r\n\r\n".data(using: .utf8)! + body
+        let resp = "HTTP/1.1 \(status)\r\n\(cors)Cache-Control: no-store\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".data(using: .utf8)! + body
         conn.send(content: resp, completion: .contentProcessed { _ in conn.cancel() })
     }
 }
 
-private let prdBlue = Color(hex: "#2563EB")
+private let prdBlue = Color.accentColor
 
 // MARK: - 项目表记录（list-mine）
 
@@ -1298,10 +1499,48 @@ struct TableProject: Codable, Identifiable {
     let product: String
     let domain: String
     let tags: String
-    let submit: String
+    let submit: String          // 表内「PRD时间」
     let devStart: String
     let online: String
+    var test: String? = nil     // 提测时间；旧缓存没有该字段
+    var role: String? = nil     // owner / member
+    var requirementId: Int? = nil
+    var requirementNo: String? = nil
+    var requirementCode: String? = nil
+    var requirementStatus: String? = nil
     var id: String { recordId }
+
+    /// 正式状态优先采用需求流当前快照，其次采用项目表读取时的需求查询结果。
+    func displayStage(today: String = DemandDates.today(), requirement: BizPRDItem? = nil) -> (label: String, tint: Color) {
+        let status = requirement?.status ?? requirementStatus ?? ""
+        let code = requirement?.code ?? requirementCode ?? ""
+        if !status.isEmpty {
+            let tint: Color
+            switch code {
+            case "CPYSWC", "XQWC": tint = .green
+            case "CSZ", "YCS", "CSWC", "CPYSZ": tint = .orange
+            case "KFZ", "KFWC": tint = .accentColor
+            default: tint = .secondary
+            }
+            return (status, tint)
+        }
+        let schedule = stage(today: today)
+        if schedule.label == "开发中" || schedule.label == "测试中" { return ("状态待核实", .secondary) }
+        if schedule.label == "未排期" { return schedule }
+        return ("排期 · " + schedule.label, schedule.tint)
+    }
+
+    /// 表内排期推断，不能作为正式需求状态；未来日期算「待…」。
+    func stage(today: String = DemandDates.today()) -> (label: String, tint: Color) {
+        func reached(_ date: String?) -> Bool? {
+            guard let date, !date.isEmpty else { return nil }
+            return date <= today
+        }
+        if let done = reached(online) { return done ? ("已上线", .green) : ("待上线 \(online.suffix(5))", .orange) }
+        if let done = reached(test) { return done ? ("测试中", .orange) : ("待提测 \((test ?? "").suffix(5))", .secondary) }
+        if let done = reached(devStart) { return done ? ("开发中", .accentColor) : ("待开发 \(devStart.suffix(5))", .secondary) }
+        return ("未排期", .secondary)
+    }
 }
 
 private struct TableProjectsResponse: Codable {
@@ -1326,6 +1565,7 @@ struct BizMapBoardView: View {
     @EnvironmentObject var theme: ThemeManager
     @EnvironmentObject var fm: FontManager
     var popoverMode: Bool = false
+    var refreshOnAppear: Bool = true
     @FocusState private var searchFocused: Bool
     @State private var copiedHint: String? = nil
 
@@ -1347,9 +1587,9 @@ struct BizMapBoardView: View {
             }
             footer
         }
-        // 底层走��� Skills Board 同一套 ThemeBackground: 毛玻璃皮肤下是 NSVisualEffectView 原生材质,
+        // 底层使用与 Skills Board 相同的 同一套 ThemeBackground: 毛玻璃皮肤下是 NSVisualEffectView 原生材质,
         // 不能用裸主题色 opacity —— 半透主题叠透明窗口会成"几乎全透"
-        .background(ThemeBackground().environmentObject(theme))
+        .background(theme.current.background)
         .overlay(alignment: .top) {
             if let hint = copiedHint {
                 Text(hint).font(fm.font(10.5))
@@ -1360,13 +1600,29 @@ struct BizMapBoardView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .animation(.easeInOut(duration: 0.18), value: copiedHint)
+        .animation(DBoardUI.spring, value: copiedHint)
+        .toolbar {
+            if !popoverMode {
+                ToolbarItemGroup(placement: .automatic) { WorkspacePinButton(id: "bizmap"); DBoardSettingsButton() }
+            }
+        }
         .onAppear {
+            guard refreshOnAppear else { return }
             vm.load(); vm.checkSyncStatus(); searchFocused = true
             vm.probeAuth()
             for item in vm.myActive { vm.loadDeliverableStatus(reqId: item.id) }
         }
-        .onChange(of: vm.perspective) { p in if p == .requirements { vm.probeAuth() } }
+        .onChange(of: vm.perspective) { _, p in
+            guard refreshOnAppear else { return }
+            if p == .requirements {
+                vm.probeAuth()
+                for item in vm.myActive { vm.loadDeliverableStatus(reqId: item.id) }
+            }
+            BizMapBoardWindowController.shared.updateTitle()
+        }
+        .sheet(item: $vm.startDevelopmentItem, onDismiss: { vm.cancelStartDevelopment() }) { item in
+            PRDStartDevelopmentSheet(vm: vm, item: item)
+        }
         .sheet(isPresented: $vm.showDeliverablePanel) { deliverableSheet }
         .sheet(isPresented: $vm.showCookieSheet) { cookieSheet }
         .sheet(isPresented: $vm.showTableProjects) { tableProjectsSheet }
@@ -1374,11 +1630,11 @@ struct BizMapBoardView: View {
             if let toast = vm.deliverableToast {
                 Text(toast).font(fm.font(12).weight(.medium))
                     .padding(.horizontal, 16).padding(.vertical, 8)
-                    .background(Capsule().fill(Color(hex: "#1e293b").opacity(0.9)))
-                    .foregroundStyle(.white)
+                    .background(.regularMaterial, in: Capsule())
+                    .foregroundStyle(.primary)
                     .padding(.bottom, 20)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .animation(.easeInOut(duration: 0.2), value: vm.deliverableToast)
+                    .animation(DBoardUI.spring, value: vm.deliverableToast)
             }
         }
     }
@@ -1391,14 +1647,15 @@ struct BizMapBoardView: View {
             Spacer()
             prdFreshness
             if let g = vm.cache?.generated {
-                Text(g).font(fm.font(10)).foregroundStyle(theme.current.textMuted)
+                Text("生成 " + g).font(fm.font(10)).foregroundStyle(theme.current.textMuted)
+                    .help("看板生成时间，不代表服务职责与路由已重新核验")
             }
             if let ge = vm.genError {
                 Button(action: {
                     if vm.authExpired { vm.cookieInput = ""; vm.cookieError = nil; vm.showCookieSheet = true }
                 }) {
                     Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10))
-                        .foregroundStyle(Color(hex: "#d94f4f"))
+                        .foregroundStyle(Color.red)
                 }
                 .buttonStyle(.plain)
                 .help(vm.authExpired ? "登录态已失效，点击更新 Cookie" : ge)
@@ -1415,7 +1672,7 @@ struct BizMapBoardView: View {
                     ProgressView(value: Double(prog.current), total: Double(prog.total))
                         .frame(width: 60)
                     Text("\(prog.name) (\(prog.current)/\(prog.total))")
-                        .font(.system(size: 9, design: .monospaced))
+                        .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(theme.current.textMuted)
                         .lineLimit(1)
                 }
@@ -1424,7 +1681,7 @@ struct BizMapBoardView: View {
                 TearOffButton(key: "BizMapBoard")
             }
         }
-        .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 8)
+        .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 12)
         .tearOffHandle("BizMapBoard", enabled: popoverMode)
     }
 
@@ -1433,7 +1690,7 @@ struct BizMapBoardView: View {
         let lvl = vm.prdStaleLevel
         if lvl >= 0 {
             let ageDays = vm.prdAgeDays
-            let color: Color = lvl == 2 ? Color(hex: "#d94f4f") : (lvl == 1 ? hitPrimary : theme.current.textMuted)
+            let color: Color = lvl == 2 ? Color.red : (lvl == 1 ? hitPrimary : theme.current.textMuted)
             let label: String = {
                 guard let d = ageDays else { return "PRD 快照时间未知" }
                 if d <= 0 { return "PRD 今日" }
@@ -1473,38 +1730,12 @@ struct BizMapBoardView: View {
 
     /// 叠卡容器: 两张字标同栈, 谁 active 谁在前台原位, 另一张缩到影子位
     private var perspectiveStack: some View {
-        ZStack(alignment: .topLeading) {
-            wordCard("BizMap", "业务地图", .services)
-            wordCard("ReqFlow", "需求流", .requirements)
+        Picker("视角", selection: $vm.perspective) {
+            Text("业务地图").tag(BizPerspective.services)
+            Text("需求流").tag(BizPerspective.requirements)
         }
-        .frame(width: 175, height: 48, alignment: .topLeading)
-    }
-
-    /// 字标卡: active = 前台原位重墨 + 下划标; 非 active = 右斜下影子位(缩小/压暗/微斜), 点击弹簧换位
-    /// 纯英文字标, 不带中文小字(灰色小字很脏)——中文名只留在 tooltip
-    private func wordCard(_ en: String, _ zh: String, _ p: BizPerspective) -> some View {
-        let active = vm.perspective == p
-        return Button(action: {
-            guard !active else { return }
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) { vm.perspective = p }
-        }) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(en).font(fm.font(19).weight(.heavy))
-                    .foregroundStyle(active ? theme.current.accentPrimary : theme.current.textMuted)
-                Capsule()
-                    .fill(active ? theme.current.accentPrimary : Color.clear)
-                    .frame(width: 28, height: 2.5)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(active)
-        .scaleEffect(active ? 1 : 0.78, anchor: .topLeading)
-        .rotationEffect(.degrees(active ? 0 : 2.5), anchor: .topLeading)
-        .offset(x: active ? 0 : 64, y: active ? 0 : 17)
-        .opacity(active ? 1 : 0.4)
-        .zIndex(active ? 1 : 0)
-        .help(active ? "" : "切换到 \(en) \(zh)")
+        .pickerStyle(.segmented)
+        .frame(width: 210)
     }
 
     // MARK: Search / 路由
@@ -1514,7 +1745,7 @@ struct BizMapBoardView: View {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(theme.current.textMuted)
                 TextField(vm.perspective == .requirements
-                          ? "筛选需求：名称 / 编号 / 服务 / 开发 / 状态 …"
+                          ? "筛选需求：名称 / 编号 / 工程 / 开发 / 状态 …"
                           : "输入需求关键词做路由：验券 / 领券 / 企微群聊 / 售后退款 / 会员卡 / 下单 …", text: $vm.query)
                     .textFieldStyle(.plain).font(fm.font(12.5))
                     .focused($searchFocused)
@@ -1590,11 +1821,17 @@ struct BizMapBoardView: View {
         let isSelected = vm.selected?.name == svc.name
 
         return VStack(alignment: .leading, spacing: 10) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.16)) { vm.selected = isSelected ? nil : svc }
+            } label: {
+            VStack(alignment: .leading, spacing: 10) {
             // 第一层: 标题
             HStack(alignment: .top, spacing: 0) {
                 Text(svc.name).font(fm.font(14).weight(.semibold))
                     .foregroundStyle(theme.current.textPrimary).lineLimit(1)
                 Spacer(minLength: 6)
+                Image(systemName: isSelected ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
                 if let g = vm.cache?.generated {
                     Text(g.suffix(11)).font(.system(size: 8.5, design: .monospaced))
                         .foregroundStyle(theme.current.textMuted)
@@ -1631,8 +1868,12 @@ struct BizMapBoardView: View {
                     Image(systemName: "sparkles").font(.system(size: 9))
                     Text(recent).font(fm.font(9.5)).lineLimit(isSelected ? 3 : 1)
                 }
-                .foregroundStyle(Color(hex: "#8b5cf6"))
+                .foregroundStyle(Color.accentColor)
             }
+            }
+            .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).accessibilityLabel((isSelected ? "收起服务 " : "展开服务 ") + svc.name)
             // 展开详情
             if isSelected {
                 Divider().opacity(0.4).padding(.vertical, 4)
@@ -1651,11 +1892,7 @@ struct BizMapBoardView: View {
         }
         .opacity(dimmed ? 0.3 : 1)
         .contentShape(Rectangle())
-        .onTapGesture {
-            withAnimation(.easeInOut(duration: 0.16)) {
-                vm.selected = isSelected ? nil : svc
-            }
-        }
+
     }
 
     private func badge(_ text: String, active: Bool = false, tint: Color? = nil) -> some View {
@@ -1676,8 +1913,8 @@ struct BizMapBoardView: View {
                 if let nf = svc.newFacades, nf > 0 {
                     Text("新增 \(nf) 个 Facade").font(fm.font(10))
                         .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Capsule().fill(Color(hex: "#f59e0b").opacity(0.12)))
-                        .foregroundStyle(Color(hex: "#f59e0b"))
+                        .background(Capsule().fill(Color.orange.opacity(0.12)))
+                        .foregroundStyle(Color.orange)
                 }
             }
             if !svc.routing.isEmpty {
@@ -1742,15 +1979,15 @@ struct BizMapBoardView: View {
                     section("近期变化") {
                         HStack(spacing: 4) {
                             Image(systemName: "sparkles").font(.system(size: 10))
-                                .foregroundStyle(Color(hex: "#8b5cf6"))
+                                .foregroundStyle(Color.accentColor)
                             Text(recent).font(fm.font(11)).foregroundStyle(theme.current.textSecondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         if let nf = svc.newFacades, nf > 0 {
                             Text("新增 \(nf) 个 Facade").font(fm.font(10))
                                 .padding(.horizontal, 6).padding(.vertical, 2)
-                                .background(Capsule().fill(Color(hex: "#f59e0b").opacity(0.12)))
-                                .foregroundStyle(Color(hex: "#f59e0b"))
+                                .background(Capsule().fill(Color.orange.opacity(0.12)))
+                                .foregroundStyle(Color.orange)
                         }
                     }
                 }
@@ -1788,7 +2025,7 @@ struct BizMapBoardView: View {
                                         Text(p.no).font(fm.font(9).weight(.bold)).foregroundStyle(prdBlue)
                                         if let pri = p.pri {
                                             Text(pri).font(fm.font(8.5).weight(.bold))
-                                                .foregroundStyle(pri == "P0" ? Color(hex: "#d94f4f") : theme.current.textMuted)
+                                                .foregroundStyle(pri == "P0" ? Color.red : theme.current.textMuted)
                                         }
                                         Text(p.status).font(fm.font(9))
                                             .foregroundStyle(p.code == "SJWC" ? hitPrimary : theme.current.textMuted)
@@ -1871,7 +2108,7 @@ struct BizMapBoardView: View {
                     // 搜索时直出全量命中, 不受分栏限制
                     let hits = vm.filteredPRD
                     if hits.isEmpty {
-                        Text("无匹���需求 —— 换个筛选词").font(fm.font(11)).foregroundStyle(theme.current.textMuted)
+                        Text("没有匹配的需求，请换个筛选词").font(fm.font(11)).foregroundStyle(theme.current.textMuted)
                             .frame(maxWidth: .infinity).padding(.top, 60)
                     } else {
                         sectionLabel("搜索结果", hits.count, tint: prdBlue)
@@ -1924,21 +2161,29 @@ struct BizMapBoardView: View {
                         .help("拉取项目表中开发包含你的全部项目")
                     }
                     if vm.myActive.isEmpty {
-                        Text("暂无我参与的需求").font(fm.font(10.5)).foregroundStyle(theme.current.textMuted)
+                        Text("暂无我进行中的需求").font(fm.font(10.5)).foregroundStyle(theme.current.textMuted)
                             .padding(.leading, 2)
                     } else {
-                        LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 12) {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 12)], spacing: 12) {
                             ForEach(vm.myActive) { prdRow($0, hero: true) }
                         }
+                    }
+                    if !vm.myCompleted.isEmpty {
+                        DisclosureGroup("我的已完成（\(vm.myCompleted.count)）") {
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 12)], spacing: 12) {
+                                ForEach(vm.myCompleted) { prdRow($0) }
+                            }.padding(.top, 8)
+                        }
+                        .font(fm.font(12)).foregroundStyle(theme.current.textSecondary)
                     }
                     groupTabs.padding(.top, 8)
                     let items = vm.tabItems(vm.reqTab)
                     if items.isEmpty {
-                        Text(vm.showUnroutedOnly ? "这一栏没有未路由需求" : "这一栏是空的")
+                        Text("这一栏是空的")
                             .font(fm.font(10.5)).foregroundStyle(theme.current.textMuted)
                             .frame(maxWidth: .infinity).padding(.top, 24)
                     } else {
-                        LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 12)], spacing: 12) {
                             ForEach(items) { prdRow($0) }
                         }
                     }
@@ -1950,7 +2195,7 @@ struct BizMapBoardView: View {
 
     /// 登录态失效横幅: 打开登录页(浏览器授权) 或 粘贴新 Cookie(验证通过后自动刷新)
     private var authBanner: some View {
-        let red = Color(hex: "#d94f4f")
+        let red = Color.red
         return HStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 15)).foregroundStyle(red)
             VStack(alignment: .leading, spacing: 2) {
@@ -1972,7 +2217,7 @@ struct BizMapBoardView: View {
                     .foregroundStyle(red)
             }.buttonStyle(.plain)
             Button(action: { vm.openURL("https://ai.tmallyc.com/prd/index.html") }) {
-                Text("浏览器登���").font(fm.font(10)).foregroundStyle(theme.current.accentPrimary)
+                Text("浏览器登录").font(fm.font(10)).foregroundStyle(theme.current.accentPrimary)
             }.buttonStyle(.plain)
             .help("在 Chrome 登录后由 Cookie Bridge 自动同步；未安装扩展时可手动提取")
         }
@@ -2036,12 +2281,20 @@ struct BizMapBoardView: View {
                     .foregroundStyle(theme.current.textPrimary)
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 6)
-                let done = !proj.online.isEmpty
-                Text(done ? "已上线" : (proj.devStart.isEmpty ? "未排期" : "开发中"))
-                    .font(.system(size: 9, weight: .semibold))
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Capsule().fill((done ? Color(hex: "#22c55e") : Color(hex: "#f59e0b")).opacity(0.14)))
-                    .foregroundStyle(done ? Color(hex: "#22c55e") : Color(hex: "#f59e0b"))
+                let requirement = vm.tableProjectRequirement(proj)
+                let stage = proj.displayStage(requirement: requirement)
+                if proj.role == "member" {
+                    Text("成员").font(.system(size: 11)).foregroundStyle(.secondary)
+                        .help("你在「其它成员」里，主要负责人不是你")
+                }
+                Text(stage.label)
+                    .font(.system(size: 11, weight: .medium)).monospacedDigit()
+                    .padding(.horizontal, 8).padding(.vertical, 2)
+                    .background(Capsule().fill(stage.tint.opacity(0.12)))
+                    .foregroundStyle(stage.tint)
+                    .help(requirement != nil || !(proj.requirementStatus ?? "").isEmpty
+                          ? "需求流：\(requirement?.no ?? proj.requirementNo ?? "")；状态来自正式需求，排期日期单独展示"
+                          : "未找到唯一对应的需求流记录；排期仅供参考，开发日期已到不能确认仍在开发")
             }
             if !proj.desc.isEmpty {
                 Text(proj.desc).font(fm.font(10.5))
@@ -2053,9 +2306,10 @@ struct BizMapBoardView: View {
                 if !proj.domain.isEmpty { tableChip(proj.domain, tint: Color(hex: "#7c3aed")) }
                 if !proj.tags.isEmpty { tableChip(proj.tags, tint: Color(hex: "#0891b2")) }
                 Spacer(minLength: 4)
-                dateHint("提测", proj.submit, theme.current.textMuted)
+                dateHint("PRD", proj.submit, theme.current.textMuted)
                 dateHint("开发", proj.devStart, theme.current.textMuted)
-                dateHint("上线", proj.online, Color(hex: "#22c55e"))
+                dateHint("提测", proj.test ?? "", theme.current.textMuted)
+                dateHint("上线", proj.online, Color.green)
             }
         }
         .padding(10)
@@ -2071,7 +2325,7 @@ struct BizMapBoardView: View {
                 EmptyView()
             } else {
                 Text("\(label) \(date.dropFirst(5))")
-                    .font(.system(size: 9, design: .monospaced))
+                    .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(tint)
             }
         }
@@ -2090,7 +2344,7 @@ struct BizMapBoardView: View {
             }
             VStack(alignment: .leading, spacing: 3) {
                 Text("Chrome：点「安装 Chrome 桥」装一次扩展，之后在 Chrome 登录即自动投递给 DBoard，不用再管")
-                Text("Qoder 系内置浏览器：登录过即可被「从浏览器提取���直接收割；兜底走 DevTools 复制 Cookie 粘贴")
+                Text("Qoder 系内置浏览器：登录过即可被「从浏览器提取」直接读取；兜底走 DevTools 复制 Cookie 粘贴")
             }
             .font(.system(size: 11)).foregroundStyle(.secondary)
             TextEditor(text: $vm.cookieInput)
@@ -2098,7 +2352,7 @@ struct BizMapBoardView: View {
                 .frame(height: 110)
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
             if let e = vm.cookieError {
-                Text(e).font(.system(size: 11)).foregroundStyle(Color(hex: "#d94f4f"))
+                Text(e).font(.system(size: 11)).foregroundStyle(Color.red)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }
@@ -2144,7 +2398,7 @@ struct BizMapBoardView: View {
         }
     }
 
-    /// 组内分栏 Tab + 未路由筛选器
+    /// 组内分栏
     private var groupTabs: some View {
         HStack(spacing: 6) {
             Text("组内").font(fm.font(11.5).weight(.semibold)).foregroundStyle(theme.current.textSecondary)
@@ -2164,185 +2418,96 @@ struct BizMapBoardView: View {
                 .buttonStyle(.plain)
             }
             Spacer()
-            if !vm.prdUnrouted.isEmpty {
-                Button(action: { withAnimation(.easeInOut(duration: 0.15)) { vm.showUnroutedOnly.toggle() } }) {
-                    HStack(spacing: 3) {
-                        if vm.showUnroutedOnly { Image(systemName: "checkmark").font(.system(size: 8, weight: .bold)) }
-                        Text("未路由 \(vm.prdUnrouted.count)").font(fm.font(10))
-                    }
-                    .padding(.horizontal, 7).padding(.vertical, 2.5)
-                    .background(Capsule().fill(hitPrimary.opacity(vm.showUnroutedOnly ? 0.28 : 0.12)))
-                    .foregroundStyle(hitPrimary)
-                }
-                .buttonStyle(.plain)
-                .help("只看定不出目标服务的需求（告诉 AI 补标注）")
-            }
+
         }
     }
 
     private func prdRow(_ p: BizPRDItem, hero: Bool = false) -> some View {
         let open = vm.expandedPRD.contains(p.id)
-        let statusColor: Color = {
-            switch p.code {
-            case "KFZ", "CSZ": return Color(hex: "#3b82f6")
-            case "SJWC", "FASJWC": return Color(hex: "#f59e0b")
-            case "XQWC", "CPYSWC": return Color(hex: "#22c55e")
-            case "CPYSZ": return Color(hex: "#8b5cf6")
-            default: return theme.current.textMuted
-            }
-        }()
-        return VStack(alignment: .leading, spacing: hero ? 10 : 6) {
-            if hero {
-                // === Hero 卡片: 三层布局 ===
-                // 第一层: 标题 + 更新时间 + 同步状态
-                HStack(alignment: .top, spacing: 0) {
-                    Text(p.name).font(fm.font(14).weight(.semibold))
-                        .foregroundStyle(theme.current.textPrimary)
-                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 8)
-                    if let lastTime = p.flow?.first?.t {
-                        Text(lastTime).font(.system(size: 9, design: .monospaced))
-                            .foregroundStyle(theme.current.textMuted)
-                            .padding(.trailing, 6)
-                    }
-                    let st = vm.syncStatus[p.name] ?? "unsynced"
-                    if st == "synced", vm.syncChanged.contains(p.name) {
-                        Button(action: { vm.syncOne(name: p.name) }) {
-                            Image(systemName: "arrow.triangle.2.circlepath.circle.fill").font(.system(size: 14))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(Color(hex: "#f59e0b"))
-                        .help("项目表数据落后于需求平台，点击更新")
-                    } else if st == "synced" {
-                        Text("已跟项目表同步")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(Color(hex: "#22c55e"))
-                            .help("该需求与项目表记录一致")
-                    } else if st == "syncing" {
-                        ProgressView().controlSize(.mini)
+        let stateColor: Color = p.code == "CPYSWC" ? .green : p.code == "SJWC" || p.code == "FASJWC" ? .orange : .accentColor
+        let completed = vm.deliverableStatus[p.id] ?? []
+        let expected = p.code == "KFZ" || p.code == "KFWC" ? ["solution", "dev"] : p.code == "SJWC" || p.code == "FASJWC" ? ["solution"] : ["solution", "dev", "test"]
+        let completedCount = expected.filter { completed.contains($0) }.count
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                Text(p.name).font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                if hero {
+                    let sync = vm.syncStatus[p.name] ?? "unsynced"
+                    if sync == "syncing" { ProgressView().controlSize(.small) }
+                    else if sync == "synced" && !vm.syncChanged.contains(p.name) {
+                        Image(systemName: "checkmark.circle").foregroundStyle(.green).help("已与项目表同步")
                     } else {
-                        Button(action: { vm.syncOne(name: p.name) }) {
-                            Image(systemName: "arrow.up.circle.fill").font(.system(size: 14))
+                        Button { vm.syncOne(name: p.name) } label: {
+                            Image(systemName: sync == "error" ? "exclamationmark.arrow.circlepath" : "arrow.triangle.2.circlepath")
                         }
                         .buttonStyle(.plain)
-                        .foregroundStyle(st == "error" ? Color(hex: "#d94f4f") : prdBlue.opacity(0.6))
-                        .help(st == "error" ? "同步失败，点击重试" : "同步到项目表")
+                        .foregroundStyle(sync == "error" ? Color.orange : Color.secondary)
+                        .help(sync == "error" ? "同步失败，重试" : "同步到项目表")
                     }
                 }
-                // 第二层: 状态 + 人 + 时间
-                HStack(spacing: 8) {
-                    Text(p.status).font(fm.font(10.5).weight(.medium))
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(Capsule().fill(statusColor.opacity(0.12)))
-                        .foregroundStyle(statusColor)
-                    if let dev = p.dev, !dev.isEmpty {
-                        HStack(spacing: 3) {
-                            Image(systemName: "person.fill").font(.system(size: 9))
-                            Text(dev).font(fm.font(10.5))
-                        }.foregroundStyle(theme.current.textSecondary)
-                    }
-                    if let pri = p.pri {
-                        Text(pri).font(fm.font(9.5).weight(.bold))
-                            .foregroundStyle(pri == "P0" ? Color(hex: "#d94f4f") : theme.current.textMuted)
-                    }
-                    Spacer(minLength: 0)
-                }
-
-            } else {
-                // === 普通卡片: 两层紧凑布局 ===
-                HStack(alignment: .top) {
-                    Text(p.name).font(fm.font(12).weight(.medium))
-                        .foregroundStyle(theme.current.textPrimary)
-                        .lineLimit(1)
-                    Spacer(minLength: 4)
-                    if let lastTime = p.flow?.first?.t {
-                        Text(lastTime).font(.system(size: 8.5, design: .monospaced))
-                            .foregroundStyle(theme.current.textMuted)
-                    }
-                }
-                HStack(spacing: 0) {
-                    Text(p.status).font(fm.font(10)).foregroundStyle(statusColor)
-                    if let dev = p.dev, !dev.isEmpty {
-                        Text(" · ").foregroundStyle(theme.current.textMuted)
-                        Text(dev).font(fm.font(10)).foregroundStyle(theme.current.textSecondary)
-                    }
-                    Spacer(minLength: 0)
-                }.font(fm.font(10))
             }
-            if hero || p.scopes.contains("pending") {
-                HStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Text(p.no).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                Text(p.status).font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(stateColor).padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(stateColor.opacity(0.08), in: Capsule())
+                if let developer = p.dev, !developer.isEmpty {
+                    Label(developer, systemImage: "person").font(.system(size: 11))
+                        .foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                if let priority = p.pri {
+                    Text(priority).font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(priority == "P0" ? Color.red : Color.secondary)
+                }
+            }
+            HStack(spacing: 8) {
+                Button { togglePRD(p.id) } label: {
+                    Label(open ? "收起" : "详情", systemImage: open ? "chevron.up" : "chevron.down")
+                }
+                Button { vm.openURL(p.url) } label: {
+                    Label("网页详情", systemImage: "arrow.up.right.square")
+                }
+                .help("在浏览器中打开这条需求")
+                if hero || p.scopes.contains("pending") {
                     if let next = nextStatus(p.code) {
-                        Button(action: { vm.pushStatus(reqId: p.id, toStatus: next.code, actionName: next.name) }) {
-                            HStack(spacing: 3) {
-                                Image(systemName: "arrow.right.circle.fill").font(.system(size: 9.5))
-                                Text("推进: \(next.name)").font(fm.font(9.5).weight(.medium))
-                            }
-                            .padding(.horizontal, 10).padding(.vertical, 4)
-                            .background(Capsule().fill(Color(hex: "#22c55e").opacity(0.1)))
-                            .foregroundStyle(Color(hex: "#22c55e"))
-                        }.buttonStyle(.plain)
+                        Button(next.name) { vm.pushStatus(reqId: p.id, toStatus: next.code, actionName: next.name) }
+                            .disabled(vm.statusSubmitting.contains(p.id))
                     }
-                    Button(action: { vm.uploadDeliverable(reqId: p.id, reqNo: p.no, code: p.code) }) {
-                        HStack(spacing: 3) {
-                            Image(systemName: "square.and.arrow.up").font(.system(size: 9))
-                            Text("交付物").font(fm.font(9.5).weight(.medium))
-                        }
-                        .padding(.horizontal, 10).padding(.vertical, 4)
-                        .background(Capsule().fill(theme.current.separator.opacity(0.3)))
-                        .foregroundStyle(theme.current.textSecondary)
-                    }.buttonStyle(.plain).help("上传交付物")
-                    Spacer()
-                    let ds = vm.deliverableStatus[p.id] ?? []
-                    let expected: [(tag: String, label: String)] = {
-                        switch p.code {
-                        case "SJWC", "FASJWC": return [("solution", "方案")]
-                        case "KFZ": return [("solution", "方案"), ("dev", "开发")]
-                        case "KFWC": return [("solution", "方案"), ("dev", "开发")]
-                        case "CSZ": return [("solution", "方案"), ("dev", "开发"), ("test", "测试")]
-                        case "CSWC", "CPYSZ", "CPYSWC": return [("solution", "方案"), ("dev", "开发"), ("test", "测试")]
-                        default: return [("solution", "方案"), ("dev", "开发"), ("test", "测试")]
-                        }
-                    }()
-                    HStack(spacing: 3) {
-                        ForEach(expected, id: \.tag) { item in
-                            let done = ds.contains(item.tag)
-                            Text("\(done ? "✓" : "○")\(item.label)").font(fm.font(8.5).weight(.medium))
-                                .padding(.horizontal, 5).padding(.vertical, 2)
-                                .background(Capsule().fill(done ? Color(hex: "#22c55e").opacity(0.1) : Color(hex: "#f59e0b").opacity(0.08)))
-                                .foregroundStyle(done ? Color(hex: "#22c55e") : Color(hex: "#f59e0b"))
-                        }
-                    }
+                    Button("交付物") { vm.uploadDeliverable(reqId: p.id, reqNo: p.no, code: p.code) }
                 }
+                Spacer(minLength: 0)
             }
-            if open { prdDetail(p) }
-        }
-        .padding(hero ? 14 : 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: hero ? 12 : 10)
-                .fill(theme.current.cardFill.opacity(theme.current.cardFillOpacity * (hero ? 1.2 : 1)))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: hero ? 12 : 10)
-                .stroke(open ? prdBlue.opacity(0.5) : theme.current.separator.opacity(hero ? 0.8 : 0.5), lineWidth: open ? 1.2 : 0.5)
-        )
-        .overlay(alignment: .leading) {
+            .buttonStyle(.bordered).controlSize(.small)
             if hero {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(statusColor)
-                    .frame(width: 4)
-                    .padding(.vertical, 8)
+                HStack(spacing: 8) {
+                    Label("交付物 \(completedCount)/\(expected.count)", systemImage: "doc.text")
+                        .foregroundStyle(completedCount == expected.count ? Color.secondary : Color.orange)
+                    Spacer()
+                    if let time = p.flow?.first?.t { Text(time).foregroundStyle(.secondary) }
+                }.font(.system(size: 11))
             }
+            if open { Divider(); prdDetail(p) }
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            withAnimation(.easeInOut(duration: 0.16)) {
-                if open { vm.expandedPRD.remove(p.id) } else { vm.expandedPRD.insert(p.id) }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.current.cardFill, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(
+            open ? Color.accentColor.opacity(0.4) : Color(nsColor: .separatorColor).opacity(0.6), lineWidth: 0.5))
+    }
+
+    private func togglePRD(_ id: Int) {
+        withAnimation(DBoardUI.spring) {
+            if vm.expandedPRD.contains(id) { vm.expandedPRD.remove(id) }
+            else {
+                vm.expandedPRD.insert(id)
+                if refreshOnAppear { vm.loadDeliverableStatus(reqId: id) }
             }
         }
     }
 
-    /// 路由置信度徽章: 标注是推断还是 git 实证, 不冒充事实
     private var deliverableSheet: some View {
         let typeName: String = {
             switch vm.deliverableCode {
@@ -2426,22 +2591,27 @@ struct BizMapBoardView: View {
                             TextField("搜索仓库", text: $vm.devAppQuery)
                                 .textFieldStyle(.roundedBorder).font(fm.font(10.5))
                                 .frame(width: 140)
-                                .onChange(of: vm.devAppQuery) { _ in vm.devSelectedApp = nil; vm.searchApps() }
+                                .onChange(of: vm.devAppQuery) { _, value in
+                                    guard value != vm.devSelectedApp?.name else { return }
+                                    vm.devSelectedApp = nil
+                                    vm.searchApps()
+                                }
                             if !vm.devAppResults.isEmpty && vm.devSelectedApp == nil {
                                 List(vm.devAppResults, id: \.id) { app in
-                                    Text(app.name).font(fm.font(10.5))
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .contentShape(Rectangle())
-                                        .onTapGesture {
-                                            vm.devSelectedApp = app
-                                            vm.devAppQuery = app.name
-                                            vm.devAppResults = []
-                                            vm.devBranchQuery = ""
-                                            vm.searchBranches()
-                                        }
+                                    Button {
+                                        vm.devSelectedApp = app
+                                        vm.devAppQuery = app.name
+                                        vm.devAppResults = []
+                                        vm.devBranchQuery = ""
+                                        vm.searchBranches()
+                                    } label: {
+                                        Text(app.name).font(fm.font(12))
+                                            .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+                                            .contentShape(Rectangle())
+                                    }.buttonStyle(.plain)
                                 }
                                 .listStyle(.plain)
-                                .frame(width: 140, height: min(CGFloat(vm.devAppResults.count) * 24, 120))
+                                .frame(width: 140, height: min(CGFloat(vm.devAppResults.count) * 36, 160))
                                 .background(RoundedRectangle(cornerRadius: 6).fill(theme.current.cardFill).shadow(radius: 4))
                             }
                         }
@@ -2453,13 +2623,14 @@ struct BizMapBoardView: View {
                                     .onChange(of: vm.devBranchQuery) { _ in vm.searchBranches() }
                                 if !vm.devBranchResults.isEmpty {
                                     List(vm.devBranchResults, id: \.self) { branch in
-                                        Text(branch).font(fm.font(10))
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .contentShape(Rectangle())
-                                            .onTapGesture { vm.addDevProject(branch: branch) }
+                                        Button { vm.addDevProject(branch: branch) } label: {
+                                            Text(branch).font(fm.font(11))
+                                                .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+                                                .contentShape(Rectangle())
+                                        }.buttonStyle(.plain).help(branch)
                                     }
                                     .listStyle(.plain)
-                                    .frame(width: 190, height: min(CGFloat(vm.devBranchResults.count) * 24, 140))
+                                    .frame(width: 190, height: min(CGFloat(vm.devBranchResults.count) * 36, 180))
                                     .background(RoundedRectangle(cornerRadius: 6).fill(theme.current.cardFill).shadow(radius: 4))
                                 }
                             }
@@ -2516,24 +2687,7 @@ struct BizMapBoardView: View {
         }
     }
 
-    @ViewBuilder private func confidenceBadge(_ c: String?) -> some View {
-        if let c = c {
-            let (txt, color, tip): (String, Color, String) = {
-                switch c {
-                case "verified":  return ("实证", Color(hex: "#34c759"), "所列服务均有 git 代码证据。注意: 实证只能证有不能证无, 清单仍可能不全, 发现缺仓直接告诉 AI")
-                case "evidenced": return ("纠正", prdBlue, "根据代码证据修正过的标注")
-                default:          return ("推断", theme.current.textMuted, "仅依需求文本+服务定位推断, 未经代码实证")
-                }
-            }()
-            Text(txt).font(fm.font(8.5))
-                .padding(.horizontal, 5).padding(.vertical, 1.5)
-                .background(Capsule().fill(color.opacity(0.12)))
-                .foregroundStyle(color)
-                .help(tip)
-        }
-    }
-
-    /// 展开详情: 正文 / 业务价值 / 当前卡在谁 / 团队 / 流转 / 标注依据
+    /// 展开详情: 正文 / 人员 / 流转 / 开发交付声明 / 交付物记录
     @ViewBuilder private func prdDetail(_ p: BizPRDItem) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Divider().opacity(0.5).padding(.vertical, 1)
@@ -2570,7 +2724,7 @@ struct BizMapBoardView: View {
                     Text("流转记录").font(fm.font(9.5).weight(.semibold)).foregroundStyle(theme.current.textMuted)
                     ForEach(Array(flow.enumerated()), id: \.offset) { _, f in
                         HStack(spacing: 5) {
-                            Text(f.t).font(.system(size: 9, design: .monospaced))
+                            Text(f.t).font(.system(size: 11, design: .monospaced))
                                 .foregroundStyle(theme.current.textMuted)
                             Text("\(f.from) → \(f.to)").font(fm.font(9.5))
                                 .foregroundStyle(theme.current.textSecondary)
@@ -2580,7 +2734,11 @@ struct BizMapBoardView: View {
                 }
             }
 
-            // 官方交付物: 链接按阶段分组 + 附件文件 + 开发分支声明
+            DevelopmentProjectsView(snapshot: vm.developmentProjectSnapshots[p.id],
+                loading: vm.deliverableLoading.contains(p.id), error: vm.deliverableReadErrors[p.id],
+                refresh: { vm.loadDeliverableStatus(reqId: p.id, force: true) })
+
+            // 官方交付物: 链接按阶段分组与附件文件
             deliverableSection(p)
 
             // 实时交付物记录（从 API 拉取）
@@ -2608,8 +2766,8 @@ struct BizMapBoardView: View {
                                     .lineLimit(3).fixedSize(horizontal: false, vertical: true)
                                     .textSelection(.enabled)
                             }
-                            if let proj = item["deliverableDevProject"] as? String, !proj.isEmpty {
-                                Text(proj.replacingOccurrences(of: ";", with: "\n")).font(.system(size: 9, design: .monospaced))
+                            if tag == "dev", let proj = item["deliverableDevProject"] as? String, !proj.isEmpty {
+                                Text(proj.replacingOccurrences(of: ";", with: "\n")).font(.system(size: 11, design: .monospaced))
                                     .foregroundStyle(theme.current.textMuted).lineLimit(5)
                             }
                         }
@@ -2626,13 +2784,7 @@ struct BizMapBoardView: View {
                 }
             }
 
-            if let note = p.note, !note.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("服务路由依据").font(fm.font(9.5).weight(.semibold)).foregroundStyle(theme.current.textMuted)
-                    Text(note).font(fm.font(9.5)).foregroundStyle(theme.current.textTertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
+
         }
         .padding(.top, 2)
     }
@@ -2641,8 +2793,7 @@ struct BizMapBoardView: View {
     @ViewBuilder private func deliverableSection(_ p: BizPRDItem) -> some View {
         let docs = p.delivDocs ?? []
         let files = p.files ?? []
-        let projects = p.devProjects ?? []
-        if !docs.isEmpty || !files.isEmpty || !projects.isEmpty {
+        if !docs.isEmpty || !files.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 Text("交付物").font(fm.font(9.5).weight(.semibold)).foregroundStyle(theme.current.textMuted)
                 ForEach(files) { f in
@@ -2662,15 +2813,7 @@ struct BizMapBoardView: View {
                     }) { vm.openURL($0) }
                     .environmentObject(theme).environmentObject(fm)
                 }
-                if !projects.isEmpty {
-                    Text("开发分支声明").font(fm.font(9)).foregroundStyle(theme.current.textMuted)
-                    ForEach(projects, id: \.self) { pr in
-                        Text(pr).font(.system(size: 9, design: .monospaced))
-                            .foregroundStyle(theme.current.textSecondary)
-                            .lineLimit(1)
-                            .textSelection(.enabled)
-                    }
-                }
+
             }
         }
     }
@@ -2678,7 +2821,7 @@ struct BizMapBoardView: View {
     private func shortHost(_ url: String) -> String {
         if url.contains("alidocs.dingtalk") { return "钉文档" }
         if url.contains("done.alibaba") { return "D-ONE" }
-        if url.contains("devops.aliyun") { return "���效" }
+        if url.contains("devops.aliyun") { return "云效" }
         if url.contains("zlcx-upload") { return "附件" }
         return URL(string: url)?.host?.replacingOccurrences(of: "www.", with: "") ?? "链接"
     }
@@ -2712,7 +2855,7 @@ struct BizMapBoardView: View {
 
     private var footer: some View {
         HStack {
-            Text("wiki projects/业务地图/ + D板缓存 · 点卡片看详情 · 搜索即路由")
+            Text(vm.perspective == .requirements ? "工程信息来源：开发交付声明 · 缺失留空" : "服务文档目录 · 业务职责与路由仅供参考")
                 .font(fm.font(9)).foregroundStyle(theme.current.textMuted)
             Spacer()
         }
@@ -2758,15 +2901,21 @@ private struct FlowChips: View {
         // 固定宽度详情栏内用简单换行网格即可
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 56), spacing: 4, alignment: .leading)], alignment: .leading, spacing: 4) {
             ForEach(items, id: \.self) { it in
-                Text(it).font(fm.font(9.5)).lineLimit(1)
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Capsule().fill(theme.current.separator.opacity(0.35)))
-                    .overlay(Capsule().stroke(theme.current.separator, lineWidth: 0.5))
-                    .foregroundStyle(clickable ? theme.current.accentPrimary : theme.current.textSecondary)
-                    .onTapGesture { onTap(it) }
+                if clickable {
+                    Button { onTap(it) } label: { chip(it) }.buttonStyle(.plain)
+                } else { chip(it) }
             }
         }
     }
+    private func chip(_ text: String) -> some View {
+        Text(text).font(fm.font(11)).lineLimit(1)
+            .padding(.horizontal, 8).frame(minHeight: 28)
+            .background(Capsule().fill(theme.current.separator.opacity(0.35)))
+            .overlay(Capsule().stroke(theme.current.separator, lineWidth: 0.5))
+            .foregroundStyle(clickable ? theme.current.accentPrimary : theme.current.textSecondary)
+            .contentShape(Rectangle())
+    }
+
 }
 
 // MARK: - 窗口控制器 (popover + 撕出, 与 SkillsBoard 同一套模式)
@@ -2779,7 +2928,9 @@ final class BizMapBoardWindowController {
     private var keyMonitor: Any?
     private let tearOff = TearOffObserver()
     private var popCloseObserver: Any?
-    private let vm = BizMapViewModel()
+    let vm = BizMapViewModel()
+    private var windowInteraction: WorkspaceWindowInteraction?
+    private var windowKeyMonitor: Any?
 
     func receiveBridgedCookie(_ header: String) {
         vm.receiveBridgedCookie(header)
@@ -2819,11 +2970,14 @@ final class BizMapBoardWindowController {
             DispatchQueue.main.async { self.closePopover() }
         }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
-            if e.keyCode == 53, let p = self?.popover, p.isShown {
-                self?.closePopover()
-                return nil
-            }
-            return e
+            guard let self, e.keyCode == 53, let popover = self.popover, popover.isShown,
+                  let window = popover.contentViewController?.view.window,
+                  e.window === window, window.attachedSheet == nil else { return e }
+            if self.vm.selected != nil { self.vm.selected = nil }
+            else if !self.vm.expandedPRD.isEmpty { self.vm.expandedPRD = [] }
+            else if !self.vm.query.isEmpty { self.vm.query = "" }
+            else { self.closePopover() }
+            return nil
         }
         popCloseObserver = NotificationCenter.default.addObserver(forName: NSPopover.didCloseNotification, object: pop, queue: .main) { [weak self] _ in
             self?.teardownMonitors()
@@ -2851,25 +3005,42 @@ final class BizMapBoardWindowController {
         if let o = popCloseObserver { NotificationCenter.default.removeObserver(o); popCloseObserver = nil }
     }
 
+    func updateTitle() {
+        window?.title = vm.perspective == .requirements ? "ReqFlow 需求流" : "BizMap 业务地图"
+    }
+
     func showRequirement(no: String? = nil) {
         vm.perspective = .requirements
         vm.query = no ?? ""
         show()
     }
 
+    func showRequirement(link: ReqFlowLink) {
+        vm.load()
+        if vm.focusRequirement(link) {
+            vm.loadDeliverableStatus(reqId: link.id)
+            show()
+        } else {
+            // Terminal or out-of-scope requirements may no longer be in the active snapshot.
+            vm.openURL(link.url)
+        }
+    }
+
     /// 居中浮窗开关 (⌃E 热键入口): 显示中则收起, 否则弹出并定位到需求视角
     func toggleWindow(requirements: Bool) {
-        if let w = window, w.isVisible {
+        let target: BizPerspective = requirements ? .requirements : .services
+        if let w = window, w.isVisible, vm.perspective == target, w.isKeyWindow {
             w.orderOut(nil)
             return
         }
-        if requirements { vm.perspective = .requirements }
+        vm.perspective = target
         vm.load()
         show()
     }
 
     func show() {
         if let w = window {
+            w.title = vm.perspective == .requirements ? "ReqFlow 需求流" : "BizMap 业务地图"
             centerWindowOnMouseScreen(w)
             NSApp.activate(ignoringOtherApps: true)
             w.makeKeyAndOrderFront(nil)
@@ -2882,23 +3053,33 @@ final class BizMapBoardWindowController {
             .environmentObject(FontManager.shared)
         let host = NSHostingController(rootView: view)
         let win = NSWindow(contentViewController: host)
-        win.title = "BizMap 业务地图"
-        win.titleVisibility = .hidden
+        win.title = vm.perspective == .requirements ? "ReqFlow 需求流" : "BizMap 业务地图"
+        win.titleVisibility = .visible
         win.titlebarAppearsTransparent = true
-        win.setContentSize(NSSize(width: 800, height: 620))
-        win.styleMask = [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView]
+        win.setContentSize(NSSize(width: 980, height: 740))
+        win.styleMask = [.titled, .closable, .resizable, .miniaturizable]
         win.isReleasedWhenClosed = false
         // 窗口透明度: 只在 nativeBlur 主题下透出桌面壁纸, 其它主题保持不透明避免顶栏透视
         let _needsTransparent = ThemeManager.shared.current.nativeBlur
         win.isOpaque = !_needsTransparent
         win.backgroundColor = _needsTransparent ? .clear : .windowBackgroundColor
         win.collectionBehavior = [.moveToActiveSpace, .fullScreenPrimary]
-        win.contentMinSize = NSSize(width: 640, height: 440)
+        win.contentMinSize = NSSize(width: 740, height: 540)
         win.setFrameAutosaveName("DBoardBizMapWindow")
         centerWindowOnMouseScreen(win)
         NSApp.activate(ignoringOtherApps: true)
         win.makeKeyAndOrderFront(nil)
         window = win
+        windowInteraction = WorkspaceWindowInteraction(window: win, id: "bizmap", handlesEscape: false)
+        windowKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, let window = self.window, window.isVisible, event.window === window,
+                  window.isKeyWindow, event.keyCode == 53, window.attachedSheet == nil else { return event }
+            if self.vm.selected != nil { self.vm.selected = nil }
+            else if !self.vm.expandedPRD.isEmpty { self.vm.expandedPRD.removeAll() }
+            else if !self.vm.query.isEmpty { self.vm.query = "" }
+            else { window.orderOut(nil) }
+            return nil
+        }
     }
 }
 

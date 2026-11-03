@@ -36,6 +36,22 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$BUILD_PATH" "$MACOS_DIR/$APP_NAME"
 cp "$SCRIPT_DIR/Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns" 2>/dev/null || echo "⚠️  缺少 AppIcon.icns"
+# 同步逻辑随应用打包，不再依赖可能过时的 ~/.local/bin 副本。
+cp "$SCRIPT_DIR/sync_dboard.sh" "$RESOURCES_DIR/sync_dboard.sh"
+
+# 给执行 AI 的 CLI 与 Skill 随应用更新；保留已有 dboard GUI 命令。
+mkdir -p "$RESOURCES_DIR/CLI" "$RESOURCES_DIR/skills/dboard-feedback" "$HOME/.local/bin"
+cp "$SCRIPT_DIR/Tools/dboard_ai.py" "$RESOURCES_DIR/CLI/dboard_ai.py"
+cp "$SCRIPT_DIR/Tools/dboard_overview.py" "$RESOURCES_DIR/CLI/dboard_overview.py"
+cp "$SCRIPT_DIR/Resources/skills/dboard-feedback/SKILL.md" "$RESOURCES_DIR/skills/dboard-feedback/SKILL.md"
+mkdir -p "$RESOURCES_DIR/skills/dboard-feedback/references"
+cp "$SCRIPT_DIR/Resources/skills/dboard-feedback/references/debug-page.md" "$RESOURCES_DIR/skills/dboard-feedback/references/debug-page.md"
+chmod 755 "$RESOURCES_DIR/CLI/dboard_ai.py"
+ln -sfn "$RESOURCES_DIR/CLI/dboard_ai.py" "$HOME/.local/bin/dboard-ai"
+for skill_parent in "$HOME/.codex/skills" "$HOME/.claude/skills"; do
+    mkdir -p "$skill_parent"
+    ln -sfn "$RESOURCES_DIR/skills/dboard-feedback" "$skill_parent/dboard-feedback"
+done
 
 # 皮肤背景图复制到 App bundle
 for bgf in "$SCRIPT_DIR"/Resources/bg-*; do
@@ -53,6 +69,8 @@ done
 if [ -f "$HOME/DBoardCookieBridge/manifest.json" ]; then
     cp "$SCRIPT_DIR/Resources/CookieBridge/background.js" "$HOME/DBoardCookieBridge/background.js"
     cp "$SCRIPT_DIR/Resources/CookieBridge/manifest.json" "$HOME/DBoardCookieBridge/manifest.json"
+    cp "$SCRIPT_DIR/Resources/CookieBridge/popup.html" "$HOME/DBoardCookieBridge/popup.html"
+    cp "$SCRIPT_DIR/Resources/CookieBridge/popup.js" "$HOME/DBoardCookieBridge/popup.js"
 fi
 
 # Info.plist
@@ -85,7 +103,7 @@ cat > "$CONTENTS_DIR/Info.plist" << 'PLIST'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
+    <string>15.0</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSHighResolutionCapable</key>
@@ -182,6 +200,7 @@ echo ""
 echo "   📍 App 位置: $APP_DIR"
 echo "   📍 开机自启: $LAUNCH_AGENT_DIR/$LAUNCH_AGENT_PLIST"
 echo "   📍 D板数据:  ~/.claude/demand-center-cache.md"
+echo "   📍 AI 反馈 CLI: ~/.local/bin/dboard-ai（context / show / report / sync / guide）"
 echo "   📍 AI 引擎:  Qoder CN CLI（配置见 ~/.config/dboard/ai-provider.json）"
 echo ""
 echo "   菜单栏右上角找 ☑️ 图标即可使用"

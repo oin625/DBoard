@@ -371,6 +371,11 @@ final class SkillsViewModel: ObservableObject {
          currentItems.filter { $0.divergentDefinitions }.count)
     }
 
+    func refreshIfNeeded() {
+        if let lastScan, Date().timeIntervalSince(lastScan) < 60 { return }
+        scan()
+    }
+
     func scan() {
         guard !loading else { return }
         loading = true
@@ -399,16 +404,11 @@ final class SkillsViewModel: ObservableObject {
         let fm = FileManager.default
         var out: [SkillItem] = []
 
-        // ⏱ 临时计时埋点（定位慢的根因后可删）
-        let __t0 = Date(); var __marks: [(String, Double)] = []
-        func __mark(_ s: String) { __marks.append((s, Date().timeIntervalSince(__t0))) }
-
         // 预热命令缓存：把 7 个候选命令的存在性一次性查完（单次登录 shell），
         // 避免每个 skill 各自触发一次 `/bin/zsh -lic`（每次 0.5~1.5s，是首扫最大开销）。
         warmCliCache()
         // 第三方插件 skill 名集合：一次性遍历 plugins/cache，替代逐 skill 重复遍历整棵树。
         let externalNames = Self.externalPluginSkillNames()
-        __mark("setup(warmCli+extNames)")
 
         // 外部引用来源: crontab + LaunchAgents
         let cronRefs = externalRefSet(from: runCmd("/bin/sh", ["-c", "crontab -l 2>/dev/null"]), tag: "定时任务")
@@ -606,7 +606,6 @@ final class SkillsViewModel: ObservableObject {
                 out.append(it)
             }
         }
-        __mark("readLoop")
 
         // 第二轮: 交叉引用 —— 分硬依赖 / 软提及两级
         // 旧实现用 txt.contains(other) 裸匹配, 导致 skill/open/canvas 这类
@@ -647,12 +646,6 @@ final class SkillsViewModel: ObservableObject {
             // 软性提示汇总后定级
             if out[i].health == .healthy && !out[i].hints.isEmpty { out[i].health = .warn }
         }
-        __mark("crossRef")
-        let __total = Date().timeIntervalSince(__t0)
-        let __txt = "total: \(String(format: "%.2f", __total))s\n" +
-            __marks.map { "\($0.0): \(String(format: "%.2f", $0.1))s" }.joined(separator: "\n") +
-            "\nskills: \(out.count)\n"
-        try? __txt.write(toFile: "/tmp/dboard_scan_timing.txt", atomically: true, encoding: .utf8)
         return out
     }
 
@@ -1033,6 +1026,7 @@ struct SkillsBoardView: View {
     @EnvironmentObject var vm: SkillsViewModel
     @EnvironmentObject var theme: ThemeManager
     @EnvironmentObject var fm: FontManager
+    var refreshOnAppear: Bool = true
     var popoverMode: Bool = false                      // popover: 不撑最小尺寸, 详情面板收窄
     @State private var detailItem: SkillItem? = nil     // 点击卡片 -> 右侧详情
     @State private var confirmDisable: String? = nil
@@ -1094,8 +1088,15 @@ struct SkillsBoardView: View {
         }
         .frame(minWidth: popoverMode ? 0 : 700, minHeight: popoverMode ? 0 : 540)
         .focusEffectDisabled()
-        .background(ThemeBackground().environmentObject(theme).environmentObject(ThemeManager.shared))
+        .background(theme.current.background)
+        .workspaceToolbar(id: "skills", enabled: !popoverMode)
+        .onExitCommand {
+            if detailItem != nil { detailItem = nil }
+            else if !vm.search.isEmpty { vm.search = "" }
+            else if !popoverMode { NSApp.keyWindow?.performClose(nil) }
+        }
         .onAppear {
+            guard refreshOnAppear else { return }
             if vm.items.isEmpty { vm.loadOverrides(); vm.scan() }
             if envVM.mcps.isEmpty { envVM.scan() }
         }
@@ -1185,7 +1186,7 @@ struct SkillsBoardView: View {
                 Text(vm.showAssetLibrary ? "资产库 \(vm.assetTotal) 项" : "当前 \(vm.currentItems.count) 个")
                     .font(fm.font(10)).foregroundStyle(theme.current.textMuted)
                 if d.replicas > 0 { Text("\(d.replicas) 个多来源").font(fm.font(10)).foregroundStyle(theme.current.textMuted) }
-                if d.divergent > 0 { Text("\(d.divergent) 个同名异定义").font(fm.font(10)).foregroundStyle(Color(hex: "#c8863c")) }
+                if d.divergent > 0 { Text("\(d.divergent) 个同名异定义").font(fm.font(10)).foregroundStyle(Color.orange) }
             }
             Text(vm.showAssetLibrary
                  ? "Claude 兼容、系统内置、插件缓存、遗留、归档和分享副本集中在这里；默认最多渲染 40 条，按需继续加载。"
@@ -1263,24 +1264,24 @@ struct SkillsBoardView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 2)
-                if item.isHub { miniBadge("\(item.refCount)", "link", Color(hex: "#8b6fb8")) }
+                if item.isHub { miniBadge("\(item.refCount)", "link", Color.accentColor) }
                 if !item.externalRefs.isEmpty {
-                    miniBadge(nil, "clock.arrow.circlepath", Color(hex: "#c8863c"))
+                    miniBadge(nil, "clock.arrow.circlepath", Color.orange)
                 }
                 if !item.missingCLI.isEmpty {
-                    miniBadge(nil, "exclamationmark.triangle.fill", Color(hex: "#d94f4f"))
+                    miniBadge(nil, "exclamationmark.triangle.fill", Color.red)
                 }
                 if item.duplicateCount > 0 {
                     miniBadge("+\(item.duplicateCount)", "square.stack.3d.up",
-                              item.divergentDefinitions ? Color(hex: "#c8863c") : theme.current.textMuted)
+                              item.divergentDefinitions ? Color.orange : theme.current.textMuted)
                 }
                 if item.codexDisabled {
-                    miniBadge("禁", "poweroff", Color(hex: "#8a8f98"))
+                    miniBadge("禁", "poweroff", Color.secondary)
                         .help("已在 Codex 配置中禁用：文件仍在，但 Codex 不加载")
                 }
                 // 只给"未验证"打标 —— 已验证是期望状态, 满屏打勾等于没有信息量
                 if item.verify == "未验证" && item.origin == "启用" {
-                    miniBadge(nil, "questionmark.circle", Color(hex: "#8a8f98"))
+                    miniBadge(nil, "questionmark.circle", Color.secondary)
                         .help("已安装但尚未在真实任务中用过")
                 }
             }
@@ -1301,7 +1302,7 @@ struct SkillsBoardView: View {
                         .font(.system(size: 8))
                     Text(first).font(.system(size: 10)).lineLimit(1)
                 }
-                .foregroundStyle(item.problems.isEmpty ? Color(hex: "#c8863c") : Color(hex: "#d94f4f"))
+                .foregroundStyle(item.problems.isEmpty ? Color.orange : Color.red)
             } else {
                 HStack(spacing: 8) {
                     if let m = item.modified {
@@ -1390,9 +1391,9 @@ struct SkillsBoardView: View {
 
     private func accentColor(_ item: SkillItem) -> Color {
         switch item.health {
-        case .broken: return Color(hex: "#d94f4f")
-        case .warn:   return Color(hex: "#c8863c")
-        case .healthy: return Color(hex: "#5aa86c")
+        case .broken: return Color.red
+        case .warn:   return Color.orange
+        case .healthy: return Color.green
         }
     }
 
@@ -1400,9 +1401,9 @@ struct SkillsBoardView: View {
         Group {
             switch item.health {
             case .broken:
-                Circle().fill(Color(hex: "#d94f4f")).frame(width: 6, height: 6)
+                Circle().fill(Color.red).frame(width: 6, height: 6)
             case .warn:
-                Circle().stroke(Color(hex: "#c8863c"), lineWidth: 1.4).frame(width: 6, height: 6)
+                Circle().stroke(Color.orange, lineWidth: 1.4).frame(width: 6, height: 6)
             case .healthy:
                 Circle().fill(theme.current.textMuted.opacity(item.enabled ? 0.3 : 0.15))
                     .frame(width: 5, height: 5)
@@ -1452,15 +1453,15 @@ struct SkillsBoardView: View {
                             : theme.current.accentPrimary)
                     }
                     if !item.verify.isEmpty {
-                        tag(item.verify, item.verify == "已验证" ? Color(hex: "#5aa86c")
-                                       : item.verify == "未验证" ? Color(hex: "#8a8f98")
-                                       : Color(hex: "#c8863c"))
+                        tag(item.verify, item.verify == "已验证" ? Color.green
+                                       : item.verify == "未验证" ? Color.secondary
+                                       : Color.orange)
                     }
                     if !item.hardRefs.isEmpty {
-                        tag("\(item.hardRefs.count) 个硬依赖", Color(hex: "#8b6fb8"))
+                        tag("\(item.hardRefs.count) 个硬依赖", Color.accentColor)
                     }
                     if item.mentionCount > 0 {
-                        tag("\(item.mentionCount) 处提及", Color(hex: "#8b6fb8").opacity(0.65))
+                        tag("\(item.mentionCount) 处提及", Color.accentColor.opacity(0.65))
                     }
                     if !item.enabled { tag(item.origin, theme.current.textMuted) }
                     Spacer()
@@ -1478,10 +1479,10 @@ struct SkillsBoardView: View {
                 if !item.problems.isEmpty || !item.hints.isEmpty {
                     VStack(alignment: .leading, spacing: 5) {
                         ForEach(item.problems, id: \.self) { p in
-                            issueLine(p, "xmark.octagon.fill", Color(hex: "#d94f4f"))
+                            issueLine(p, "xmark.octagon.fill", Color.red)
                         }
                         ForEach(item.hints, id: \.self) { h in
-                            issueLine(h, "lightbulb", Color(hex: "#c8863c"))
+                            issueLine(h, "lightbulb", Color.orange)
                         }
                     }
                     .padding(9)
@@ -1494,7 +1495,7 @@ struct SkillsBoardView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(item.divergentDefinitions ? "同名异定义：请按运行时分别管理" : "同名副本：定义一致，已合并展示")
                             .font(fm.font(10))
-                            .foregroundStyle(item.divergentDefinitions ? Color(hex: "#c8863c") : theme.current.textMuted)
+                            .foregroundStyle(item.divergentDefinitions ? Color.orange : theme.current.textMuted)
                         ForEach(item.installations) { install in
                             Text("\(install.source) · \(install.path)")
                                 .font(.system(size: 9, design: .monospaced))
@@ -1509,7 +1510,7 @@ struct SkillsBoardView: View {
 
                 if !item.externalRefs.isEmpty {
                     issueLine("被" + item.externalRefs.joined(separator: "、") + "引用",
-                              "clock.arrow.circlepath", Color(hex: "#c8863c"))
+                              "clock.arrow.circlepath", Color.orange)
                 }
 
                 HStack(spacing: 12) {
@@ -1542,7 +1543,7 @@ struct SkillsBoardView: View {
                         } else if item.enabled {
                             disableControl(item)
                         } else {
-                            flatBtn("启用", "power", tint: Color(hex: "#5aa86c")) { vm.enable(item) }
+                            flatBtn("启用", "power", tint: Color.green) { vm.enable(item) }
                         }
                     }
                 }
@@ -1563,66 +1564,23 @@ struct SkillsBoardView: View {
     // MARK: 头部 / 工具条
 
     private var header: some View {
-        let s = vm.stats
-        return HStack(alignment: .firstTextBaseline, spacing: 9) {
-            // Tab 切换: Skills / MCP / Hooks。当前 Tab 用主题渐变高亮 + 数量角标
-            ForEach(BoardTab.allCases, id: \.self) { t in
-                let n: Int = t == .skills ? s.total
-                           : t == .mcp ? envVM.mcps.count
-                           : t == .hooks ? envVM.hooks.count
-                           : t == .agents ? envVM.agents.count : envVM.memTotal
-                Button(action: { withAnimation(.spring(response: 0.25, dampingFraction: 1.0)) { boardTab = t } }) {
-                    HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        if boardTab == t {
-                            Text(t.rawValue).font(fm.font(19))
-                                .foregroundStyle(theme.current.accentGradient)
-                        } else {
-                            Text(t.rawValue).font(fm.font(14))
-                                .foregroundStyle(theme.current.textMuted)
-                        }
-                        Text("\(n)").font(.system(size: 11, weight: .medium, design: .monospaced))
-                            .foregroundStyle(theme.current.textMuted.opacity(boardTab == t ? 1 : 0.6))
-                        // Hooks 有失效脚本时, 未选中也要有红点提醒
-                        if t == .hooks && envVM.brokenHooks > 0 {
-                            Circle().fill(Color(hex: "#d94f4f")).frame(width: 5, height: 5)
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
+        HStack(spacing: 12) {
+            Picker("Agent 环境", selection: $boardTab) {
+                ForEach(BoardTab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }.pickerStyle(.segmented).frame(maxWidth: 440)
+            Spacer(minLength: 0)
+            if boardTab == .hooks && envVM.brokenHooks > 0 {
+                Label("\(envVM.brokenHooks) 个脚本失效", systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 11)).foregroundStyle(.orange)
             }
-            Spacer()
-            if boardTab == .skills {
-                if s.broken > 0 { statChip("\(s.broken)", "加载不到", Color(hex: "#d94f4f")) }
-                if s.warn > 0 { statChip("\(s.warn)", "待优化", Color(hex: "#c8863c")) }
-                if s.broken == 0 && s.warn == 0 {
-                    HStack(spacing: 4) {
-                        Image(systemName: "checkmark.circle.fill").font(.system(size: 10))
-                        Text("全部就绪").font(fm.font(11))
-                    }
-                    .foregroundStyle(Color(hex: "#5aa86c"))
-                }
-                if s.disabled > 0 {
-                    Text("\(s.disabled) 已归档").font(fm.font(11)).foregroundStyle(theme.current.textMuted)
-                }
-            } else if boardTab == .hooks && envVM.brokenHooks > 0 {
-                statChip("\(envVM.brokenHooks)", "脚本失效", Color(hex: "#d94f4f"))
+            if vm.loading { ProgressView().controlSize(.small) }
+            else {
+                Button { vm.scan(); envVM.scan() } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.plain).help("重新扫描")
             }
-            Button(action: { vm.scan(); envVM.scan() }) {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(theme.current.textSecondary)
-                    .frame(width: 24, height: 24)
-                    .background(Circle().fill(theme.current.textTertiary.opacity(0.08)))
-                    .rotationEffect(.degrees(vm.loading ? 360 : 0))
-                    .animation(vm.loading ? .linear(duration: 0.9).repeatForever(autoreverses: false)
-                                          : .default, value: vm.loading)
-            }
-            .buttonStyle(SmoothButtonStyle())
-            .disabled(vm.loading)
-            .help("重新扫描")
+            if popoverMode { TearOffButton(key: "SkillsBoard") }
         }
-        .padding(.leading, popoverMode ? 16 : 84).padding(.trailing, 16)
-        .padding(.top, popoverMode ? 12 : 8).padding(.bottom, 10)
+        .padding(.horizontal, 16).padding(.vertical, 12)
         .tearOffHandle("SkillsBoard", enabled: popoverMode)
     }
 
@@ -1716,7 +1674,7 @@ struct SkillsBoardView: View {
             // 分组标题压在背景图上, 需要底衬 + 加重字重才读得出
             HStack(spacing: 5) {
                 Text(title).font(.system(size: 10, weight: .bold)).tracking(0.6)
-                    .foregroundStyle(urgent ? Color(hex: "#c43a3a") : theme.current.textSecondary)
+                    .foregroundStyle(urgent ? Color.red : theme.current.textSecondary)
                 Text("\(n)").font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundStyle(theme.current.textTertiary)
             }
@@ -1843,7 +1801,7 @@ struct SkillsBoardView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .multilineTextAlignment(.leading)
                 }
-                .foregroundStyle(Color(hex: "#d94f4f"))
+                .foregroundStyle(Color.red)
             }
             Button(action: {
                 if pending { vm.disable(item); confirmDisable = nil }
@@ -1856,10 +1814,10 @@ struct SkillsBoardView: View {
             }) {
                 Text(pending ? "确认归档" : "归档")
                     .font(fm.font(11))
-                    .foregroundStyle(pending ? .white : Color(hex: "#d94f4f").opacity(0.85))
+                    .foregroundStyle(pending ? .white : Color.red.opacity(0.85))
                     .padding(.horizontal, 9).padding(.vertical, 3.5)
                     .background(RoundedRectangle(cornerRadius: 6)
-                        .fill(pending ? Color(hex: "#d94f4f") : Color(hex: "#d94f4f").opacity(0.1)))
+                        .fill(pending ? Color.red : Color.red.opacity(0.1)))
             }
             .buttonStyle(SmoothButtonStyle(scale: 0.97, hoverScale: 1.0))
         }
@@ -1874,12 +1832,12 @@ struct SkillsBoardView: View {
         if item.codexDisabled {
             HStack(spacing: 6) {
                 Text("Codex 已禁用").font(fm.font(10)).foregroundStyle(theme.current.textMuted)
-                flatBtn("恢复", "power", tint: Color(hex: "#5aa86c")) {
+                flatBtn("恢复", "power", tint: Color.green) {
                     vm.setCodexDisabled(item, false)
                 }
             }
         } else {
-            flatBtn("禁用", "poweroff", tint: Color(hex: "#8a8f98")) {
+            flatBtn("禁用", "poweroff", tint: Color.secondary) {
                 vm.setCodexDisabled(item, true)
             }
         }
@@ -1906,7 +1864,8 @@ struct SkillsBoardView: View {
         VStack(spacing: 6) {
             Image(systemName: "magnifyingglass").font(.system(size: 20, weight: .light))
                 .foregroundStyle(theme.current.textMuted.opacity(0.5))
-            Text("没有匹配的技能").font(fm.font(12)).foregroundStyle(theme.current.textMuted)
+            Text("没有匹配的技能").font(.system(size: 13)).foregroundStyle(.secondary)
+            Button("清空筛选") { vm.search = ""; vm.categoryFilter = "全部"; vm.onlyProblems = false }.controlSize(.small)
         }
         .frame(maxWidth: .infinity).padding(.top, 50)
     }
@@ -1926,8 +1885,9 @@ final class SkillsBoardWindowController {
     private var clickMonitor: Any?
     private var keyMonitor: Any?
     private let vm = SkillsViewModel()
+    private var windowInteraction: WorkspaceWindowInteraction?
 
-    /// 菜单栏入口: 图标正下方展开, 点外部/Esc 自动收起(与系统监控同一套模式)
+    /// 菜单栏入口: 图标正下方展开, 点外部/Esc 自动收起(与 D板主面板同一套模式)
     /// 高度给上限而非自适应 —— 自适应会让内容长到屏幕外, ScrollView 拿不到超出状态就滚不动
     func togglePopover(relativeTo button: NSStatusBarButton) {
         if let pop = popover, pop.isShown {
@@ -1951,7 +1911,7 @@ final class SkillsBoardWindowController {
         pop.contentViewController = host
         pop.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         popover = pop
-        vm.scan()
+        vm.refreshIfNeeded()
 
         clickMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
@@ -1997,7 +1957,7 @@ final class SkillsBoardWindowController {
         if let w = window {
             w.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
-            vm.scan()
+            vm.refreshIfNeeded()
             return
         }
         let view = SkillsBoardView()
@@ -2007,10 +1967,10 @@ final class SkillsBoardWindowController {
         let host = NSHostingController(rootView: view)
         let win = NSWindow(contentViewController: host)
         win.title = "Skills 看板"
-        win.titleVisibility = .hidden
+        win.titleVisibility = .visible
         win.titlebarAppearsTransparent = true
-        win.setContentSize(NSSize(width: 780, height: 620))
-        win.styleMask = [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView]
+        win.setContentSize(NSSize(width: 1060, height: 740))
+        win.styleMask = [.titled, .closable, .resizable, .miniaturizable]
         win.isReleasedWhenClosed = false
         // 原生毛玻璃需要窗口透明才能透出桌面壁纸
         // 窗口透明度: 只在 nativeBlur 主题下透出桌面壁纸, 其它主题保持不透明避免顶栏透视
@@ -2018,12 +1978,13 @@ final class SkillsBoardWindowController {
         win.isOpaque = !_needsTransparent
         win.backgroundColor = _needsTransparent ? .clear : .windowBackgroundColor
         win.collectionBehavior = [.moveToActiveSpace, .fullScreenPrimary]
-        win.contentMinSize = NSSize(width: 620, height: 440)
+        win.contentMinSize = NSSize(width: 760, height: 540)
         win.contentMaxSize = NSSize(width: 2600, height: 2200)
         win.setFrameAutosaveName("DBoardSkillsWindow")
         win.center()
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         window = win
+        windowInteraction = WorkspaceWindowInteraction(window: win, id: "skills", handlesEscape: false)
     }
 }

@@ -55,6 +55,8 @@ struct Clip: Identifiable {
     let pinned: Bool
     let createdAt: Date
     let sensitive: Bool
+    var expiresAt: Date? = nil
+    var isExpired: Bool { expiresAt.map { $0 <= Date() } ?? false }
 
     var preview: String {
         switch kind {
@@ -180,11 +182,11 @@ final class ClipboardStore {
     private let queue = DispatchQueue(label: "com.zz.dboard.clipboard.store")
     private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-    private init() {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
+    init(url: URL? = nil) {
+        let dir = url?.deletingLastPathComponent() ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/DBoard", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let path = dir.appendingPathComponent("clipboard.sqlite").path
+        let path = url?.path ?? dir.appendingPathComponent("clipboard.sqlite").path
         if sqlite3_open(path, &db) != SQLITE_OK {
             NSLog("ClipboardStore: 无法打开 \(path)")
             db = nil
@@ -209,6 +211,8 @@ final class ClipboardStore {
             """)
         purgeLocked()
     }
+
+    deinit { if let db { sqlite3_close(db) } }
 
     // MARK: 写入
 
@@ -272,8 +276,9 @@ final class ClipboardStore {
             var out: [Clip] = []
             var stmt: OpaquePointer?
             let sql = """
-                SELECT id, hash, kind, content, image_data, thumb_data, file_urls, source_app, pinned, created_at, sensitive
-                FROM clips ORDER BY pinned DESC, created_at DESC LIMIT 3000
+                SELECT id, hash, kind, content, image_data, thumb_data, file_urls, source_app, pinned, created_at, sensitive, expires_at
+                FROM clips WHERE expires_at IS NULL OR expires_at > \(Date().timeIntervalSince1970)
+                ORDER BY pinned DESC, created_at DESC LIMIT 3000
                 """
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
             defer { sqlite3_finalize(stmt) }
@@ -294,7 +299,8 @@ final class ClipboardStore {
                     sourceApp: colText(stmt, 7),
                     pinned: sqlite3_column_int(stmt, 8) != 0,
                     createdAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 9)),
-                    sensitive: sqlite3_column_int(stmt, 10) != 0))
+                    sensitive: sqlite3_column_int(stmt, 10) != 0,
+                    expiresAt: sqlite3_column_type(stmt, 11) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 11))))
             }
             return out
         }
@@ -350,7 +356,7 @@ final class ClipboardStore {
     private func purgeLocked() {
         guard let db else { return }
         let now = Date().timeIntervalSince1970
-        exec("DELETE FROM clips WHERE expires_at IS NOT NULL AND expires_at < \(now)")
+        exec("DELETE FROM clips WHERE expires_at IS NOT NULL AND expires_at <= \(now)")
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db,
             "DELETE FROM clips WHERE pinned = 0 AND id NOT IN (SELECT id FROM clips ORDER BY created_at DESC LIMIT ?)",
@@ -577,29 +583,42 @@ final class ClipboardViewModel: ObservableObject {
     private var pinyinIndex: [Int64: (full: String, initials: String)] = [:]
     private var indexReady = false
     private var observer: NSObjectProtocol?
+    private var expiryTimer: Timer?
+    private var indexGeneration = UUID()
 
     init() {
         load()
+        let timer = Timer(timeInterval: 15, repeats: true) { [weak self] _ in
+            guard let self, self.clips.contains(where: \.isExpired) else { return }
+            self.store.purge()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        expiryTimer = timer
         observer = NotificationCenter.default.addObserver(
             forName: .clipStoreDidChange, object: nil, queue: .main
         ) { [weak self] _ in self?.load() }
     }
 
     deinit {
+        expiryTimer?.invalidate()
         if let o = observer { NotificationCenter.default.removeObserver(o) }
     }
 
     func load() {
         clips = store.loadAll()
-        indexReady = false
+        let live = Set(clips.map(\.id))
+        if let id = selectedID, !live.contains(id) { selectedID = nil }
+        multiSelection.formIntersection(live)
+        if let detail = detailClip, !live.contains(detail.id) { detailClip = nil }
+        pinyinIndex = pinyinIndex.filter { live.contains($0.key) }
+        let generation = UUID(); indexGeneration = generation
+        let cached = pinyinIndex
         let snapshot = clips.map { ($0.id, $0.content ?? $0.preview) }
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            var index: [Int64: (full: String, initials: String)] = [:]
-            for (id, text) in snapshot where !text.isEmpty {
-                index[id] = Pinyin.of(text)
-            }
+            var index = cached
+            for (id, text) in snapshot where index[id] == nil && !text.isEmpty { index[id] = Pinyin.of(text) }
             DispatchQueue.main.async {
-                guard let self else { return }
+                guard let self, self.indexGeneration == generation else { return }
                 self.pinyinIndex = index
                 self.indexReady = true
                 self.objectWillChange.send()
@@ -611,9 +630,10 @@ final class ClipboardViewModel: ObservableObject {
 
     var visibleClips: [Clip] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return clips }
+        let active = clips.filter { !$0.isExpired }
+        guard !q.isEmpty else { return active }
         let asciiOnly = q.allSatisfy { $0.isASCII }
-        return clips.filter { clip in
+        return active.filter { clip in
             if let content = clip.content, content.lowercased().contains(q) { return true }
             if clip.kind == .file,
                clip.fileURLs.contains(where: { $0.lastPathComponent.lowercased().contains(q) }) { return true }
@@ -715,6 +735,7 @@ final class ClipboardViewModel: ObservableObject {
 
     /// 写回系统剪切板(不做自动粘贴, 零权限)。写后由窗口壳关闭面板并归还焦点。
     func writeBack(_ targets: [Clip]) {
+        guard !targets.isEmpty, targets.allSatisfy({ !$0.isExpired }) else { load(); return }
         let pb = NSPasteboard.general
         pb.clearContents()
         if targets.count == 1, let clip = targets.first {
@@ -744,7 +765,7 @@ final class ClipboardViewModel: ObservableObject {
         }
         ClipboardMonitor.shared.noteSelfWrite()
         // 写回浮顶: 刚用过的条目排到最上面(可在设置关闭)
-        if floatOnWriteBack {
+        if ClipSettings.floatOnWriteBack {
             for clip in targets { store.touch(id: clip.id) }
         }
         NotificationCenter.default.post(name: .clipWriteBackDone, object: nil)
@@ -752,7 +773,7 @@ final class ClipboardViewModel: ObservableObject {
 
     /// URL 去追踪参数后写回(utm_*/fbclid/gclid/spm…)
     func copyCleanURL(_ clip: Clip) {
-        guard clip.kind == .url, let raw = clip.content,
+        guard !clip.isExpired, clip.kind == .url, let raw = clip.content,
               var components = URLComponents(string: raw) else { return }
         let tracking: Set<String> = ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
                                      "fbclid", "gclid", "spm", "scm", "share_token", "share_id", "isappinstalled"]
@@ -772,6 +793,7 @@ final class ClipboardViewModel: ObservableObject {
 struct ClipboardBoardView: View {
     @EnvironmentObject var vm: ClipboardViewModel
     @EnvironmentObject var theme: ThemeManager
+    @Environment(\.openSettings) private var openSettings
     @EnvironmentObject var fm: FontManager
     var popoverMode: Bool = false
     @FocusState private var searchFocused: Bool
@@ -835,7 +857,8 @@ struct ClipboardBoardView: View {
                 TearOffButton(key: "ClipboardBoard")
             }
             Button {
-                vm.showSettings = true
+                WorkspacePreferences.shared.settingsPage = .clipboard
+                openSettings()
             } label: {
                 Image(systemName: "gearshape").font(.system(size: 11))
             }
@@ -1541,6 +1564,8 @@ final class ClipboardBoardWindowController {
     }
 
     func show() {
+        let front = NSWorkspace.shared.frontmostApplication
+        if front?.bundleIdentifier != Bundle.main.bundleIdentifier { lastFrontmost = front }
         if let w = window {
             // 每次呼出都是全新状态: 清搜索、选中第一条(不复用上次的选中/搜索残留)
             vm.query = ""
@@ -1600,7 +1625,7 @@ final class ClipboardBoardWindowController {
         panelLocalClickMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
             guard let self, let w = self.window else { return event }
-            if event.window !== w { self.closeWindow() }
+            if event.window !== w { self.lastFrontmost = nil; self.closeWindow() }
             return event
         }
 
@@ -1652,7 +1677,7 @@ final class ClipboardBoardWindowController {
     }
 
     private func restoreFocus() {
-        if let app = lastFrontmost, !app.isTerminated,
+        if NSApp.isActive, let app = lastFrontmost, !app.isTerminated,
            app.bundleIdentifier != Bundle.main.bundleIdentifier {
             app.activate()
         }

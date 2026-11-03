@@ -9,6 +9,7 @@ let package = Package(
             name: "DBoard",
             path: "Sources",
             swiftSettings: [.swiftLanguageMode(.v5)]
-        )
+        ),
+        .testTarget(name: "DBoardTests", dependencies: ["DBoard"], path: "Tests", exclude: ["Fixtures"])
     ]
 )

@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "DBoard Cookie Bridge",
-  "version": "2.5",
-  "description": "把 Reqflow 和 Audi 登录态投递给本机 DBoard 看板（仅访问 127.0.0.1，不联网）",
-  "permissions": ["cookies", "alarms", "tabs", "downloads"],
-  "host_permissions": ["*://*.tmallyc.com/*", "http://127.0.0.1/*"],
+  "version": "2.8",
+  "description": "把 PRD、Audi 和 Canary 登录态同步给本机 DBoard（仅投递到 127.0.0.1）",
+  "permissions": ["cookies", "alarms", "tabs", "downloads", "storage"],
+  "host_permissions": ["*://*.tmallyc.com/*", "https://pre-i0-canary.tmallyc-inc.net/*", "http://127.0.0.1/*"],
   "background": { "service_worker": "background.js" },
   "action": { "default_popup": "popup.html", "default_title": "DBoard Cookie Bridge" }
 }

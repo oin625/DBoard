@@ -6,8 +6,10 @@ import Cocoa
 struct LogResultsListView: View {
     @ObservedObject var vm: LogSearchViewModel
     let toast: (String) -> Void
+    @State private var completedQuery = false
 
     var body: some View {
+        Group {
         if vm.rows.isEmpty {
             if vm.loading { searchingView } else { emptyView }
         } else if visibleEntries.isEmpty {
@@ -44,6 +46,10 @@ struct LogResultsListView: View {
                 }
             }
             .animation(.easeInOut(duration: 0.18), value: vm.loading)
+        }
+        }
+        .onChange(of: vm.loading) { old, loading in
+            if old && !loading { completedQuery = true }
         }
     }
 
@@ -86,9 +92,13 @@ struct LogResultsListView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 26, weight: .light))
                 .foregroundStyle(Color.secondary.opacity(0.6))
-            Text("输入关键词或选择应用")
+            Text(vm.errorMsg != nil ? "查询未完成" : completedQuery ? "未找到匹配日志" : "输入关键词或选择应用")
                 .font(.callout).foregroundStyle(Color.secondary)
-            if !vm.recentHistory.isEmpty {
+            if completedQuery || vm.errorMsg != nil {
+                Text("检查关键词、应用和时间范围后重试。")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                Button("重新查询") { vm.runQuery(1) }.controlSize(.small)
+            } else if !vm.recentHistory.isEmpty {
                 Button("重跑上次查询") { vm.applyHistory(vm.recentHistory[0]) }
                     .controlSize(.small)
             }

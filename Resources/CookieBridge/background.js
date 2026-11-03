@@ -3,6 +3,62 @@ const DBOARD_URL = 'http://127.0.0.1:58613/cookie';
 const SITE_URL = 'https://ai.tmallyc.com/prd/index.html';
 const AUDI_URL = 'https://audi.tmallyc.com/app-release';
 const AUDI_BRIDGE_URL = 'http://127.0.0.1:58613/audi-cookie';
+const CANARY_ORIGINS = {
+  prod: 'https://canary-tmyc.tmallyc.com',
+  pre: 'https://pre-i0-canary.tmallyc-inc.net',
+};
+let lastCanaryStatus = '尚未配对';
+
+async function connectCanary() {
+  try {
+    const { canaryBridgeToken } = await chrome.storage.local.get('canaryBridgeToken');
+    if (!/^[0-9a-f]{64}$/.test(canaryBridgeToken || '')) {
+      lastCanaryStatus = '请在 DBoard 弹窗中点击“允许连接”';
+      const r = await fetch('http://127.0.0.1:58613/canary-cookie/pair', {
+        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(60000),
+      });
+      if (!r.ok) throw new Error(r.status === 429 ? '已有连接请求，请处理弹窗或稍后重试' : '未允许连接，请重新点击连接');
+      const data = await r.json();
+      if (!/^[0-9a-f]{64}$/.test(data.token || '')) throw new Error('配对响应无效');
+      await chrome.storage.local.set({ canaryBridgeToken: data.token });
+    }
+    await pushCanarySessions();
+  } catch (e) {
+    lastCanaryStatus = e.name === 'TypeError' || e.name === 'TimeoutError'
+      ? '连接未完成，请确认 DBoard 已运行并处理授权弹窗' : e.message;
+  }
+}
+
+async function pushCanarySessions() {
+  const { canaryBridgeToken } = await chrome.storage.local.get('canaryBridgeToken');
+  if (!/^[0-9a-f]{64}$/.test(canaryBridgeToken || '')) {
+    lastCanaryStatus = '尚未配对';
+    return;
+  }
+  const statuses = [];
+  for (const [environment, origin] of Object.entries(CANARY_ORIGINS)) {
+    try {
+      if (!await chrome.permissions.contains({ origins: [origin + '/*'] })) {
+        statuses.push(`${environment}: 缺少该域名的 Cookie 读取权限`);
+        continue;
+      }
+      const cookies = await chrome.cookies.getAll({ url: origin + '/manual/queryBizData' });
+      const cookie = cookies
+        .filter(c => !c.expirationDate || c.expirationDate > Date.now() / 1000)
+        .sort((a, b) => b.path.length - a.path.length)
+        .map(c => `${c.name}=${c.value}`).join('; ');
+      const r = await fetch('http://127.0.0.1:58613/canary-cookie', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + canaryBridgeToken },
+        body: JSON.stringify({ environment, origin, cookie }),
+        signal: AbortSignal.timeout(3000),
+        redirect: 'error',
+      });
+      statuses.push(`${environment}: ${r.ok ? (cookie ? 'Cookie 已同步' : environment === 'pre' ? '已连接（无需 Cookie）' : '未检测到 Cookie') : '桥接拒绝(' + r.status + ')'}`);
+    } catch (_) { statuses.push(`${environment}: 同步失败，请检查DBoard和扩展权限`); }
+  }
+  lastCanaryStatus = statuses.join('；');
+}
 
 // Audi 的网页鉴权只认 ac-session-id；专用通道不写本地文件，也不记录 Cookie 值。
 let lastAudiPush = '';
@@ -104,22 +160,27 @@ function updateBadge() {
 }
 
 chrome.runtime.onMessage.addListener((m, _s, sendResponse) => {
-  const snap = () => ({ lastPush, lastErr, header: lastHeader || '', lastViaFile, lastAudiPush, lastAudiErr, lastAudiSessionPresent });
+  const snap = () => ({ lastPush, lastErr, header: lastHeader || '', lastViaFile, lastAudiPush, lastAudiErr, lastAudiSessionPresent, lastCanaryStatus });
   if (m && m.cmd === 'status') sendResponse(snap());
+  if (m && m.cmd === 'canary-connect') {
+    connectCanary().then(() => sendResponse({ lastCanaryStatus }));
+    return true;
+  }
   if (m && m.cmd === 'push') {
-    Promise.all([push(true), pushAudiSession()]).then(() => sendResponse(Object.assign(snap(), { done: true })));
+    Promise.all([push(true), pushAudiSession(), pushCanarySessions()]).then(() => sendResponse(Object.assign(snap(), { done: true })));
     return true;
   }
 });
 
 chrome.alarms.create('beat', { periodInMinutes: 1 });   // v3: 60 秒无条件兜底, 不依赖任何"变化"事件
-chrome.alarms.onAlarm.addListener(() => { push(false); pushAudiSession(); });
+chrome.alarms.onAlarm.addListener(() => { push(false); pushAudiSession(); pushCanarySessions(); });
 chrome.cookies.onChanged.addListener(({ cookie }) => {
   if (cookie.domain && cookie.domain.includes('tmallyc')) {
-    setTimeout(() => { push(true); pushAudiSession(); }, 500);
+    setTimeout(() => { push(true); pushAudiSession(); pushCanarySessions(); }, 500);
   }
 });
 chrome.runtime.onStartup.addListener(() => setTimeout(() => { push(true); pushAudiSession(); }, 2000));
 chrome.runtime.onInstalled.addListener(() => setTimeout(() => { push(true); pushAudiSession(); }, 1000));
 push(true);
 pushAudiSession();
+pushCanarySessions();

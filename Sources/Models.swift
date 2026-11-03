@@ -1,10 +1,11 @@
 import Foundation
+import Darwin
 
 // MARK: - 数据模型
 
 enum ViewMode: String { case priority, project }
 
-enum ItemPriority: String, CaseIterable, Comparable {
+enum ItemPriority: String, CaseIterable, Comparable, Codable {
     case p0 = "🔴"
     case p1 = "🟡"
     case p2 = "🟠"
@@ -45,7 +46,7 @@ enum ItemPriority: String, CaseIterable, Comparable {
     }
 }
 
-enum ItemStatus: String {
+enum ItemStatus: String, Codable {
     case pending = "#待开始"
     case inProgress = "#进行中"
     case completed = "#已完成"
@@ -92,6 +93,19 @@ struct DItem {
     let branch: String?
     let startDate: String?      // "6.15"
     let milestones: [Milestone] // 进度里程碑
+    var reqFlow: ReqFlowLink? = nil // 用户明确选择的正式需求
+    var prompt: String = ""       // 为 AI 提前准备的输入上下文
+    var changes: [DemandChange] = []
+    var changeReadError: String? = nil
+    var version: DemandVersion? = nil
+    var versionReadError: String? = nil
+    var chatLinks: DemandChatLinks? = nil
+    var chatReadError: String? = nil
+    var execution: DemandExecution? = nil
+    var executionScope: String = ""
+    var executionReadError: String? = nil
+    var debugPageNotNeeded = false
+    var debugPageReadError: String? = nil
 
     /// 用于卡片主显示的标题：优先用需求名，其次用描述
     var displayTitle: String {
@@ -102,35 +116,27 @@ struct DItem {
 
     var daysRemaining: Int? {
         guard let deadline = deadline else { return nil }
-        return Self.parseDaysRemaining(from: deadline)
+        return DemandDates.daysRemaining(start: startDate, deadline: deadline)
     }
 
     var isUrgent: Bool {
+        guard status == .pending || status == .inProgress else { return false }
+        if priority == .p0 { return true }
         guard let days = daysRemaining else { return false }
         return days <= 3
     }
 
-    private static func parseDaysRemaining(from dateStr: String) -> Int? {
-        let parts = dateStr.split(separator: ".")
-        guard parts.count == 2,
-              let month = Int(parts[0]),
-              let day = Int(parts[1]) else { return nil }
-        let calendar = Calendar.current
-        let now = Date()
-        let year = calendar.component(.year, from: now)
-        var components = DateComponents()
-        components.year = year
-        components.month = month
-        components.day = day
-        guard let targetDate = calendar.date(from: components) else { return nil }
-        let days = calendar.dateComponents([.day], from: now, to: targetDate).day ?? 0
-        return max(0, days)
+    var deadlineLabel: String? {
+        guard let days = daysRemaining else { return nil }
+        if days < 0 { return "逾期 \(-days) 天" }
+        return days == 0 ? "今天截止" : "剩余 \(days) 天"
     }
 }
 
 struct Milestone {
     let date: String       // "6.15", "6.22"
-    let content: String    // 描述文字
+    let content: String    // 一句话概括；旧记录保留原正文
+    var details: String = "" // 仅保存在本地的明细
 }
 
 struct TodoItem {
@@ -138,7 +144,10 @@ struct TodoItem {
     var isCompleted: Bool
     var linkedDItem: String?    // → D008 关联
     var note: String?           // 💬 备注
-    var isCarriedOver: Bool = false  // 顺延项（只读，不可在今日直接勾选）
+    var isCarriedOver: Bool = false
+    var origin: TodoOrigin? = nil
+    var completedAt: String? = nil
+    var id: String { origin?.id ?? "fixture:\(text)" }
 
     /// 主文字（去掉备注后）
     var mainText: String {
@@ -175,16 +184,29 @@ enum CacheFile {
     }()
 
     static let syncScript: String = {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/.local/bin/sync_dboard.sh"
+        if let bundled = Bundle.main.path(forResource: "sync_dboard", ofType: "sh") { return bundled }
+        return NSHomeDirectory() + "/work/code/other/DBoard/sync_dboard.sh"
     }()
+
+    static func withLock<T>(at url: URL? = nil, _ body: () -> T) -> T? {
+        let fd = open((url?.path ?? path) + ".lock", O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        guard flock(fd, LOCK_EX) == 0 else { return nil }
+        defer { flock(fd, LOCK_UN) }
+        return body()
+    }
 
     static func read() -> String? {
         return try? String(contentsOfFile: path, encoding: .utf8)
     }
 
-    static func write(_ content: String) {
-        try? content.write(toFile: path, atomically: true, encoding: .utf8)
+    @discardableResult
+    static func write(_ content: String) -> Bool {
+        do {
+            try content.write(toFile: path, atomically: true, encoding: .utf8)
+            return true
+        } catch { return false }
     }
 }
 
@@ -212,7 +234,19 @@ enum CacheParser {
         var currentDescription: String? = nil
         var currentHeaderTitle: String = ""
         var currentMilestones: [Milestone] = []
+        var currentReqFlow: ReqFlowLink? = nil
+        var currentPromptLines: [String] = []
+        var currentChangeLines: [String] = []
+        var currentChangeFieldCount = 0
+        var currentVersionLines: [String] = []
+        var currentChatLines: [String] = []
+        var inChatBlock = false
+        var inChangeBlock = false
+        var inPromptBlock = false
         var inProgressBlock = false
+        var inProgressDetails = false
+        var inDescriptionBlock = false
+        var lastLineWasTodo = false
         var inTodoSection = false
 
         // 零碎：按日期分区收集
@@ -222,23 +256,59 @@ enum CacheParser {
 
         func flushItem() {
             guard let item = currentDItem, let prio = currentPriority else { return }
+            let changeResult = Result {
+                guard currentChangeFieldCount <= 1 && !(currentChangeFieldCount == 1 && currentChangeLines.joined(separator: "\n").isEmpty) else {
+                    throw DemandChanges.ReadError.invalid
+                }
+                return try DemandChanges.decode(currentChangeLines.joined(separator: "\n"))
+            }
+            var changeError: String?
+            if case .failure(let error) = changeResult { changeError = error.localizedDescription }
+            let versionResult = Result { try DemandVersion.read(currentVersionLines) }
+            var versionError: String?
+            if case .failure(let error) = versionResult { versionError = error.localizedDescription }
+            let chatResult = Result { try DemandChatLinksCodec.read(currentChatLines) }
+            var chatError: String?
+            if case .failure(let error) = chatResult { chatError = error.localizedDescription }
             items.append(DItem(
                 id: item.id,
                 project: item.project,
-                title: currentDescription ?? "",
+                title: (currentDescription ?? "").trimmingCharacters(in: .newlines),
                 headerTitle: currentHeaderTitle,
                 status: item.status,
                 priority: prio,
                 deadline: item.deadline,
                 branch: item.branch,
                 startDate: item.startDate,
-                milestones: currentMilestones
+                milestones: currentMilestones.map {
+                    var record = $0
+                    if record.details.hasSuffix("\n") { record.details.removeLast() }
+                    return record
+                },
+                reqFlow: currentReqFlow,
+                prompt: currentPromptLines.joined(separator: "\n"),
+                changes: (try? changeResult.get()) ?? [],
+                changeReadError: changeError,
+                version: (try? versionResult.get()) ?? nil,
+                versionReadError: versionError,
+                chatLinks: (try? chatResult.get()) ?? nil,
+                chatReadError: chatError
             ))
             currentDItem = nil
             currentDescription = nil
             currentHeaderTitle = ""
             currentMilestones = []
+            currentReqFlow = nil
+            currentPromptLines = []
+            currentChangeLines = []
+            currentChangeFieldCount = 0
+            currentVersionLines = []
+            currentChatLines = []
+            inChatBlock = false
+            inChangeBlock = false
+            inPromptBlock = false
             inProgressBlock = false
+            inDescriptionBlock = false
         }
 
         func flushTodoSection() {
@@ -250,6 +320,60 @@ enum CacheParser {
 
         for line in content.components(separatedBy: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
+            // Consume local detail before recognizing headings or other cache fields.
+            if inProgressBlock && line.hasPrefix("        "), !currentMilestones.isEmpty {
+                let detail = String(line.dropFirst(8))
+                if detail == "明细：" && !inProgressDetails {
+                    inProgressDetails = true
+                } else {
+                    let index = currentMilestones.count - 1
+                    currentMilestones[index].details += detail + "\n"
+                }
+                continue
+            }
+            if line.hasPrefix("- **") && !line.hasPrefix("- **进度**") { inProgressBlock = false }
+            if inChangeBlock {
+                if line.hasPrefix("    ") {
+                    currentChangeLines.append(String(line.dropFirst(4)))
+                    continue
+                }
+                inChangeBlock = false
+            }
+            if inChatBlock {
+                if line.hasPrefix("    ") {
+                    currentChatLines.append(line)
+                    continue
+                }
+                inChatBlock = false
+            }
+            // 提示词的每一行缩进四格；先消费原文，内部 Markdown 不参与缓存结构解析。
+            if inPromptBlock {
+                if line.hasPrefix("    ") {
+                    currentPromptLines.append(String(line.dropFirst(4)))
+                    continue
+                }
+                inPromptBlock = false
+            }
+            if currentDItem != nil && line.hasPrefix(DemandVersion.prefix) {
+                currentVersionLines.append(line)
+                inDescriptionBlock = false
+                inProgressBlock = false
+                continue
+            }
+            if currentDItem != nil && (line.hasPrefix(DemandExecution.prefix) || line.hasPrefix(DemandDebugPagePolicy.prefix)) {
+                inDescriptionBlock = false
+                inProgressBlock = false
+                continue
+            }
+            if inDescriptionBlock {
+                if line.hasPrefix("- **") || line.hasPrefix("## ") || line.hasPrefix("### ") || trimmed == "---" {
+                    inDescriptionBlock = false
+                } else {
+                    let continuation = line.hasPrefix("    ") ? String(line.dropFirst(4)) : line
+                    currentDescription = (currentDescription ?? "") + "\n" + continuation
+                    continue
+                }
+            }
 
             // 同步时间
             if trimmed.hasPrefix("<!-- synced:") {
@@ -285,6 +409,9 @@ enum CacheParser {
             }
 
             if inTodoSection {
+                // 引用备注只归属紧邻的 todo，与写入定位规则一致
+                let previousWasTodo = lastLineWasTodo
+                lastLineWasTodo = trimmed.hasPrefix("- [") || (previousWasTodo && trimmed.hasPrefix("> 💬"))
                 // 日期块标题：### 2026-06-23
                 if trimmed.hasPrefix("### ") {
                     flushTodoSection()
@@ -293,48 +420,15 @@ enum CacheParser {
                         .trimmingCharacters(in: .whitespaces)
                     continue
                 }
-                // 引用行备注：> 💬 xxx  → 附加到上一个 todo
-                if trimmed.hasPrefix("> 💬") {
-                    let note = trimmed
-                        .replacingOccurrences(of: "> 💬", with: "")
-                        .replacingOccurrences(of: ">", with: "")
-                        .trimmingCharacters(in: .whitespaces)
-                    if !note.isEmpty, !currentTodos.isEmpty {
-                        currentTodos[currentTodos.count - 1].note = note
-                    }
+                if trimmed.hasPrefix("> 💬"), previousWasTodo, !currentTodos.isEmpty {
+                    let note = String(trimmed.dropFirst("> 💬".count)).trimmed
+                    let index = currentTodos.count - 1
+                    currentTodos[index].note = [currentTodos[index].note, note].compactMap { $0 }.joined(separator: " ")
+                    currentTodos[index].origin?.lines.append(line)
                     continue
                 }
-                // todo 行
                 if trimmed.hasPrefix("- [ ]") || trimmed.hasPrefix("- [x]") || trimmed.hasPrefix("- [X]") {
-                    let isCompleted = trimmed.hasPrefix("- [x]") || trimmed.hasPrefix("- [X]")
-                    var text = trimmed
-                        .replacingOccurrences(of: "- [ ]", with: "")
-                        .replacingOccurrences(of: "- [x]", with: "")
-                        .replacingOccurrences(of: "- [X]", with: "")
-                        .trimmingCharacters(in: .whitespaces)
-
-                    // 提取关联 D 编号
-                    var linked: String? = nil
-                    if let range = text.range(of: "→\\s*(D\\d{3})", options: .regularExpression) {
-                        let match = String(text[range])
-                        if let dRange = match.range(of: "D\\d{3}", options: .regularExpression) {
-                            linked = String(match[dRange])
-                        }
-                    }
-                    // 清理关联标记
-                    text = text.replacingOccurrences(of: "→\\s*D\\d{3}", with: "", options: .regularExpression)
-                        .replacingOccurrences(of: "`", with: "")
-                        .trimmingCharacters(in: .whitespaces)
-
-                    // 分离备注 💬
-                    var note: String? = nil
-                    if let noteRange = text.range(of: "💬") {
-                        note = String(text[noteRange.upperBound...]).trimmingCharacters(in: .whitespaces)
-                        if note?.isEmpty == true { note = nil }
-                        text = String(text[..<noteRange.lowerBound]).trimmingCharacters(in: .whitespaces)
-                    }
-
-                    currentTodos.append(TodoItem(text: text, isCompleted: isCompleted, linkedDItem: linked, note: note))
+                    currentTodos.append(TodoStore.parse(line, date: currentTodoDate, occurrence: currentTodos.count))
                     continue
                 }
                 continue
@@ -343,8 +437,8 @@ enum CacheParser {
             // D 条目标题行
             if currentPriority != nil, trimmed.hasPrefix("### D") {
                 flushItem()
-                guard let idRange = trimmed.range(of: "D\\d{3}", options: .regularExpression) else { continue }
-                let id = String(trimmed[idRange])
+                guard let idRange = trimmed.range(of: #"^### D[0-9]{3,}(?=【|\s|$)"#, options: .regularExpression) else { continue }
+                let id = String(trimmed[idRange].dropFirst(4))
 
                 var project = ""
                 if let s = trimmed.range(of: "【"), let e = trimmed.range(of: "】") {
@@ -357,13 +451,13 @@ enum CacheParser {
                 }
 
                 var deadline: String? = nil
-                if let r = trimmed.range(of: "🎯(\\d+\\.\\d+)", options: .regularExpression) {
+                if let r = trimmed.range(of: #"🎯(?:[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{1,2}\.[0-9]{1,2})(?![0-9.-])"#, options: .regularExpression) {
                     deadline = String(trimmed[r]).replacingOccurrences(of: "🎯", with: "")
                 }
 
                 // 提取开始时间 📅6.15
                 var startDate: String? = nil
-                if let r = trimmed.range(of: "📅(\\d+\\.\\d+)", options: .regularExpression) {
+                if let r = trimmed.range(of: #"📅(?:[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{1,2}\.[0-9]{1,2})(?![0-9.-])"#, options: .regularExpression) {
                     startDate = String(trimmed[r]).replacingOccurrences(of: "📅", with: "")
                 }
 
@@ -372,11 +466,11 @@ enum CacheParser {
                 // 从标题行提取需求名：【项目】后面的文字，去掉状态/日期标记
                 if let projEnd = trimmed.range(of: "】") {
                     var after = String(trimmed[projEnd.upperBound...]).trimmingCharacters(in: .whitespaces)
-                    // 去掉 #状态、📅、🎯 及其日期
-                    after = after.replacingOccurrences(of: "#[\\u4e00-\\u9fa5]+", with: "", options: .regularExpression)
-                    after = after.replacingOccurrences(of: "📅[^🎯]*", with: "", options: .regularExpression)
-                    after = after.replacingOccurrences(of: "→?🎯", with: "", options: .regularExpression)
-                    after = after.replacingOccurrences(of: "\\d+\\.\\d+", with: "", options: .regularExpression)
+                    for status in [ItemStatus.pending, .inProgress, .completed, .suspended] {
+                        after = after.replacingOccurrences(of: status.rawValue, with: "")
+                    }
+                    after = after.replacingOccurrences(of: #"→?[📅🎯](?:[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{1,2}\.[0-9]{1,2})"#,
+                        with: "", options: .regularExpression)
                     // 压缩多余空白
                     after = after.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
                     currentHeaderTitle = after
@@ -386,6 +480,30 @@ enum CacheParser {
 
             // D 条目字段
             if currentDItem != nil {
+                if line.hasPrefix(DemandChatLinksCodec.field) {
+                    currentChatLines.append(line)
+                    inChatBlock = true
+                    inProgressBlock = false
+                    continue
+                }
+                if line.hasPrefix(DemandChanges.field) {
+                    currentChangeFieldCount += 1
+                    inChangeBlock = true
+                    inProgressBlock = false
+                    continue
+                }
+                if line.hasPrefix("- **提示词**") {
+                    let inline = DemandPrompt.read([line])
+                    currentPromptLines = inline.isEmpty ? [] : [inline]
+                    inPromptBlock = true
+                    inProgressBlock = false
+                    continue
+                }
+                if trimmed.hasPrefix("- **需求流**") {
+                    currentReqFlow = ReqFlowLink.parseField(trimmed)
+                    inProgressBlock = false
+                    continue
+                }
                 if trimmed.hasPrefix("- **分支**") {
                     let branch = trimmed
                         .replacingOccurrences(of: "^- \\*\\*分支\\*\\*\\s*[：:]?\\s*", with: "", options: .regularExpression)
@@ -398,6 +516,8 @@ enum CacheParser {
                         .replacingOccurrences(of: "^- \\*\\*描述\\*\\*\\s*[：:]?\\s*", with: "", options: .regularExpression)
                         .trimmingCharacters(in: .whitespaces)
                     inProgressBlock = false
+                    inDescriptionBlock = true
+                    continue
                 }
                 // 进度区块开始
                 if trimmed.hasPrefix("- **进度**") {
@@ -413,6 +533,7 @@ enum CacheParser {
                         // 简单验证是否像日期 "6.15" 或 "6.22"
                         if dateStr.range(of: "^\\d{1,2}\\.\\d{1,2}$", options: .regularExpression) != nil {
                             currentMilestones.append(Milestone(date: dateStr, content: desc))
+                            inProgressDetails = false
                         }
                     }
                 }
@@ -425,17 +546,27 @@ enum CacheParser {
 
         flushItem()
         flushTodoSection()
+        let sourceLines = content.components(separatedBy: "\n")
+        for index in items.indices {
+            guard let range = DItemStore.blockRange(sourceLines, id: items[index].id) else { continue }
+            let block = Array(sourceLines[range])
+            items[index].executionScope = DemandExecution.scopeHash(block)
+            do { items[index].execution = try DemandExecution.read(block) }
+            catch { items[index].executionReadError = error.localizedDescription }
+            do { items[index].debugPageNotNeeded = try DemandDebugPagePolicy.read(block) }
+            catch { items[index].debugPageReadError = error.localizedDescription }
+        }
 
         // 构建 TodoSection：今天 + 所有历史日期块（按日期倒序，昨天在前）
         var todaySec: TodoSection? = nil
         var prevSecs: [TodoSection] = []
 
-        for sec in todoSections.reversed() {
-            if sec.date == todayStr {
-                todaySec = TodoSection(dateLabel: sec.date, items: sec.items, isToday: true)
-            } else {
-                prevSecs.append(TodoSection(dateLabel: sec.date, items: sec.items, isToday: false))
-            }
+        var byDate: [String: [TodoItem]] = [:]
+        for sec in todoSections { byDate[sec.date, default: []].append(contentsOf: sec.items) }
+        for date in byDate.keys.sorted(by: >) {
+            let section = TodoSection(dateLabel: date, items: byDate[date]!, isToday: date == todayStr)
+            if section.isToday { todaySec = section }
+            else { prevSecs.append(section) }
         }
 
         return (items, todaySec, prevSecs, syncTime)
@@ -447,11 +578,15 @@ enum CacheParser {
 enum FileMutator {
     /// 切换需求状态（替换标题行里的 #状态 标记）
     static func setStatus(id: String, newStatusRaw: String) -> Bool {
+        CacheFile.withLock { setStatusLocked(id: id, newStatusRaw: newStatusRaw) } ?? false
+    }
+
+    private static func setStatusLocked(id: String, newStatusRaw: String) -> Bool {
         guard var content = CacheFile.read() else { return false }
         var lines = content.components(separatedBy: "\n")
-        let pattern = "### " + id + "(?![0-9])"
+        let pattern = "^### " + id + "(?![0-9])"
         for i in 0..<lines.count {
-            let t = lines[i].trimmingCharacters(in: .whitespaces)
+            let t = lines[i]
             if t.range(of: pattern, options: .regularExpression) != nil {
                 for s in [ItemStatus.pending, .inProgress, .completed, .suspended] {
                     if lines[i].contains(s.rawValue) {
@@ -460,325 +595,12 @@ enum FileMutator {
                     }
                 }
                 content = lines.joined(separator: "\n")
-                CacheFile.write(content)
-                return true
+                return CacheFile.write(content)
             }
         }
         return false
     }
 
-    /// 按文本内容匹配切换 todo 状态（用于顺延项，不限定日期块）
-    static func toggleTodoByText(_ searchText: String) -> Bool {
-        guard var content = CacheFile.read() else { return false }
-        var lines = content.components(separatedBy: "\n")
-
-        var inTodo = false
-        for i in 0..<lines.count {
-            let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("## 📝") { inTodo = true; continue }
-            if !inTodo { continue }
-            if trimmed.hasPrefix("- [ ]") || trimmed.hasPrefix("- [x]") || trimmed.hasPrefix("- [X]") {
-                // 匹配文本内容（去掉 checkbox 前缀后比较）
-                let body = trimmed
-                    .replacingOccurrences(of: "- [ ] ", with: "")
-                    .replacingOccurrences(of: "- [x] ", with: "")
-                    .replacingOccurrences(of: "- [X] ", with: "")
-                if searchText.contains(body) || body.contains(searchText) || body == searchText {
-                    if trimmed.hasPrefix("- [ ]") {
-                        let dateFmt = DateFormatter()
-                        dateFmt.dateFormat = "M.d HH:mm"
-                        let dateStr = dateFmt.string(from: Date())
-                        lines[i] = lines[i].replacingOccurrences(of: "- [ ]", with: "- [x]") + " ✅\(dateStr)"
-                    } else {
-                        lines[i] = lines[i]
-                            .replacingOccurrences(of: "- [x]", with: "- [ ]")
-                            .replacingOccurrences(of: "- [X]", with: "- [ ]")
-                        if let r = lines[i].range(of: "\\s*✅[\\d.]+ ?\\d{1,2}:\\d{2}", options: .regularExpression) {
-                            lines[i].removeSubrange(r)
-                        }
-                    }
-                    content = lines.joined(separator: "\n")
-                    CacheFile.write(content)
-                    return true
-                }
-            }
-        }
-        return false
-    }
-
-    /// 切换第 index 个 todo 的完成状态（0-based，今日日期块内）
-    static func toggleTodo(index: Int) -> Bool {
-        guard var content = CacheFile.read() else { return false }
-        var lines = content.components(separatedBy: "\n")
-
-        let todayStr: String = {
-            let f = DateFormatter()
-            f.dateFormat = "yyyy-MM-dd"
-            return f.string(from: Date())
-        }()
-
-        var inTodo = false
-        var inTodayBlock = false
-        var todoIdx = 0
-        for i in 0..<lines.count {
-            let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("## 📝") { inTodo = true; continue }
-            if !inTodo { continue }
-            if trimmed.hasPrefix("### ") {
-                let dateStr = trimmed.replacingOccurrences(of: "### ", with: "").trimmingCharacters(in: .whitespaces)
-                inTodayBlock = (dateStr == todayStr)
-                todoIdx = 0
-                continue
-            }
-            if !inTodayBlock { continue }
-            if trimmed.hasPrefix("- [ ]") || trimmed.hasPrefix("- [x]") || trimmed.hasPrefix("- [X]") {
-                if todoIdx == index {
-                    if trimmed.hasPrefix("- [ ]") {
-                        // 打钩：追加完成时间
-                        let timeFmt = DateFormatter()
-                        timeFmt.dateFormat = "HH:mm"
-                        let timeStr = timeFmt.string(from: Date())
-                        lines[i] = lines[i].replacingOccurrences(of: "- [ ]", with: "- [x]") + " ✅\(timeStr)"
-                    } else {
-                        // 取消勾选：移除 ✅ 时间标记
-                        lines[i] = lines[i]
-                            .replacingOccurrences(of: "- [x]", with: "- [ ]")
-                            .replacingOccurrences(of: "- [X]", with: "- [ ]")
-                        // 移除 ✅HH:mm 或 ✅ HH:mm
-                        if let r = lines[i].range(of: "\\s*✅\\d{1,2}:\\d{2}", options: .regularExpression) {
-                            lines[i].removeSubrange(r)
-                        }
-                    }
-                    content = lines.joined(separator: "\n")
-                    CacheFile.write(content)
-                    return true
-                }
-                todoIdx += 1
-            }
-        }
-        return false
-    }
-
-    /// 编辑第 index 个 todo 的正文（保留完成状态、备注、关联）
-    static func editTodo(index: Int, newText: String) -> Bool {
-        guard var content = CacheFile.read() else { return false }
-        var lines = content.components(separatedBy: "\n")
-
-        let todayStr: String = {
-            let f = DateFormatter()
-            f.dateFormat = "yyyy-MM-dd"
-            return f.string(from: Date())
-        }()
-
-        var inTodo = false
-        var inTodayBlock = false
-        var todoIdx = 0
-        for i in 0..<lines.count {
-            let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("## 📝") { inTodo = true; continue }
-            if !inTodo { continue }
-            if trimmed.hasPrefix("### ") {
-                let dateStr = trimmed.replacingOccurrences(of: "### ", with: "").trimmingCharacters(in: .whitespaces)
-                inTodayBlock = (dateStr == todayStr)
-                todoIdx = 0
-                continue
-            }
-            if !inTodayBlock { continue }
-            if trimmed.hasPrefix("- [ ]") || trimmed.hasPrefix("- [x]") || trimmed.hasPrefix("- [X]") {
-                if todoIdx == index {
-                    // 保留 checkbox 前缀
-                    let prefix: String
-                    if trimmed.hasPrefix("- [x]") || trimmed.hasPrefix("- [X]") {
-                        prefix = "- [x] "
-                    } else {
-                        prefix = "- [ ] "
-                    }
-                    // 保留备注
-                    var note = ""
-                    if let r = lines[i].range(of: "💬") {
-                        note = " " + String(lines[i][r.lowerBound...])
-                    }
-                    // 保留关联
-                    var link = ""
-                    if let r = lines[i].range(of: "`→\\s*D\\d{3}`", options: .regularExpression) {
-                        link = " " + String(lines[i][r])
-                    }
-                    lines[i] = prefix + newText + link + note
-                    content = lines.joined(separator: "\n")
-                    CacheFile.write(content)
-                    return true
-                }
-                todoIdx += 1
-            }
-        }
-        return false
-    }
-
-    /// 删除第 index 个 todo（0-based，今日日期块内）
-    static func deleteTodo(index: Int) -> Bool {
-        guard var content = CacheFile.read() else { return false }
-        var lines = content.components(separatedBy: "\n")
-
-        let todayStr: String = {
-            let f = DateFormatter()
-            f.dateFormat = "yyyy-MM-dd"
-            return f.string(from: Date())
-        }()
-
-        var inTodo = false
-        var inTodayBlock = false
-        var todoIdx = 0
-        for i in 0..<lines.count {
-            let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("## 📝") { inTodo = true; continue }
-            if !inTodo { continue }
-            if trimmed.hasPrefix("### ") {
-                let dateStr = trimmed.replacingOccurrences(of: "### ", with: "").trimmingCharacters(in: .whitespaces)
-                inTodayBlock = (dateStr == todayStr)
-                todoIdx = 0
-                continue
-            }
-            if !inTodayBlock { continue }
-            if trimmed.hasPrefix("- [ ]") || trimmed.hasPrefix("- [x]") || trimmed.hasPrefix("- [X]") {
-                if todoIdx == index {
-                    lines.remove(at: i)
-                    content = lines.joined(separator: "\n")
-                    CacheFile.write(content)
-                    return true
-                }
-                todoIdx += 1
-            }
-        }
-        return false
-    }
-
-    /// 按文本内容匹配删除 todo（用于顺延项，不限定日期块）
-    static func deleteTodoByText(_ searchText: String) -> Bool {
-        guard var content = CacheFile.read() else { return false }
-        var lines = content.components(separatedBy: "\n")
-
-        var inTodo = false
-        for i in 0..<lines.count {
-            let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("## 📝") { inTodo = true; continue }
-            if !inTodo { continue }
-            if trimmed.hasPrefix("- [ ]") || trimmed.hasPrefix("- [x]") || trimmed.hasPrefix("- [X]") {
-                let body = trimmed
-                    .replacingOccurrences(of: "- [ ] ", with: "")
-                    .replacingOccurrences(of: "- [x] ", with: "")
-                    .replacingOccurrences(of: "- [X] ", with: "")
-                if searchText.contains(body) || body.contains(searchText) || body == searchText {
-                    lines.remove(at: i)
-                    content = lines.joined(separator: "\n")
-                    CacheFile.write(content)
-                    return true
-                }
-            }
-        }
-        return false
-    }
-
-    /// 新增一条今日零碎
-    static func addTodo(text: String) -> Bool {
-        guard var content = CacheFile.read() else { return false }
-        var lines = content.components(separatedBy: "\n")
-
-        let todayStr: String = {
-            let f = DateFormatter()
-            f.dateFormat = "yyyy-MM-dd"
-            return f.string(from: Date())
-        }()
-        let newLine = "- [ ] \(text)"
-
-        // 找零碎区块
-        var todoSectionStart = -1
-        var lastDateHeaderIdx = -1
-        var lastDateStr = ""
-        var lastTodoLineIdx = -1
-
-        for i in 0..<lines.count {
-            let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("## 📝") {
-                todoSectionStart = i
-                continue
-            }
-            if todoSectionStart >= 0 {
-                if trimmed.hasPrefix("### ") {
-                    lastDateHeaderIdx = i
-                    lastDateStr = trimmed.replacingOccurrences(of: "### ", with: "").trimmingCharacters(in: .whitespaces)
-                    lastTodoLineIdx = i
-                }
-                if trimmed.hasPrefix("- [ ]") || trimmed.hasPrefix("- [x]") || trimmed.hasPrefix("- [X]") {
-                    lastTodoLineIdx = i
-                }
-            }
-        }
-
-        if todoSectionStart < 0 {
-            // 没有零碎区块，在文件末尾创建
-            lines.append("")
-            lines.append("## 📝 零碎事项（日清日结）")
-            lines.append("")
-            lines.append("### \(todayStr)")
-            lines.append("")
-            lines.append(newLine)
-        } else if lastDateStr == todayStr {
-            // 今天的日期块已存在，追加到最后一条 todo 后面
-            lines.insert(newLine, at: lastTodoLineIdx + 1)
-        } else {
-            // 今天的日期块不存在，在最后一条 todo 后面新建
-            let insertAt = lastTodoLineIdx >= 0 ? lastTodoLineIdx + 1 : todoSectionStart + 1
-            lines.insert(contentsOf: ["", "### \(todayStr)", "", newLine], at: insertAt)
-        }
-
-        content = lines.joined(separator: "\n")
-        CacheFile.write(content)
-        return true
-    }
-
-    /// 给第 index 个 todo 添加/替换备注（今日日期块内）
-    static func addNote(index: Int, note: String) -> Bool {
-        guard var content = CacheFile.read() else { return false }
-        var lines = content.components(separatedBy: "\n")
-
-        let todayStr: String = {
-            let f = DateFormatter()
-            f.dateFormat = "yyyy-MM-dd"
-            return f.string(from: Date())
-        }()
-
-        var inTodo = false
-        var inTodayBlock = false
-        var todoIdx = 0
-        for i in 0..<lines.count {
-            let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("## 📝") { inTodo = true; continue }
-            if !inTodo { continue }
-            if trimmed.hasPrefix("### ") {
-                let dateStr = trimmed.replacingOccurrences(of: "### ", with: "").trimmingCharacters(in: .whitespaces)
-                inTodayBlock = (dateStr == todayStr)
-                todoIdx = 0
-                continue
-            }
-            if !inTodayBlock { continue }
-            if trimmed.hasPrefix("- [ ]") || trimmed.hasPrefix("- [x]") || trimmed.hasPrefix("- [X]") {
-                if todoIdx == index {
-                    var base = lines[i]
-                    if let r = base.range(of: "💬") {
-                        base = String(base[..<r.lowerBound]).trimmingCharacters(in: .whitespaces)
-                    } else {
-                        base = base.trimmingCharacters(in: .whitespaces)
-                    }
-                    lines[i] = base + " 💬" + note
-                    content = lines.joined(separator: "\n")
-                    CacheFile.write(content)
-                    return true
-                }
-                todoIdx += 1
-            }
-        }
-        return false
-    }
 }
 
 // MARK: - HTML 转义

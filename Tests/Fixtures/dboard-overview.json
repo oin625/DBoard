@@ -1,0 +1,27 @@
+[
+  {
+    "name": "rich_context_is_private",
+    "source": "## 🔴\n### D014【ultra】锁券改造 #进行中 📅10.29\n- **概括**：锁券移到工单服务之后。\n- **提示词**：\n    ## 代码入口\n    /Users/zz/private/service\n    不能上传的上下文\n- **分支**：feature/private\n- **进度**：\n    - 11.2: 旧阻塞。\n    - 11.3: 接口已提交，待联调验收。\n        明细：\n        私有接口参数\n        ### D999 假标题\n- **需求流**：[R42](https://ai.tmallyc.com/prd/index.html#detail/42)\n## 📝 零碎\n### 2026-11-03\n- [x] 已完成零碎\n",
+    "expected": "# 进行时 · 需求总览\n\n> 本文只展示需求概况和当前进度；完整咒言、资料、变更、工程分支与历史记录保存在 D板本机。\n\n## 🔴 重要且紧急\n\n### D014【ultra】锁券改造 #进行中 📅10.29\n- **概括**：锁券移到工单服务之后。\n- **进度**：\n    - 11.3: 接口已提交，待联调验收。\n- **需求流**：[R42](https://ai.tmallyc.com/prd/index.html#detail/42)\n"
+  },
+  {
+    "name": "multiple_projects_and_bookkeeping",
+    "source": "## 🟠\n### D017【ultra；tesla】补单 #进行中 📅2026-11-02\n- **描述**：防止继续产生缺单。\n- **分支**：ultra:feature/a；tesla:feature/b\n- **进度**：\n    - 11.2: 定向测试通过，待验收。\n    - 11.3: 已更新开发仓库与分支。\n### D018【】未开始的功能 #待开始\n",
+    "expected": "# 进行时 · 需求总览\n\n> 本文只展示需求概况和当前进度；完整咒言、资料、变更、工程分支与历史记录保存在 D板本机。\n\n## 🟠 紧急不重要\n\n### D017【ultra；tesla】补单 #进行中 📅2026-11-02\n- **概括**：防止继续产生缺单。\n- **进度**：\n    - 11.2: 定向测试通过，待验收。\n\n### D018 未开始的功能 #待开始\n"
+  },
+  {
+    "name": "todos_only",
+    "source": "## 📝 零碎\n### 2026-11-03\n- [ ] 本地事项\n",
+    "expected": "# 进行时 · 需求总览\n\n> 本文只展示需求概况和当前进度；完整咒言、资料、变更、工程分支与历史记录保存在 D板本机。\n\n暂无需求。\n"
+  },
+  {
+    "name": "new_change_pending_without_spell",
+    "source": "## 🟡\n### D014【ultra】锁券改造 #进行中\n- **概括**：拆出锁券接口。\n- **进度**：\n    - 11.3: 接口完成，待验收。\n- **变更咒言**：\n    <!-- dboard-changes:v1:W3siaWQiOiJDMDAxIiwiY3JlYXRlZEF0IjoiMjAyNi0xMS0wM1QxMDowMDowMFoiLCJpbnRlbnQiOiJwcml2YXRlIGNoYW5nZSJ9XQ== -->\n    ### C001 · 2026-11-03T10:00:00Z\n    private change\n",
+    "expected": "# 进行时 · 需求总览\n\n> 本文只展示需求概况和当前进度；完整咒言、资料、变更、工程分支与历史记录保存在 D板本机。\n\n## 🟡 重要不紧急\n\n### D014【ultra】锁券改造 #进行中\n- **概括**：拆出锁券接口。\n- **进度**：\n    - 11.3: 新增 1 项变更待处理。上次进度（11.3）：接口完成，待验收。\n"
+  },
+  {
+    "name": "mechanical-workspace-replay-keeps-the-last-development-result",
+    "source": "## 🟡\n### D014【ultra】锁券改造 #进行中\n- **概括**：拆出锁券接口。\n- **进度**：\n    - 11.3: [C002] 接口完成，待验收。\n    - 11.3: [C002] 已在独立工作区重放15个文件，Luban收到15条事件，代码及Git状态保持一致。\n",
+    "expected": "# 进行时 · 需求总览\n\n> 本文只展示需求概况和当前进度；完整咒言、资料、变更、工程分支与历史记录保存在 D板本机。\n\n## 🟡 重要不紧急\n\n### D014【ultra】锁券改造 #进行中\n- **概括**：拆出锁券接口。\n- **进度**：\n    - 11.3: [C002] 接口完成，待验收。\n"
+  }
+]

@@ -29,6 +29,7 @@ final class HotKey {
     private var registeredId: UInt32?
     private var keyCode: UInt32 = 0
     private var modifiers: UInt32 = 0
+    private var onStatus: ((OSStatus) -> Void)?
 
     /// 注册是否已生效(调试面板自查用)
     var isRegistered: Bool { hotKeyRef != nil }
@@ -38,7 +39,9 @@ final class HotKey {
     ///   - keyCode: 虚拟键码（如 kVK_ANSI_V = 9）
     ///   - modifiers: Carbon 修饰键掩码（controlKey / cmdKey / shiftKey / optionKey）
     ///   - callback: 触发回调（主线程）
-    func register(keyCode: UInt32, modifiers: UInt32, callback: @escaping () -> Void) {
+    func register(keyCode: UInt32, modifiers: UInt32, onStatus: ((OSStatus) -> Void)? = nil, callback: @escaping () -> Void) {
+        unregister()
+        self.onStatus = onStatus
         self.keyCode = keyCode
         self.modifiers = modifiers
         Self.installSharedHandlerOnce()
@@ -47,23 +50,24 @@ final class HotKey {
         HotKey.nextId += 1
         HotKey.registry[id] = callback
         registeredId = id
-        tryRegister(attempts: 6)
+        tryRegister(attempts: 6, expectedID: id)
     }
 
-    private func tryRegister(attempts: Int) {
-        guard let registeredId else { return }
+    private func tryRegister(attempts: Int, expectedID: UInt32) {
+        guard let registeredId, registeredId == expectedID else { return }
         let hotKeyId = EventHotKeyID(signature: HotKey.signature, id: registeredId)
         let status = RegisterEventHotKey(keyCode, modifiers, hotKeyId,
                                          GetApplicationEventTarget(), 0, &hotKeyRef)
-        if status == noErr { return }
+        if status == noErr { onStatus?(status); return }
         hotKeyRef = nil
         guard attempts > 1 else {
+            onStatus?(status)
             NSLog("HotKey: register failed status=\(status) keyCode=\(keyCode) modifiers=\(modifiers)")
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
             guard let self, self.hotKeyRef == nil else { return }
-            self.tryRegister(attempts: attempts - 1)
+            self.tryRegister(attempts: attempts - 1, expectedID: expectedID)
         }
     }
 
@@ -97,8 +101,13 @@ final class HotKey {
         )
     }
 
-    deinit {
+    func unregister() {
         if let ref = hotKeyRef { UnregisterEventHotKey(ref) }
+        hotKeyRef = nil
         if let id = registeredId { HotKey.registry[id] = nil }
+        registeredId = nil
+        onStatus = nil
     }
+
+    deinit { unregister() }
 }

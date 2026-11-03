@@ -145,6 +145,7 @@ final class EngineHealthModel: ObservableObject {
             return e
         }
         e.detail = "上次同步 " + Self.rel(date)
+        if ContentRevision.matchesSyncReceipt(content) { e.state = .ok; return e }
         // 没改动就不需要同步: 只有"文件在上次同步之后又被改过且迟迟没推上去"才算异常。
         // (旧逻辑按同步时间绝对年龄判, 几天不动看板就报红, 是误报)
         guard let mtime = fileDate(path), mtime.timeIntervalSince(date) > 120 else {
@@ -183,7 +184,6 @@ struct EngineStrip: View {
     @EnvironmentObject var theme: ThemeManager
     @ObservedObject private var health = EngineHealthModel.shared
     @State private var showDetail = false
-    @State private var syncPulse = false
 
     /// 同步动作进行中时, 同步点让位给动作状态(沿用原来的脉冲反馈)
     private var syncActionColor: Color? {
@@ -191,16 +191,16 @@ struct EngineStrip: View {
         case .idle: return nil
         case .pending: return theme.current.accentSecondary
         case .syncing: return theme.current.accentPrimary
-        case .done: return Color(hex: "#34c759")
+        case .done: return Color.green
         case .fail: return .orange
         }
     }
 
     private func stateColor(_ s: EngineState) -> Color {
         switch s {
-        case .ok: return Color(hex: "#34c759")
+        case .ok: return Color.green
         case .warn: return .orange
-        case .dead: return Color(hex: "#d94f4f")
+        case .dead: return Color.red
         case .unknown: return theme.current.textMuted
         }
     }
@@ -225,22 +225,13 @@ struct EngineStrip: View {
                     Circle()
                         .fill(e.id == "sync" ? (syncActionColor ?? stateColor(e.state)) : stateColor(e.state))
                         .frame(width: 5, height: 5)
-                        .scaleEffect(e.id == "sync" && syncPulse ? 1.5 : 1.0)
-                        .opacity(e.id == "sync" && syncPulse ? 0.6 : 1.0)
                 }
-                Text(summaryText).font(.system(size: 9)).foregroundStyle(summaryColor)
+                Text(summaryText).font(.system(size: 11)).foregroundStyle(summaryColor)
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help("引擎心跳: 值守 / 资讯 / 同步")
-        .onChange(of: vm.syncKind) { kind in
-            if kind == .syncing {
-                withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { syncPulse = true }
-            } else {
-                withAnimation(.easeOut(duration: 0.3)) { syncPulse = false }
-            }
-        }
         .popover(isPresented: $showDetail, arrowEdge: .top) {
             EngineDetailPanel(health: health, stateColor: stateColor)
         }
@@ -258,7 +249,7 @@ struct EngineDetailPanel: View {
                 Text("引擎心跳").font(.system(size: 11, weight: .bold))
                 Spacer()
                 if let t = health.lastCheck {
-                    Text("巡检于 " + EngineHealthModel.rel(t)).font(.system(size: 9)).foregroundStyle(.secondary)
+                    Text("巡检于 " + EngineHealthModel.rel(t)).font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 Button { health.refresh() } label: {
                     Image(systemName: "arrow.clockwise").font(.system(size: 10))
@@ -281,7 +272,7 @@ struct EngineDetailPanel: View {
                         .padding(.leading, 19)
                     if let hint = e.hint {
                         Text(hint)
-                            .font(.system(size: 9, design: .monospaced))
+                            .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(stateColor(e.state))
                             .padding(.leading, 19)
                             .textSelection(.enabled)

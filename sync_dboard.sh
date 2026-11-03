@@ -1,69 +1,101 @@
 #!/bin/bash
-# D板同步脚本：把本地缓存推送到钉钉文档
-# 推送前把 todo 行末的 💬备注 转成独立引用块，钉钉上显示更清爽
+# Sync only the public overview; full context and local edits are never reconstructed from cloud.
 set -euo pipefail
-
-CACHE="$HOME/.claude/demand-center-cache.md"
-# 钉钉文档 nodeId —— 不入库, 从环境变量读取
-# 用法: 在 ~/.zshrc 里 export DBOARD_NODE_ID="你的钉钉文档nodeId"
-NODE_ID="${DBOARD_NODE_ID:-}"
-# DBoard 由 launchd 拉起，不会加载 ~/.zshrc：环境变量缺失时从 zshrc 里捞同名 export 兜底
-if [ -z "$NODE_ID" ] && [ -f "$HOME/.zshrc" ]; then
-    NODE_ID=$(sed -n 's/^export DBOARD_NODE_ID="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$HOME/.zshrc" | tail -1)
-fi
-# launchd 的 PATH 只有 /usr/bin:/bin，补上 dws 的安装位置
 export PATH="$HOME/.qoderwork/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export DBOARD_SYNC_SCRIPT="${BASH_SOURCE[0]}"
+export DBOARD_SYNC_FORCE="${1:-}"
+python3 -I - <<'PYTHON'
+import datetime, fcntl, hashlib, json, os, re, subprocess, sys, tempfile
+from pathlib import Path
 
-if [ -z "$NODE_ID" ]; then
-    echo "❌ 未设置 DBOARD_NODE_ID 环境变量（钉钉文档 nodeId）" >&2
-    echo "   请在 ~/.zshrc 中添加: export DBOARD_NODE_ID=\"你的nodeId\"" >&2
-    exit 1
-fi
+script_dir = Path(os.environ['DBOARD_SYNC_SCRIPT']).resolve().parent
+module_dir = script_dir / ('Tools' if (script_dir / 'Tools/dboard_overview.py').is_file() else 'CLI')
+sys.path.insert(0, str(module_dir))
+from dboard_overview import render, digest as overview_digest, receipt, PREFIX, NODE_PREFIX
+from dboard_ai import CLIError
 
-if [ ! -f "$CACHE" ]; then
-    echo "❌ 缓存文件不存在" >&2
-    exit 1
-fi
+cache = Path.home() / '.claude/demand-center-cache.md'
 
-# 读取缓存（去掉 synced 注释行）
-CONTENT=$(grep -v '^<!-- synced:' "$CACHE")
+def body(content):
+    return '\n'.join(line for line in content.split('\n')
+                     if not line.startswith(('<!-- synced:', '<!-- synced-hash:', PREFIX, NODE_PREFIX)))
 
-# 转换：把 "- [ ] xxx 💬备注" 拆成两行
-#   第一行：todo 本体（去掉 💬及之后）
-#   第二行：> 💬 备注（引用块，钉钉渲染为缩进引用）
-CONTENT=$(printf '%s' "$CONTENT" | python3 -c '
-import sys, re
-lines = sys.stdin.read().split("\n")
-out = []
-for line in lines:
-    m = re.match(r"^(\s*)(- \[[ xX]\] .*?)\s*💬(.*)$", line)
-    if m:
-        indent, todo, note = m.groups()
-        note = note.strip()
-        out.append(f"{indent}{todo}")
-        if note:
-            out.append(f"{indent}> 💬 {note}")
-    else:
-        out.append(line)
-print("\n".join(out))
-')
+def digest(content):
+    return hashlib.sha256(body(content).encode('utf-8')).hexdigest()
 
-# 推送到钉钉文档（overwrite 模式，需 --yes 确认破坏性写入）
-# 用 --content-file 而非 --content：内容含换行/表格/emoji，字面量传参会被 shell 转义破坏
-TMP_MD=$(mktemp -t dboard-sync.XXXXXX.md)
-trap 'rm -f "$TMP_MD"' EXIT
-printf '%s' "$CONTENT" > "$TMP_MD"
-RESULT=$(dws doc update --node "$NODE_ID" --content-file "$TMP_MD" \
-                        --mode overwrite --yes 2>&1)
+def emit(status, success=False):
+    print(json.dumps({'success': success, 'status': status}, ensure_ascii=False))
 
-if echo "$RESULT" | grep -q '"success"'; then
-    # 更新本地同步时间
-    SYNC_TIME=$(date +"%Y-%m-%dT%H:%M:%S")
-    if grep -q '^<!-- synced:' "$CACHE"; then
-        sed -i '' "s|^<!-- synced:.*-->|<!-- synced: ${SYNC_TIME} -->|" "$CACHE"
-    fi
-    echo "✅ 已同步到钉钉文档"
-else
-    echo "❌ 同步失败: $RESULT" >&2
-    exit 1
-fi
+def business_response(output):
+    text = output.decode('utf-8', errors='replace')
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r'\{', text):
+        try:
+            value, end = decoder.raw_decode(text, match.start())
+        except ValueError:
+            continue
+        if isinstance(value, dict) and not text[end:].strip():
+            return value
+    return {}
+
+def save_receipt(current, node, sent_hash, stamp):
+    updated = ('<!-- synced: ' + stamp + ' -->\n<!-- synced-hash: ' + digest(current) +
+               ' -->\n' + PREFIX + sent_hash + ' -->\n' + NODE_PREFIX + node + ' -->\n' + body(current))
+    fd, temporary = tempfile.mkstemp(prefix='dboard-cache-', dir=cache.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as output:
+            os.fchmod(output.fileno(), cache.stat().st_mode & 0o777)
+            output.write(updated); output.flush(); os.fsync(output.fileno())
+        os.replace(temporary, cache)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+try:
+    with open(str(cache) + '.sync.lock', 'a') as sync_lock:
+        fcntl.flock(sync_lock, fcntl.LOCK_EX)
+        node = os.environ.get('DBOARD_NODE_ID', '')
+        if not node:
+            zshrc = Path.home() / '.zshrc'
+            if zshrc.exists():
+                for line in zshrc.read_text().splitlines():
+                    m = re.fullmatch(r'''export DBOARD_NODE_ID=["']?([^"'\s]+)["']?''', line.strip())
+                    if m:
+                        node = m.group(1)
+        if not node:
+            emit('missing-node'); sys.exit(1)
+        if not re.fullmatch(r'[A-Za-z0-9_-]+', node):
+            emit('invalid-node'); sys.exit(1)
+        with open(str(cache) + '.lock', 'a') as cache_lock:
+            fcntl.flock(cache_lock, fcntl.LOCK_EX)
+            snapshot = cache.read_text()
+        payload = render(snapshot)
+        sent_hash = overview_digest(snapshot)
+        skip = os.environ.get('DBOARD_SYNC_FORCE') != '--force' and receipt(snapshot, node)
+        if skip:
+            stamp_match = re.search(r'^<!-- synced: ([^\n]+) -->$', snapshot, re.M)
+            stamp = stamp_match[1] if stamp_match else datetime.datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        else:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.md', encoding='utf-8') as upload:
+                upload.write(payload); upload.flush()
+                result = subprocess.run(['dws', 'doc', 'update', '--node', node,
+                    '--content-file', upload.name, '--mode', 'overwrite', '--yes', '--format', 'json'],
+                    capture_output=True, timeout=90)
+                response = business_response(result.stdout)
+                if result.returncode != 0 or response.get('success') is not True:
+                    emit('remote-failed'); sys.exit(1)
+            stamp = datetime.datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        with open(str(cache) + '.lock', 'a') as cache_lock:
+            fcntl.flock(cache_lock, fcntl.LOCK_EX)
+            current = cache.read_text()
+            changed = overview_digest(current) != sent_hash
+            # Record what the server actually received without replacing concurrent local edits.
+            save_receipt(current, node, sent_hash, stamp)
+        if changed:
+            emit('changed'); sys.exit(75)
+        emit('unchanged' if skip else 'ok', True)
+except CLIError:
+    emit('invalid-overview'); sys.exit(1)
+except (OSError, subprocess.SubprocessError, ValueError):
+    emit('sync-failed'); sys.exit(1)
+PYTHON
