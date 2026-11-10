@@ -1,0 +1,33 @@
+Sources/DemandReleaseChecklist.swift
+  s_ac6d7ab51196eb::t_0d7d33b7a252e7 1-222
+Tests/DemandDeliveryTests.swift
+  s_dc6e46cab0b376::t_7a6a7aa1d1b8da 8,12-25,42-114,149-152,154,156-158,161-182,344,348,350-390
+Tests/DemandMatrixDragTests.swift
+  s_ac6d7ab51196eb::t_b2a0d5751cf385 1-60
+Tests/DemandReviewTaskTests.swift
+  s_dc6e46cab0b376::t_ae4e7273b3dfc3 1-87
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "debe7c57e064c142eaac37296c3d3797fd915b8c",
+  "prompts": {},
+  "sessions": {
+    "s_ac6d7ab51196eb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1a4a9-43c7-7052-a02a-2a274a526ad9",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "zhouzihan <zzh02513336@taobao.com>"
+    },
+    "s_dc6e46cab0b376": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1af84-40e4-72a0-85a3-f2233cc8ffa7",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "zhouzihan <zzh02513336@taobao.com>"
+    }
+  }
+}
