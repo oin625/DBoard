@@ -3,7 +3,7 @@ import Cocoa
 
 // MARK: - 需求条目直接编辑（不经 AI）
 // 规则对齐 ~/.claude/skills/d-board/SKILL.md：
-//   改本地缓存 → sync_dboard.sh 覆盖进行中文档；完成 = 追加到归档文档 + 从缓存移除
+//   完成统一保存到已完成记录，完整快照仍可在面板查看、恢复或开启新版本。
 
 struct DItemDraft: Codable, Equatable {
     var id: String
@@ -19,6 +19,9 @@ struct DItemDraft: Codable, Equatable {
     var prompt: String = ""
     var version: DemandVersion? = nil
     var chatLinks: DemandChatLinks? = nil
+    var kind: DemandKind? = nil
+    var effectiveKind: DemandKind { kind ?? .development }
+    var isIncident: Bool { effectiveKind == .incident }
     var promptSections: DemandPromptSections {
         get { DemandPromptSections(stored: prompt) }
         set { prompt = newValue.stored }
@@ -38,6 +41,7 @@ struct DItemDraft: Codable, Equatable {
         prompt = it.prompt
         version = it.version
         chatLinks = it.chatLinks
+        kind = it.kind
     }
 
     init(newID: String, priority: ItemPriority) {
@@ -50,7 +54,7 @@ struct DItemDraft: Codable, Equatable {
 
     var hasUserInput: Bool {
         [name, project, desc, branch, deadline, prompt].contains { !$0.trimmed.isEmpty }
-            || reqFlow != nil || version != nil || chatLinks?.isEmpty == false || priority != .p1 || status != .pending
+            || isIncident || reqFlow != nil || version != nil || chatLinks?.isEmpty == false || priority != .p1 || status != .pending
             || start != DemandDates.today()
     }
 
@@ -147,7 +151,7 @@ enum DItemStore {
         block.insert(contentsOf: replacement, at: min(pos, block.count))
     }
 
-    private static func mutate(at url: URL? = nil, _ body: (inout [String]) -> Bool) -> Bool {
+    static func mutate(at url: URL? = nil, _ body: (inout [String]) -> Bool) -> Bool {
         CacheFile.withLock(at: url) {
             let content: String?
             if let url { content = try? String(contentsOf: url, encoding: .utf8) }
@@ -217,6 +221,11 @@ enum DItemStore {
             guard let r = blockRange(lines, id: d.id) else { return false }
             var block = Array(lines[r])
             let o = DItemDraft(from: original)
+            guard original.incidentReadError == nil else { return false }
+            if d.effectiveKind != o.effectiveKind {
+                guard (try? DemandIncident.kind(block)) == o.effectiveKind else { return false }
+                setField(&block, key: "类型", value: d.isIncident ? DemandKind.incident.rawValue : "")
+            }
             if d.headerLine != o.headerLine { block[0] = d.headerLine }
             if d.projectFieldValue != o.projectFieldValue { setField(&block, key: "项目", value: d.projectFieldValue) }
             if d.branch != o.branch { setField(&block, key: "分支", value: d.branch) }
@@ -245,6 +254,68 @@ enum DItemStore {
         }
     }
 
+    /// Checklist mutations lock the latest cache and preserve concurrent updates to other fields.
+    static func updateReleaseChecklist(id: String, at url: URL? = nil,
+                                      _ update: (inout DemandReleaseChecklist) -> Bool) -> Bool {
+        mutate(at: url) { lines in
+            let matches = CacheParser.parse(content: lines.joined(separator: "\n")).items.filter { $0.id == id }
+            guard matches.count == 1, matches[0].status != .completed, let range = blockRange(lines, id: id) else { return false }
+            var block = Array(lines[range])
+            do {
+                var checklist = try DemandReleaseChecklist.read(block)
+                guard update(&checklist) else { return false }
+                try DemandReleaseChecklist.set(&block, checklist: checklist)
+                lines.replaceSubrange(range, with: block)
+                return true
+            } catch { return false }
+        }
+    }
+
+    /// User corrections do not overwrite AI snapshots or change the development scope.
+    static func saveHandoffNotes(id: String, text: String, expected: String, at url: URL? = nil) -> Bool {
+        let value = text.trimmed
+        return mutate(at: url) { lines in
+            guard CacheParser.parse(content: lines.joined(separator: "\n")).items.filter({ $0.id == id }).count == 1,
+                  let range = blockRange(lines, id: id) else { return false }
+            var block = Array(lines[range])
+            guard block.filter({ $0.hasPrefix(DemandHandoff.notesField) }).count <= 1 else { return false }
+            let current = DemandHandoff.notes(block)
+            guard current == expected || current == value else { return false }
+            let replacement = value.isEmpty ? [] : [DemandHandoff.notesField + "：" + value.components(separatedBy: "\n")[0]]
+                + value.components(separatedBy: "\n").dropFirst().map { "    " + $0 }
+            if let index = block.firstIndex(where: { $0.hasPrefix(DemandHandoff.notesField) }) {
+                var end = index + 1
+                while end < block.count && block[end].hasPrefix("    ") { end += 1 }
+                block.replaceSubrange(index..<end, with: replacement)
+            } else {
+                block.insert(contentsOf: replacement, at: 1)
+            }
+            lines.replaceSubrange(range, with: block)
+            return true
+        }
+    }
+
+    /// Only the personal reminder is edited; concurrent AI updates to other fields survive.
+    static func saveReminder(id: String, text: String, expected: String, at url: URL? = nil) -> Bool {
+        let value = DemandReminder.singleLine(text).trimmed
+        return mutate(at: url) { lines in
+            let matches = CacheParser.parse(content: lines.joined(separator: "\n")).items.filter { $0.id == id }
+            guard matches.count == 1, let range = blockRange(lines, id: id) else { return false }
+            var block = Array(lines[range])
+            guard block.filter({ $0.hasPrefix(DemandReminder.field) }).count <= 1 else { return false }
+            let current = DemandReminder.read(block)
+            guard current == expected || current == value else { return false }
+            if let index = block.firstIndex(where: { $0.hasPrefix(DemandReminder.field) }) {
+                if value.isEmpty { block.remove(at: index) }
+                else { block[index] = DemandReminder.field + "：" + value }
+            } else if !value.isEmpty {
+                block.insert(DemandReminder.field + "：" + value, at: 1)
+            }
+            lines.replaceSubrange(range, with: block)
+            return true
+        }
+    }
+
     /// 只修改咒言，保留编辑期间其他字段的更新；同一咒言被修改时拒绝覆盖。
     static func savePrompt(id: String, text: String, expected: String, at url: URL? = nil) -> Bool {
         mutate(at: url) { lines in
@@ -257,9 +328,14 @@ enum DItemStore {
         }
     }
 
-    static func setPriority(id: String, _ p: ItemPriority) -> Bool {
-        mutate { lines in
+    static func setPriority(id: String, _ p: ItemPriority, at url: URL? = nil, expectedPriority: ItemPriority? = nil) -> Bool {
+        mutate(at: url) { lines in
             guard let r = blockRange(lines, id: id) else { return false }
+            if let expectedPriority {
+                guard expectedPriority != p,
+                      let current = CacheParser.parse(content: lines.joined(separator: "\n")).items.first(where: { $0.id == id }),
+                      current.priority == expectedPriority, current.status != .completed else { return false }
+            }
             let block = cut(&lines, r)
             insert(&lines, block: block, priority: p)
             return true
@@ -273,7 +349,7 @@ enum DItemStore {
             var block = Array(lines[r])
             if let p = block.firstIndex(where: { $0.hasPrefix("- **进度**") }) {
                 var e = p + 1
-                while e < block.count && (block[e].hasPrefix(" ") || block[e].hasPrefix("\t")) && !block[e].trimmed.isEmpty { e += 1 }
+                while e < block.count && (block[e].hasPrefix(" ") || block[e].hasPrefix("\t") || block[e].trimmed.isEmpty) { e += 1 }
                 block.insert(contentsOf: entry, at: e)
             } else {
                 block.append("- **进度**：")
@@ -289,6 +365,7 @@ enum DItemStore {
         d.status = d.scheduledStatus
         guard d.validationError == nil else { return false }
         var block = [d.headerLine]
+        if d.isIncident { block.append("- **类型**：线上排查") }
         if !d.projectFieldValue.isEmpty { block.append("- **项目**：\(d.projectFieldValue)") }
         if !d.branch.trimmed.isEmpty { block.append("- **分支**：\(d.branch.trimmed)") }
         if let link = d.reqFlow {
@@ -316,7 +393,10 @@ enum DItemStore {
             insert(&lines, block: block, priority: d.priority)
             return true
         }
-        if ok, url == nil, let n = Int(d.id.dropFirst()) { UserDefaults.standard.set(n, forKey: "dboard.lastDID") }
+        if ok, url == nil, let n = DemandNumbering.number(d.id) {
+            let key = d.id.hasPrefix("P") ? DemandKind.incident.counterKey : DemandKind.development.counterKey
+            UserDefaults.standard.set(max(n, UserDefaults.standard.integer(forKey: key)), forKey: key)
+        }
         return ok
     }
 
@@ -387,17 +467,17 @@ enum DItemStore {
         return Array(lines[r])
     }
 
-    /// 下一个编号：缓存里出现过的最大 D 号（含零碎里的 → Dxxx）与历史水位取大
-    static func nextID(reserving ids: [String] = []) -> String {
-        var mx = max(UserDefaults.standard.integer(forKey: "dboard.lastDID"), ids.compactMap { Int($0.dropFirst()) }.max() ?? 0)
-        let archiveCache = NSHomeDirectory() + "/.claude/dboard-archive-cache.md"
-        for c in [CacheFile.read(), try? String(contentsOfFile: archiveCache, encoding: .utf8)].compactMap({ $0 }) {
-            let re = try! NSRegularExpression(pattern: "D(\\d{3,})(?![0-9])")
-            for m in re.matches(in: c, range: NSRange(c.startIndex..., in: c)) {
-                if let r = Range(m.range(at: 1), in: c), let n = Int(c[r]) { mx = max(mx, n) }
-            }
-        }
-        return String(format: "D%03ld", mx + 1)
+    /// Reserve real demand identities, including archives, pending archive writes and explicit links.
+    static func nextID(reserving ids: [String] = [], kind: DemandKind = .development, at cacheURL: URL? = nil,
+                       archiveURL: URL? = nil, journalURL: URL? = nil,
+                       defaults: UserDefaults = .standard) -> String {
+        let archive = archiveURL ?? URL(fileURLWithPath: NSHomeDirectory() + "/.claude/dboard-archive-cache.md")
+        let current = cacheURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? (cacheURL == nil ? CacheFile.read() : nil)
+        let archived = try? String(contentsOf: archive, encoding: .utf8)
+        let journal = ArchiveJournal(url: journalURL ?? URL(fileURLWithPath: NSHomeDirectory() + "/.claude/dboard-archive-journal.json"))
+        return DemandNumbering.nextID(contents: [current, archived].compactMap { $0 },
+            reserving: ids + Array(journal.entries.keys),
+            lastAssigned: defaults.integer(forKey: kind.counterKey), kind: kind)
     }
 
     // MARK: 归档到钉钉「已完成」文档
@@ -442,7 +522,6 @@ extension DBoardViewModel {
     }
 
     func flash(_ msg: String) {
-        syncText = msg; syncKind = .fail
         showFeedback(msg, failed: true)
     }
 
@@ -453,8 +532,13 @@ extension DBoardViewModel {
             flash("该需求已关联 \(existing.id)，请打开已有 D单")
             return false
         }
+        let completing = d.scheduledStatus == .completed && original.status != .completed
+        var draft = d
+        if completing { draft.status = original.status }
         markSelfWrite()
-        return afterWrite(DItemStore.save(d, original: original), fail: "保存失败，请检查本地数据文件或刷新后重试")
+        guard afterWrite(DItemStore.save(draft, original: original), fail: "保存失败，请检查本地数据文件或刷新后重试") else { return false }
+        if completing { completeAfterEditing(d.id) }
+        return true
     }
 
     @discardableResult
@@ -502,11 +586,29 @@ extension DBoardViewModel {
     }
 
     @discardableResult
+    func copyReviewTask(_ id: String, at url: URL? = nil, pasteboard: NSPasteboard = .general) -> Bool {
+        do {
+            let latest = try DItemStore.currentItem(id: id, at: url)
+            let instruction = DboardAITaskContext.reviewInstruction(item: latest, cacheURL: url)
+            pasteboard.clearContents()
+            guard pasteboard.setString(instruction, forType: .string) else {
+                flash("代码审查指令复制失败，请重试")
+                return false
+            }
+            showFeedback("代码审查指令已复制，发给新的 AI 即可")
+            return true
+        } catch {
+            flash("代码审查指令复制失败：" + error.localizedDescription)
+            return false
+        }
+    }
+
+    @discardableResult
     func copyDebugTask(_ id: String, at url: URL? = nil, pasteboard: NSPasteboard = .general) -> Bool {
         do {
             let latest = try DItemStore.currentItem(id: id, at: url)
             guard latest.status != .completed else {
-                flash("需求已归档，请先创建新版本再继续")
+                flash("需求已完成，请先恢复继续处理或开启新版本")
                 return false
             }
             guard !latest.debugPageNotNeeded else {
@@ -581,16 +683,28 @@ extension DBoardViewModel {
             flash("该需求已关联 \(existing.id)，请打开已有 D单")
             return false
         }
+        let completing = d.scheduledStatus == .completed
+        var draft = d
+        if completing { draft.status = .pending }
         markSelfWrite()
-        guard afterWrite(DItemStore.create(d), fail: "新建失败，请检查是否已关联或刷新本地数据后重试", success: "需求已创建") else { return false }
+        guard afterWrite(DItemStore.create(draft), fail: "新建失败，请检查是否已关联或刷新本地数据后重试", success: "需求已创建") else { return false }
         focusItem(d.id)
+        if completing { completeAfterEditing(d.id) }
         return true
+    }
+
+    private func completeAfterEditing(_ id: String) {
+        // Let the editor close before showing the single completion confirmation.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let item = self.items.first(where: { $0.id == id }) else { return }
+            self.completeItem(item)
+        }
     }
 
     func deleteItem(_ item: DItem) {
         let a = NSAlert()
         a.messageText = "删除 \(item.id)「\(item.displayTitle)」？"
-        a.informativeText = "直接从 D板 删掉，不进归档。要留档请用「完成并归档」。"
+        a.informativeText = "直接从 D板 删掉，不进归档。要保留记录请用「完成」。"
         a.addButton(withTitle: "删除"); a.addButton(withTitle: "取消")
         a.buttons.first?.hasDestructiveAction = true
         NSApp.activate(ignoringOtherApps: true)
@@ -601,9 +715,40 @@ extension DBoardViewModel {
         offerUndo("恢复 \(item.id)") { DItemStore.restore(block, id: item.id, priority: item.priority) }
     }
 
-    /// 完成并归档：先追加到归档文档，成功后才从缓存移除，避免丢数据
-    func archiveItem(_ item: DItem) {
-        guard !archivingIDs.contains(item.id), let original = DItemStore.blockText(id: item.id) else { return }
+    /// 完成：先保存完整历史，确认成功后才移出当前需求，避免丢数据。
+    func completeItem(_ item: DItem) {
+        guard !archivingIDs.contains(item.id), saveReminder(item.id), saveReleaseDrafts(item.id) else { return }
+        if let completionRequest { completionRequest(item); return }
+        guard let original = DItemStore.blockText(id: item.id),
+              let fresh = CacheParser.parse(content: item.priority.sectionPrefix + "\n" + original.joined(separator: "\n")).items.first,
+              fresh.id == item.id else { flash("需求无法读取，请刷新后重试"); return }
+        if let issue = DemandCompletionGate.localIssue(fresh) { flash(issue); return }
+        if fresh.isIncident { finishIncident(fresh, original: original); return }
+        if original.contains(where: { $0.hasPrefix("- **需求流**") }), fresh.reqFlow == nil {
+            flash("正式需求关联无法读取，请重新关联后再完成"); return
+        }
+        if let link = fresh.reqFlow {
+            archivingIDs.insert(fresh.id)
+            showFeedback("正在核对 \(link.no) 的正式验收状态…")
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = Result { try DemandCompletionGate.verifyAcceptance(link) }
+                DispatchQueue.main.async {
+                    self.archivingIDs.remove(fresh.id)
+                    do {
+                        try result.get()
+                        guard DItemStore.blockText(id: fresh.id) == original else {
+                            self.flash("核验期间需求已变化，请重新确认后完成"); return
+                        }
+                        self.completeValidatedItem(fresh, original: original)
+                    } catch { self.flash(error.localizedDescription) }
+                }
+            }
+        } else {
+            completeValidatedItem(fresh, original: original)
+        }
+    }
+
+    private func completeValidatedItem(_ item: DItem, original: [String]) {
         guard archiveJournal.readable else { flash("归档恢复记录无法读取，已停止操作；请先核对本地记录"); return }
         var existing = archiveJournal.entries[item.id].flatMap { $0.state == .removed ? nil : $0 }
         if let entry = existing, entry.original != original {
@@ -611,12 +756,12 @@ extension DBoardViewModel {
             return
         }
         let a = NSAlert()
-        a.messageText = "完成并归档 \(item.id)「\(item.displayTitle)」？"
+        a.messageText = "完成 \(item.id)「\(item.displayTitle)」？"
         if existing?.state == .submitted {
             a.informativeText = "上次远端结果未确认。请先核对钉钉归档，避免重复追加；本地记录尚未移除。"
             a.addButton(withTitle: "已写入，仅完成本地移除")
             a.addButton(withTitle: "取消")
-            a.addButton(withTitle: "确认未写入，重新归档")
+            a.addButton(withTitle: "确认未写入，重新完成")
             NSApp.activate(ignoringOtherApps: true)
             let response = a.runModal()
             if response == .alertFirstButtonReturn { existing?.state = .uploaded }
@@ -624,11 +769,22 @@ extension DBoardViewModel {
         } else {
             a.informativeText = existing?.state == .uploaded
                 ? "归档已确认写入，本次只重试本地移除，不会再次追加。"
-                : "追加到钉钉「已完成」文档，确认成功后才从 D板 移除。"
-            a.addButton(withTitle: existing?.state == .uploaded ? "完成本地移除" : "归档")
+                : (item.reqFlow == nil ? "请确认联调与验收已结束。\n" : "已核实关联正式需求验收完成。\n") + "完成后可在「已完成」中查看完整记录，也可恢复继续处理或开启新版本。"
+            a.addButton(withTitle: existing?.state == .uploaded ? "完成本地移除" : "完成")
             a.addButton(withTitle: "取消")
             NSApp.activate(ignoringOtherApps: true)
             guard a.runModal() == .alertFirstButtonReturn else { return }
+        }
+        if DemandCompletionGate.needsEmptyChecklistConfirmation(item) {
+            let confirmation = NSAlert()
+            confirmation.messageText = "没有上线前事项，仍然完成 \(item.id)？"
+            confirmation.informativeText = "请确认本需求确实无需发布服务、执行 SQL 或其他上线动作，且联调与验收已经结束。"
+            confirmation.addButton(withTitle: "确认无需上线事项并完成")
+            confirmation.addButton(withTitle: "取消")
+            guard confirmation.runModal() == .alertFirstButtonReturn else { return }
+        }
+        guard DItemStore.blockText(id: item.id) == original else {
+            flash("确认期间需求已变化，请刷新后重新完成"); return
         }
         if let entry = existing, entry.state == .uploaded { finishArchive(entry); return }
         guard DItemStore.archiveNodeID != nil else { flash("请先配置 DBOARD_ARCHIVE_NODE_ID，未执行归档"); return }
@@ -641,7 +797,7 @@ extension DBoardViewModel {
         let entry = ArchiveJournal.Entry(id: item.id, original: original, archived: block, state: .submitted, createdAt: Date())
         guard archiveJournal.save(entry) else { flash("无法保存归档恢复快照，未执行远端操作"); return }
         archivingIDs.insert(item.id)
-        showFeedback("正在归档 \(item.id)，请勿重复操作")
+        showFeedback("正在完成 \(item.id)，请勿重复操作")
         DispatchQueue.global(qos: .userInitiated).async {
             let error = DItemStore.pushToArchive(entry.archived)
             DispatchQueue.main.async {
@@ -661,7 +817,11 @@ extension DBoardViewModel {
         }
         entry.state = .removed
         _ = archiveJournal.save(entry)
-        markSelfWrite(); reload(); scheduleSync(); showFeedback("已完成并归档")
+        demandArchives.reloadLocal()
+        markSelfWrite(); reload(); scheduleSync()
+        if let record = demandArchives.records.first(where: { $0.item.id == entry.id }) { focusArchive(record) }
+        else { showDemands(.completed) }
+        showFeedback("已完成，完整记录可在「已完成」中查看")
     }
 }
 
@@ -676,116 +836,55 @@ struct DItemEditForm: View {
     let onCancel: () -> Void
     @FocusState private var nameFocused: Bool
     @State private var choosingReqFlow = false
+    @State private var detailsExpanded = false
     @State private var chatsExpanded = false
+    @State private var spellExpanded = false
     var onDraftChange: ((DItemDraft) -> Void)? = nil
     var showsActions = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             if isNew && showsActions {
                 HStack {
-                    Text("新建 \(draft.id)").font(.system(size: 13, weight: .semibold))
+                    Text("新建 \(draft.id)").font(.system(size: 17, weight: .semibold))
                     Spacer()
-                    Text("草稿自动保存在本机").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("自动保存草稿").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
             }
-            VStack(alignment: .leading, spacing: 8) {
-                if let link = draft.reqFlow {
-                    ReqFlowLinkedRequirementView(link: link, flow: vm.reqFlow) {
-                        BizMapBoardWindowController.shared.showRequirement(link: link)
+            kindSelector
+
+            primaryFields
+            priorityFields
+            VStack(alignment: .leading, spacing: 0) {
+                DisclosureGroup(isExpanded: $detailsExpanded) {
+                    engineeringFields.padding(.top, 12)
+                } label: {
+                    sectionLabel("工程与安排", symbol: "slider.horizontal.3",
+                                 detail: draft.project.trimmed.isEmpty ? "可选" : "\(DemandRepositoryEntries.parse(draft.project).count) 个工程")
+                }.demandKeyboardID("demand-engineering-section").padding(14)
+                if !draft.isIncident || draft.reqFlow != nil {
+                    Divider().padding(.horizontal, 14)
+                    requirementLink.padding(14)
+                }
+                Divider().padding(.horizontal, 14)
+                DisclosureGroup(isExpanded: $chatsExpanded) {
+                    DemandChatLinksFields(links: Binding(get: { draft.chatLinks ?? DemandChatLinks() },
+                        set: { draft.chatLinks = $0.optional })).padding(.top, 12)
+                    if let error = vm.items.first(where: { $0.id == draft.id })?.chatReadError {
+                        Text(error).font(.system(size: 11)).foregroundStyle(.orange)
                     }
-                    HStack(spacing: 12) {
-                        Button("更换关联") { choosingReqFlow = true }
-                        Button("解除关联") { draft.reqFlow = nil }
-                    }.font(.system(size: 11)).buttonStyle(.plain).foregroundStyle(.secondary)
-                } else {
-                    HStack(spacing: 8) {
-                        Label("需求流", systemImage: "link").font(.system(size: 12)).foregroundStyle(.secondary)
-                        Button("选择待办需求") { choosingReqFlow = true }
-                            .font(.system(size: 12)).controlSize(.small)
-                    }
-                }
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
-            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
-                GridRow {
-                    fieldLabel("名称")
-                    box(TextField("需求名", text: $draft.name).focused($nameFocused))
-                }
-                GridRow(alignment: .top) {
-                    fieldLabel("仓库 / 项目").padding(.top, 4)
-                    VStack(alignment: .leading, spacing: 4) {
-                        PromptContextInput(text: $draft.project, title: "仓库 / 项目")
-                            .overlay(alignment: .topLeading) {
-                                if draft.project.isEmpty {
-                                    Text("每行一个仓库名或路径（可选）")
-                                        .font(.system(size: 13)).foregroundStyle(.tertiary)
-                                        .padding(.horizontal, 8).padding(.vertical, 4)
-                                        .allowsHitTesting(false)
-                                }
-                            }
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
-                        Text("支持多个仓库，每行一个；可以填写名称或完整路径。")
-                            .font(.system(size: 11)).foregroundStyle(.secondary)
-                    }
-                }
-                GridRow {
-                    fieldLabel("优先级")
-                    Picker("优先级", selection: $draft.priority) {
-                        ForEach(ItemPriority.allCases, id: \.self) { Text($0.title).tag($0) }
-                    }.labelsHidden()
-                }
-                GridRow {
-                    fieldLabel("个人状态")
-                    Picker("个人状态", selection: Binding(
-                        get: { draft.scheduledStatus }, set: { draft.status = $0 })) {
-                        ForEach([ItemStatus.pending, .inProgress, .suspended, .completed], id: \.rawValue) {
-                            Text($0.label).tag($0)
-                        }
-                    }.labelsHidden()
-                }
-                GridRow {
-                    fieldLabel("周期")
-                    HStack(spacing: 8) {
-                        box(TextField("开始 2026-10-29", text: $draft.start).accessibilityLabel("开始日期"))
-                        Text("→").foregroundStyle(.secondary)
-                        box(TextField("截止 2026-11-19", text: $draft.deadline).accessibilityLabel("截止日期"))
-                    }
-                }
-                GridRow {
-                    Text("").gridCellUnsizedAxes(.horizontal)
-                    Text("开始日期到了自动进行中；延期请调整周期，完成和挂起由你标记。")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                GridRow {
-                    fieldLabel("分支")
-                    box(TextField("可选", text: $draft.branch))
-                }
-                GridRow(alignment: .top) {
-                    fieldLabel("描述")
-                    box(TextField("做什么、为什么", text: $draft.desc, axis: .vertical).lineLimit(1...5))
-                }
-            }
-            DisclosureGroup(isExpanded: $chatsExpanded) {
-                DemandChatLinksFields(links: Binding(get: { draft.chatLinks ?? DemandChatLinks() },
-                    set: { draft.chatLinks = $0.optional }))
-                if let error = vm.items.first(where: { $0.id == draft.id })?.chatReadError {
-                    Text(error).font(.system(size: 11)).foregroundStyle(.orange)
-                }
-            } label: {
-                Label("关联群聊（可选）", systemImage: "bubble.left.and.bubble.right")
-            }
-            DisclosureGroup {
-                DemandPromptFields(sections: $draft.promptSections, compact: true)
-                Text("保存后可复制短指令，让 AI 读取最新咒言和进度。")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-            } label: {
-                Label("咒言（可选）", systemImage: "wand.and.stars")
-            }
+                } label: {
+                    sectionLabel("关联群聊", symbol: "bubble.left.and.bubble.right",
+                                 detail: draft.chatLinks?.isEmpty == false ? "已关联" : "可选")
+                }.demandKeyboardID("demand-chats-section").padding(14)
+                Divider().padding(.horizontal, 14)
+                DisclosureGroup(isExpanded: $spellExpanded) {
+                    DemandPromptFields(sections: $draft.promptSections, compact: true).padding(.top, 12)
+                } label: {
+                    sectionLabel("咒言", symbol: "wand.and.stars", detail: draft.prompt.isEmpty ? "可选" : "已填写")
+                }.demandKeyboardID("demand-spell-section").padding(14)
+            }.workspaceSurface()
+
             if let error = draft.validationError, !draft.name.trimmed.isEmpty {
                 Label(error, systemImage: "exclamationmark.circle")
                     .font(.system(size: 11)).foregroundStyle(.orange)
@@ -794,16 +893,15 @@ struct DItemEditForm: View {
             if showsActions {
                 HStack(spacing: 8) {
                     Spacer()
-                    Button(isNew ? "收起" : "取消", action: cancelEditing).keyboardShortcut(.cancelAction)
+                    Button(isNew ? "关闭" : "取消", action: cancelEditing).keyboardShortcut(.cancelAction)
+                        .demandButtonStyle(WorkspaceActionStyle())
                     Button(isNew ? "创建" : "保存") { onSave(draft) }
-                        .keyboardShortcut(.defaultAction)
-                        .disabled(draft.validationError != nil)
+                        .demandButtonStyle(WorkspaceActionStyle(prominent: true))
+                        .keyboardShortcut(.defaultAction).disabled(draft.validationError != nil)
                 }
-                .controlSize(.small)
             }
         }
-        .font(.system(size: 13))
-        .controlSize(.small)
+        .font(.system(size: 13)).controlSize(.regular)
         .sheet(isPresented: $choosingReqFlow) {
             ReqFlowRequirementPicker(flow: vm.reqFlow, localItems: vm.items, editingID: draft.id,
                 select: { requirement in
@@ -814,7 +912,9 @@ struct DItemEditForm: View {
                 }, openExisting: { id in
                     choosingReqFlow = false
                     onCancel()
-                    vm.focusItem(id)
+                    if vm.newDemandWindowPresenter != nil, let item = vm.items.first(where: { $0.id == id }) {
+                        vm.openDemandEditor(.inspect, item: item)
+                    } else { vm.focusItem(id) }
                 }, cancel: { choosingReqFlow = false })
         }
         .onExitCommand {
@@ -823,15 +923,169 @@ struct DItemEditForm: View {
         }
         .onAppear {
             vm.editingFormCount += 1
+            detailsExpanded = !isNew || !draft.project.trimmed.isEmpty || !draft.branch.trimmed.isEmpty
+                || !draft.deadline.trimmed.isEmpty
             chatsExpanded = showChats || draft.chatLinks?.isEmpty == false
-            if isNew { DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { nameFocused = true } }
+            spellExpanded = !draft.prompt.isEmpty
+            if isNew && !vm.newItemFormInWindow { DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { nameFocused = true } }
         }
-        .onChange(of: draft) { _, value in
-            onDraftChange?(value)
-        }
+        .onChange(of: draft) { _, value in onDraftChange?(value) }
         .onDisappear {
             onDraftChange?(draft)
             vm.editingFormCount = max(0, vm.editingFormCount - 1)
+        }
+    }
+
+    private var kindSelector: some View {
+        HStack(spacing: 3) {
+            ForEach(DemandKind.allCases, id: \.self) { kind in
+                Button {
+                    let changed = draft.effectiveKind != kind
+                    draft.kind = kind
+                    if isNew && changed {
+                        draft.id = DItemStore.nextID(kind: kind)
+                        if kind == .incident { draft.priority = .p0; draft.status = .inProgress }
+                    }
+                } label: {
+                    Text(kind.rawValue).font(.system(size: 12, weight: draft.effectiveKind == kind ? .semibold : .medium))
+                        .foregroundStyle(draft.effectiveKind == kind ? Color.primary : .secondary)
+                        .frame(width: 112, height: 30)
+                        .background {
+                            if draft.effectiveKind == kind {
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .fill(Color(nsColor: .controlBackgroundColor))
+                                    .shadow(color: .black.opacity(0.06), radius: 2, y: 1)
+                            }
+                        }.contentShape(Rectangle())
+                }.demandButtonStyle(.plain)
+                    .demandKeyboardID(kind == .incident ? "demand-kind-incident" : "demand-kind-development")
+                    .demandKeyboardSelected(draft.effectiveKind == kind)
+                    .accessibilityAddTraits(draft.effectiveKind == kind ? .isSelected : [])
+            }
+        }
+        .padding(3).background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityLabel("任务类型").accessibilityIdentifier("demand-kind-picker")
+    }
+
+    private var primaryFields: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 7) {
+                fieldLabel(draft.isIncident ? "问题名称" : "需求名称")
+                box(TextField(draft.isIncident ? "这次出现了什么问题" : "用一句话说明要做什么", text: $draft.name)
+                    .focused($nameFocused).accessibilityLabel("名称"))
+            }
+            VStack(alignment: .leading, spacing: 7) {
+                fieldLabel(draft.isIncident ? "问题现象" : "描述")
+                if draft.isIncident {
+                    DemandSpellField(text: $draft.desc, title: "问题现象",
+                        placeholder: "粘贴报错、日志或截图，补上已知的接口、单号或发生时间。",
+                        height: 140, showPasteButton: true)
+                } else {
+                    box(TextField("简单说明背景和预期结果，也可以稍后补充", text: $draft.desc, axis: .vertical)
+                        .lineLimit(2...7).accessibilityLabel("描述"))
+                }
+            }
+        }.padding(14).workspaceSurface()
+    }
+
+    private var priorityFields: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            fieldLabel("放在哪个象限")
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                ForEach(DemandMatrix.rows.flatMap { $0 }, id: \.self) { priority in
+                    Button { draft.priority = priority } label: {
+                        HStack(spacing: 7) {
+                            Circle().fill(priority.color).frame(width: 6, height: 6)
+                            Text(priority.title).font(.system(size: 12, weight: .medium))
+                            Spacer(minLength: 0)
+                            Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold))
+                                .opacity(draft.priority == priority ? 1 : 0)
+                        }
+                        .padding(.horizontal, 10).frame(height: 34)
+                        .foregroundStyle(draft.priority == priority ? priority.color : .secondary)
+                        .background(priority.color.opacity(draft.priority == priority ? 0.075 : 0.025),
+                                    in: RoundedRectangle(cornerRadius: 9))
+                        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(
+                            draft.priority == priority ? priority.color.opacity(0.4) : Color.primary.opacity(0.055),
+                            lineWidth: draft.priority == priority ? 1 : 0.5))
+                    }
+                    .demandButtonStyle(.plain).accessibilityLabel(priority.title)
+                    .demandKeyboardID("demand-priority-" + priority.rawValue)
+                    .accessibilityAddTraits(draft.priority == priority ? .isSelected : [])
+                }
+            }
+        }.padding(14).workspaceSurface()
+    }
+
+    private var engineeringFields: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 7) {
+                fieldLabel("仓库 / 项目")
+                PromptContextInput(text: $draft.project, title: "仓库 / 项目")
+                    .overlay(alignment: .topLeading) {
+                        if draft.project.isEmpty {
+                            Text("每行一个仓库名或路径，支持多个")
+                                .font(.system(size: 12)).foregroundStyle(.tertiary)
+                                .padding(.horizontal, 8).padding(.vertical, 6).allowsHitTesting(false)
+                        }
+                    }
+                    .frame(minHeight: 36).clipShape(RoundedRectangle(cornerRadius: 9))
+                    .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+            }
+            VStack(alignment: .leading, spacing: 7) {
+                fieldLabel("开发分支")
+                box(TextField("可选", text: $draft.branch).accessibilityLabel("开发分支"))
+            }
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 7) {
+                    fieldLabel("开始日期")
+                    box(TextField("YYYY-MM-DD", text: $draft.start).accessibilityLabel("开始日期"))
+                }
+                VStack(alignment: .leading, spacing: 7) {
+                    fieldLabel("截止日期")
+                    box(TextField("可选 · YYYY-MM-DD", text: $draft.deadline).accessibilityLabel("截止日期"))
+                }
+            }
+            HStack {
+                fieldLabel("个人状态")
+                Spacer()
+                Picker("个人状态", selection: Binding(
+                    get: { draft.scheduledStatus }, set: { draft.status = $0 })) {
+                    ForEach([ItemStatus.pending, .inProgress, .suspended, .completed], id: \.rawValue) {
+                        Text($0.label).tag($0)
+                    }
+                }.labelsHidden().frame(width: 140)
+                    .demandKeyboardMenu().demandKeyboardID("demand-status-picker")
+            }
+            Text("开始日期到达后自动进入进行中。").font(.system(size: 11)).foregroundStyle(.secondary)
+        }
+    }
+
+    private var requirementLink: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let link = draft.reqFlow {
+                ReqFlowLinkedRequirementView(link: link, flow: vm.reqFlow) {
+                    BizMapBoardWindowController.shared.showRequirement(link: link)
+                }
+                HStack(spacing: 12) {
+                    Button("更换关联") { choosingReqFlow = true }
+                    Button("解除关联") { draft.reqFlow = nil }
+                }.font(.system(size: 11)).demandButtonStyle(.plain).foregroundStyle(.secondary)
+            } else {
+                HStack(spacing: 8) {
+                    sectionLabel("需求流", symbol: "link", detail: "可选")
+                    Spacer()
+                    Button("关联需求") { choosingReqFlow = true }.demandButtonStyle(WorkspaceActionStyle())
+                }
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func sectionLabel(_ title: String, symbol: String, detail: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol).font(.system(size: 12)).foregroundStyle(.secondary).frame(width: 16)
+            Text(title).font(.system(size: 13, weight: .medium)).foregroundStyle(.primary)
+            Text(detail).font(.system(size: 11)).foregroundStyle(.secondary)
         }
     }
 
@@ -841,13 +1095,14 @@ struct DItemEditForm: View {
     }
 
     private func fieldLabel(_ value: String) -> some View {
-        Text(value).font(.system(size: 12)).foregroundStyle(.secondary)
+        Text(value).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
     }
 
     private func box<V: View>(_ view: V) -> some View {
-        view.textFieldStyle(.plain)
-            .padding(.horizontal, 8).padding(.vertical, 5)
-            .background(RoundedRectangle(cornerRadius: 6).fill(theme.current.textPrimary.opacity(0.06)))
+        view.textFieldStyle(.plain).font(.system(size: 13))
+            .padding(.horizontal, 10).padding(.vertical, 10)
+            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 9))
+            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5))
     }
 }
 
@@ -855,32 +1110,29 @@ struct DItemEditForm: View {
 struct NewItemRow: View {
     @EnvironmentObject var vm: DBoardViewModel
     @EnvironmentObject var theme: ThemeManager
+    var embedded = false
     private var hasDraft: Bool { vm.newItemDraft?.hasUserInput == true }
 
     var body: some View {
         HStack(spacing: 8) {
             Button { vm.beginNewItemDraft() } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: hasDraft ? "doc.text" : "plus.circle")
-                    Text(hasDraft ? "继续需求草稿" : "新增需求").font(.system(size: 13, weight: .medium))
-                    if hasDraft, let name = vm.newItemDraft?.name, !name.trimmed.isEmpty {
-                        Text(name).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
-                .contentShape(Rectangle())
+                Label(hasDraft ? "继续草稿" : "新增需求 / 线上排查",
+                      systemImage: hasDraft ? "doc.text" : "plus")
+                    .lineLimit(1).fixedSize()
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(hasDraft ? "继续需求草稿" : "新增需求")
-            .accessibilityIdentifier("demand-new-editor")
+            .demandButtonStyle(WorkspaceActionStyle(prominent: true))
+            .accessibilityLabel(hasDraft ? "继续需求草稿" : "新增需求 / 线上排查")
+            .accessibilityIdentifier("demand-new-editor").demandKeyboardID("demand-new-editor")
             if hasDraft {
-                Button("清空草稿", action: confirmClearDraft).font(.system(size: 11)).buttonStyle(.borderless)
+                if !embedded, let name = vm.newItemDraft?.name, !name.trimmed.isEmpty {
+                    Text(name).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Button(action: confirmClearDraft) { Image(systemName: "xmark").font(.system(size: 10)) }
+                    .demandButtonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("清空草稿")
             }
+            if !embedded { Spacer(minLength: 0) }
         }
-        .padding(.horizontal, 12).padding(.vertical, 3)
-        .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
-        .padding(.horizontal, 20).padding(.vertical, 8)
+        .padding(.horizontal, embedded ? 0 : 20).padding(.vertical, embedded ? 0 : 8)
     }
 
     private func confirmClearDraft() {

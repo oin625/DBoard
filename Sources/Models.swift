@@ -104,8 +104,23 @@ struct DItem {
     var execution: DemandExecution? = nil
     var executionScope: String = ""
     var executionReadError: String? = nil
+    var executionRepositories: [DemandVersion.Repository] = []
+    var environmentRepositories: [DemandVersion.Repository] = []
+    var technicalPlan: DemandTechnicalPlan? = nil
+    var technicalPlanReadError: String? = nil
+    var executionCodeReview: DemandCodeReview? = nil
     var debugPageNotNeeded = false
     var debugPageReadError: String? = nil
+    var reminder: String = ""    // 用户自定义的单行进展提醒
+    var releaseChecklist = DemandReleaseChecklist()
+    var releaseChecklistReadError: String? = nil
+    var handoff: DemandHandoff? = nil
+    var handoffReadError: String? = nil
+    var handoffNotes = ""
+    var kind: DemandKind = .development
+    var incidentClosure: IncidentClosure?
+    var incidentExperienceReview: IncidentExperienceReview?
+    var incidentReadError: String?
 
     /// 用于卡片主显示的标题：优先用需求名，其次用描述
     var displayTitle: String {
@@ -360,7 +375,7 @@ enum CacheParser {
                 inProgressBlock = false
                 continue
             }
-            if currentDItem != nil && (line.hasPrefix(DemandExecution.prefix) || line.hasPrefix(DemandDebugPagePolicy.prefix)) {
+            if currentDItem != nil && (line.hasPrefix(DemandExecution.prefix) || line.hasPrefix(DemandDebugPagePolicy.prefix) || line.hasPrefix(DemandReleaseChecklist.prefix) || line.hasPrefix(DemandTechnicalPlan.prefix)) {
                 inDescriptionBlock = false
                 inProgressBlock = false
                 continue
@@ -435,9 +450,9 @@ enum CacheParser {
             }
 
             // D 条目标题行
-            if currentPriority != nil, trimmed.hasPrefix("### D") {
+            if currentPriority != nil, trimmed.hasPrefix("### D") || trimmed.hasPrefix("### P") {
                 flushItem()
-                guard let idRange = trimmed.range(of: #"^### D[0-9]{3,}(?=【|\s|$)"#, options: .regularExpression) else { continue }
+                guard let idRange = trimmed.range(of: #"^### [DP][0-9]{3,}(?=【|\s|$)"#, options: .regularExpression) else { continue }
                 let id = String(trimmed[idRange].dropFirst(4))
 
                 var project = ""
@@ -550,8 +565,25 @@ enum CacheParser {
         for index in items.indices {
             guard let range = DItemStore.blockRange(sourceLines, id: items[index].id) else { continue }
             let block = Array(sourceLines[range])
+            do {
+                items[index].kind = try DemandIncident.kind(block)
+                items[index].incidentClosure = try IncidentClosure.read(block)
+                items[index].incidentExperienceReview = try IncidentExperienceReview.read(block)
+            } catch { items[index].incidentReadError = error.localizedDescription }
+            items[index].reminder = DemandReminder.read(block)
+            items[index].handoffNotes = DemandHandoff.notes(block)
+            do { items[index].handoff = try DemandHandoff.read(block) }
+            catch { items[index].handoffReadError = error.localizedDescription }
+            do { items[index].releaseChecklist = try DemandReleaseChecklist.read(block) }
+            catch { items[index].releaseChecklistReadError = error.localizedDescription }
+            do { items[index].technicalPlan = try DemandTechnicalPlan.read(block) }
+            catch { items[index].technicalPlanReadError = error.localizedDescription }
             items[index].executionScope = DemandExecution.scopeHash(block)
-            do { items[index].execution = try DemandExecution.read(block) }
+            do {
+                items[index].execution = try DemandExecution.read(block)
+                items[index].executionRepositories = try DemandVersion.repositoryHints(block, item: items[index])
+                items[index].environmentRepositories = try DemandVersion.environmentHints(block)
+            }
             catch { items[index].executionReadError = error.localizedDescription }
             do { items[index].debugPageNotNeeded = try DemandDebugPagePolicy.read(block) }
             catch { items[index].debugPageReadError = error.localizedDescription }
@@ -577,28 +609,22 @@ enum CacheParser {
 
 enum FileMutator {
     /// 切换需求状态（替换标题行里的 #状态 标记）
-    static func setStatus(id: String, newStatusRaw: String) -> Bool {
-        CacheFile.withLock { setStatusLocked(id: id, newStatusRaw: newStatusRaw) } ?? false
-    }
-
-    private static func setStatusLocked(id: String, newStatusRaw: String) -> Bool {
-        guard var content = CacheFile.read() else { return false }
-        var lines = content.components(separatedBy: "\n")
-        let pattern = "^### " + id + "(?![0-9])"
-        for i in 0..<lines.count {
-            let t = lines[i]
-            if t.range(of: pattern, options: .regularExpression) != nil {
-                for s in [ItemStatus.pending, .inProgress, .completed, .suspended] {
-                    if lines[i].contains(s.rawValue) {
-                        lines[i] = lines[i].replacingOccurrences(of: s.rawValue, with: newStatusRaw)
-                        break
-                    }
-                }
-                content = lines.joined(separator: "\n")
-                return CacheFile.write(content)
-            }
-        }
-        return false
+    static func setStatus(id: String, newStatusRaw: String, at url: URL? = nil) -> Bool {
+        let states = [ItemStatus.pending, .inProgress, .completed, .suspended]
+        guard id.range(of: #"^[DP][0-9]{3,}$"#, options: .regularExpression) != nil,
+              states.contains(where: { $0.rawValue == newStatusRaw }) else { return false }
+        let file = url ?? URL(fileURLWithPath: CacheFile.path)
+        return CacheFile.withLock(at: file) {
+            guard let content = try? String(contentsOf: file, encoding: .utf8) else { return false }
+            var lines = content.components(separatedBy: "\n")
+            let indices = lines.indices.filter { lines[$0].range(of: "^### " + id + "(?![0-9])", options: .regularExpression) != nil }
+            guard indices.count == 1, let index = indices.first,
+                  let state = states.first(where: { lines[index].contains($0.rawValue) }),
+                  let marker = lines[index].range(of: state.rawValue, options: .backwards) else { return false }
+            lines[index].replaceSubrange(marker, with: newStatusRaw)
+            do { try lines.joined(separator: "\n").write(to: file, atomically: true, encoding: .utf8); return true }
+            catch { return false }
+        } ?? false
     }
 
 }

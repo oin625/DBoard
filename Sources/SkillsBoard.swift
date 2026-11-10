@@ -1277,12 +1277,10 @@ struct SkillsBoardView: View {
                 }
                 if item.codexDisabled {
                     miniBadge("禁", "poweroff", Color.secondary)
-                        .help("已在 Codex 配置中禁用：文件仍在，但 Codex 不加载")
                 }
                 // 只给"未验证"打标 —— 已验证是期望状态, 满屏打勾等于没有信息量
                 if item.verify == "未验证" && item.origin == "启用" {
                     miniBadge(nil, "questionmark.circle", Color.secondary)
-                        .help("已安装但尚未在真实任务中用过")
                 }
             }
 
@@ -1576,7 +1574,7 @@ struct SkillsBoardView: View {
             if vm.loading { ProgressView().controlSize(.small) }
             else {
                 Button { vm.scan(); envVM.scan() } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.plain).help("重新扫描")
+                    .buttonStyle(.plain)
             }
             if popoverMode { TearOffButton(key: "SkillsBoard") }
         }

@@ -206,14 +206,12 @@ struct EngineStrip: View {
     }
 
     private var summaryText: String {
-        if vm.syncKind != .idle { return vm.syncText }        // 同步动作反馈优先
         if let w = health.worst, let p = w.problem { return p }
         if let w = health.worst, w.state == .unknown { return "引擎状态未知" }
-        return vm.syncText.isEmpty ? "引擎正常" : vm.syncText  // 全绿时保留"最近同步"信息
+        return "引擎正常"
     }
 
     private var summaryColor: Color {
-        if let c = syncActionColor { return c }
         if let w = health.worst { return stateColor(w.state) }
         return theme.current.textMuted
     }
@@ -226,12 +224,11 @@ struct EngineStrip: View {
                         .fill(e.id == "sync" ? (syncActionColor ?? stateColor(e.state)) : stateColor(e.state))
                         .frame(width: 5, height: 5)
                 }
-                Text(summaryText).font(.system(size: 11)).foregroundStyle(summaryColor)
+                Text(summaryText).font(.system(size: 11)).foregroundStyle(summaryColor).lineLimit(1)
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("引擎心跳: 值守 / 资讯 / 同步")
         .popover(isPresented: $showDetail, arrowEdge: .top) {
             EngineDetailPanel(health: health, stateColor: stateColor)
         }
@@ -255,7 +252,6 @@ struct EngineDetailPanel: View {
                     Image(systemName: "arrow.clockwise").font(.system(size: 10))
                 }
                 .buttonStyle(.plain)
-                .help("立即重测")
             }
             .padding(.horizontal, 12).padding(.vertical, 9)
             Divider()

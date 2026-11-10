@@ -11,6 +11,25 @@ final class NewDemandDraftTests: XCTestCase {
         try body(directory)
     }
 
+    @MainActor
+    func testSwitchingToIncidentNamespaceKeepsDraftAndRejectsLateCallbacks() throws {
+        let vm = DBoardViewModel(loadCache: false)
+        var ordinary = DItemDraft(newID: "D020", priority: .p1)
+        ordinary.name = "未保存问题"
+        vm.newItemDraft = ordinary
+        var incident = ordinary
+        incident.kind = .incident
+        incident.id = "P001"
+        vm.updateNewItemDraft(incident, previousID: ordinary.id)
+        XCTAssertEqual(vm.newItemDraft?.id, "P001")
+        XCTAssertEqual(vm.newItemDraft?.name, ordinary.name)
+        vm.updateNewItemDraft(ordinary)
+        XCTAssertEqual(vm.newItemDraft?.id, "P001")
+        vm.finishNewItemDraft()
+        vm.updateNewItemDraft(incident, previousID: ordinary.id)
+        XCTAssertNil(vm.newItemDraft)
+    }
+
     func testIncompleteDraftRoundTripsAllInputsAcrossRelaunch() throws {
         try withDirectory { directory in
             let file = directory.appendingPathComponent("draft.json")

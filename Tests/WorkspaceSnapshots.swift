@@ -27,7 +27,7 @@ final class WorkspaceSnapshots: XCTestCase {
                     materials: "需求说明：https://example.com/requirements/prompt",
                     intent: "将咒言固定为代码入口、需求资料、改造意图三个输入区。\n复制时按顺序组装，空白部分省略。\n保留旧咒言，保存失败保留输入。").stored),
             DItem(id: "D002", project: "日志", title: "保留全宽日志与快速钻取",
-                  headerTitle: "日志快搜体验优化", status: .pending, priority: .p1,
+                  headerTitle: "Audi 日志体验优化", status: .pending, priority: .p1,
                   deadline: nil, branch: nil, startDate: nil, milestones: [])
         ]
         vm.items[0].changes = [
@@ -66,7 +66,6 @@ final class WorkspaceSnapshots: XCTestCase {
             SkillItem(dir: "review", path: "/tmp/review", name: "代码评审", desc: "检查改动行为与边界场景",
                       health: .warn, problems: ["缺少说明"], category: "开发", sources: ["Codex"])
         ]
-        let log = LogSearchViewModel()
         let originalPage = WorkspacePreferences.shared.settingsPage
         defer { WorkspacePreferences.shared.settingsPage = originalPage }
 
@@ -163,8 +162,6 @@ final class WorkspaceSnapshots: XCTestCase {
             try render(SkillsBoardView(refreshOnAppear: false).environmentObject(skills)
                 .environmentObject(ThemeManager.shared).environmentObject(FontManager.shared),
                 width: 760, height: 540, name: "skills-" + name, appearance: appearance, directory: directory)
-            try render(LogSearchRootView(vm: log).environmentObject(ThemeManager.shared),
-                       width: 780, height: 600, name: "logs-" + name, appearance: appearance, directory: directory)
             for page in [SettingsPage.general, .favorites, .shortcuts, .clipboard, .usage] {
                 WorkspacePreferences.shared.settingsPage = page
                 try render(DBoardSettingsView(), width: 580, height: 500,

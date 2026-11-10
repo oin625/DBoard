@@ -5,10 +5,24 @@ final class DemandDeliveryTests: XCTestCase {
     private let documentURL = "https://alidocs.dingtalk.com/i/nodes/test-document"
 
     private func item(project: String = "ultra", branch: String? = "feature/cdd-lock", milestones: [Milestone]? = nil) -> DItem {
-        DItem(id: "D900", project: project, title: "锁券链路调整", headerTitle: "锁券改造", status: .inProgress,
+        var value = DItem(id: "D900", project: project, title: "锁券链路调整", headerTitle: "锁券改造", status: .inProgress,
             priority: .p1, deadline: nil, branch: branch, startDate: nil,
             milestones: milestones ?? [Milestone(date: "11.3", content: "锁券改造已完成，待联调验收，尚未部署。")],
             reqFlow: ReqFlowLink(id: 42, no: "R42"), prompt: "要做什么：锁券移到开单之后")
+        value.executionScope = String(repeating: "a", count: 64)
+        var mappings: [DemandDeliveryProject] = []
+        if let branch, branch.contains(":") {
+            for entry in branch.components(separatedBy: "；") {
+                let parts = entry.split(separator: ":", maxSplits: 1)
+                if parts.count == 2 { mappings.append(DemandDeliveryProject(name: URL(fileURLWithPath: String(parts[0])).lastPathComponent, branch: String(parts[1]))) }
+            }
+        } else {
+            mappings = [DemandDeliveryProject(name: project.hasPrefix("/") ? "ultra" : project, branch: branch ?? "")]
+        }
+        value.technicalPlan = DemandTechnicalPlan(title: "锁券改造 · 技术方案", markdown: "# 技术方案\n\n锁券移到开单后，聚合查券、锁券与照片查询；旧验券仅查券。",
+            projects: mappings, scopeHash: value.executionScope, codeRevision: String(repeating: "b", count: 64),
+            updatedAt: "2026-11-09T09:00:00Z", updatedBy: "ai")
+        return value
     }
     private func plan(_ item: DItem? = nil) throws -> DemandDeliveryPlan {
         try DemandDeliveryPlan.make(item: item ?? self.item(), repositoryName: { _ in "ultra" })
@@ -23,6 +37,79 @@ final class DemandDeliveryTests: XCTestCase {
         let rows: [[String: Any]] = present ? [["deliverableContent": documentURL,
             "deliverableDevProject": plan.projects.map(\.declaration).joined(separator: ",")]] : []
         return try DevelopmentDeliverables.decode(JSONSerialization.data(withJSONObject: ["success": true, "data": ["3": rows]]))
+    }
+
+    func testMissingPlanAutomaticallyCopiesInstructionWithoutRemoteCalls() throws {
+        try temporary { directory in
+            let cache = directory.appendingPathComponent("cache.md")
+            // No branch yet: preparing the missing plan should not require another click.
+            let content = "## 🟡 重要\n### D900【ultra】最新需求标题 #进行中\n- **项目**：ultra\n- **需求流**：\(ReqFlowLink(id: 42, no: "R42").markdown)\n"
+            try content.write(to: cache, atomically: true, encoding: .utf8)
+            var copied: [String] = [], remoteCalls = 0
+            let services = DemandDeliveryServices(generate: { _ in remoteCalls += 1; return "" },
+                validate: { _ in remoteCalls += 1 }, findDocument: { _ in remoteCalls += 1; return nil },
+                createDocument: { _, _ in remoteCalls += 1; return self.documentURL },
+                verifyDocument: { _, _ in remoteCalls += 1 },
+                listDeliverables: { _ in remoteCalls += 1; return try self.response(self.plan(), present: false) },
+                submit: { _, _ in remoteCalls += 1 })
+            let coordinator = DemandDeliveryCoordinator(
+                workflow: DemandDeliveryWorkflow(store: DemandDeliveryStore(url: directory.appendingPathComponent("receipts.json")), services: services),
+                cacheURL: cache, copyPlanInstruction: { copied.append($0); return true })
+            let prepared = expectation(description: "Missing plan instruction copied")
+            coordinator.prepare(id: "D900") { plan in
+                XCTAssertNil(plan)
+                prepared.fulfill()
+            }
+            wait(for: [prepared], timeout: 5)
+            XCTAssertEqual(copied.count, 1)
+            XCTAssertTrue(copied.first?.contains("D900") == true)
+            XCTAssertTrue(copied.first?.contains("最新需求标题") == true)
+            XCTAssertTrue(copied.first?.contains("--task technical-plan") == true)
+            XCTAssertTrue(copied.first?.contains("--cache") == true)
+            XCTAssertEqual(coordinator.states["D900"]?.message, "技术方案尚未准备，生成指令已复制，发给 AI 即可。")
+            XCTAssertEqual(coordinator.states["D900"]?.running, false)
+            XCTAssertEqual(remoteCalls, 0)
+            XCTAssertEqual(try String(contentsOf: cache, encoding: .utf8), content)
+        }
+    }
+
+    func testFailedClipboardWriteDoesNotClaimInstructionWasCopied() throws {
+        try temporary { directory in
+            let cache = directory.appendingPathComponent("cache.md")
+            try "## 🟡 重要\n### D900【ultra】缺少方案 #进行中\n".write(to: cache, atomically: true, encoding: .utf8)
+            let coordinator = DemandDeliveryCoordinator(cacheURL: cache, copyPlanInstruction: { _ in false })
+            let prepared = expectation(description: "Clipboard failure reported")
+            coordinator.prepare(id: "D900") { plan in
+                XCTAssertNil(plan)
+                prepared.fulfill()
+            }
+            wait(for: [prepared], timeout: 5)
+            XCTAssertTrue(coordinator.states["D900"]?.message.contains("复制指令失败") == true)
+            XCTAssertFalse(coordinator.states["D900"]?.message.contains("已复制") == true)
+            XCTAssertEqual(coordinator.states["D900"]?.running, false)
+        }
+    }
+
+    func testUnreadablePlanDoesNotOverwriteClipboard() throws {
+        try temporary { directory in
+            let cache = directory.appendingPathComponent("cache.md")
+            try ("## 🟡 重要\n### D900【ultra】损坏方案 #进行中\n- **项目**：ultra\n- **分支**：feature/cdd-lock\n- **需求流**：\(ReqFlowLink(id: 42, no: "R42").markdown)\n" +
+                DemandTechnicalPlan.prefix + "bad -->\n").write(to: cache, atomically: true, encoding: .utf8)
+            let latest = try DItemStore.currentItem(id: "D900", at: cache)
+            XCTAssertEqual(latest.reqFlow, ReqFlowLink(id: 42, no: "R42"))
+            XCTAssertNotNil(latest.technicalPlanReadError)
+            var copied = 0
+            let coordinator = DemandDeliveryCoordinator(cacheURL: cache, copyPlanInstruction: { _ in copied += 1; return true })
+            let prepared = expectation(description: "Other error preserved")
+            coordinator.prepare(id: "D900") { plan in
+                XCTAssertNil(plan)
+                prepared.fulfill()
+            }
+            wait(for: [prepared], timeout: 5)
+            XCTAssertEqual(copied, 0)
+            XCTAssertFalse(coordinator.states["D900"]?.message.isEmpty ?? true)
+            XCTAssertEqual(coordinator.states["D900"]?.failed, true)
+        }
     }
 
     func testRequiresExplicitLinkedDemandAndBranches() throws {
@@ -59,166 +146,40 @@ final class DemandDeliveryTests: XCTestCase {
             repositoryName: { _ in "ultra" }))
     }
 
-    func testFingerprintIgnoresItsOwnReceiptButTracksRealDevelopmentChanges() throws {
-        let original = try plan()
-        let records = item().milestones + [Milestone(date: "11.3", content: DemandDeliveryPlan.feedbackSummary,
-            details: "技术说明：" + documentURL)]
-        XCTAssertEqual(try plan(item(milestones: records)).key, original.key)
-        XCTAssertNotEqual(try plan(item(milestones: records + [Milestone(date: "11.3", content: "上游联调通过，待验收。")])).key, original.key)
-        XCTAssertNotEqual(try plan(item(branch: "feature/new")).key, original.key)
-    }
-
-    func testDocumentKeepsActualProgressAndDoesNotInventVerification() throws {
-        let plan = try self.plan()
-        let text = plan.document()
-        XCTAssertTrue(text.contains("待联调验收，尚未部署"))
-        XCTAssertTrue(text.contains("ultra：`feature/cdd-lock`"))
-        XCTAssertTrue(text.contains("提交交付物不代表验收或上线"))
-        XCTAssertFalse(text.contains("## 代码入口"))
-        XCTAssertLessThan(text.count, 1000)
-        let unverified = try self.plan(item(milestones: []))
-        XCTAssertTrue(unverified.document().contains("完成情况待确认"))
-    }
-
-
-    func testDeliveryReadsCompleteDetailsIncludingParametersAndExceptionAtTheEnd() throws {
-        let detail = "新增独立接口，接收验券流水号和券码，完成归属校验后调用三方服务。" +
-            "同一流水的请求需要校验商品、价格、税点和使用条件，任何不一致都不能更新券码。" +
-            "成功仅返回needImageSlots和imageSlots，失败区分LOCK_FAILED、LOCK_RESULT_UNKNOWN、PHOTO_QUERY_FAILED，不自动重试。"
-        let text = try plan(item(milestones: [Milestone(date: "11.3",
-            content: "接口开发完成，待验收。", details: detail)])).document()
-        XCTAssertTrue(text.contains("接收验券流水号和券码"))
-        XCTAssertTrue(text.contains("任何不一致都不能更新券码"))
-        XCTAssertTrue(text.contains("PHOTO_QUERY_FAILED，不自动重试。"))
-        XCTAssertFalse(text.contains("…"))
-        XCTAssertTrue(text.contains("。\n\n- "))
-    }
-
-    func testEveryChangeUsesLatestImplementationInsteadOfObsoleteOriginalPlanOrOldBlockers() throws {
-        var value = item(milestones: [
-            Milestone(date: "11.1", content: "[C001] 锁券接口调整完成。",
-                details: "删除重复查券，成功仅返回照片配置；失败返回LOCK_FAILED和PHOTO_QUERY_FAILED。"),
-            Milestone(date: "11.2", content: "[C002] 归属校验受字段契约阻塞，未改代码。",
-                details: "需确认三方订单号；确认前不能修改券码。"),
-            Milestone(date: "11.3", content: "[C002] 换码校验开发完成，41项测试通过。",
-                details: "新增couponCode；改按商品、条件、价格及税点校验，通过后更新券码与快照。41项测试通过。代码未提交推送或部署，三方固定错误码仍待确认。"),
-            Milestone(date: "11.3", content: "[C001/C002] 改动已提交推送，待联调验收，尚未部署。",
-                details: "提交029f包含C001/C002代码和文档；沿用41项定向测试结果，未重跑测试；下一步上游适配双入参并联调。")
-        ])
-        value.prompt = DemandPromptSections(intent: "拆出专属锁券接口。避免开单前改变券状态。原流程需要重复查券。").stored
-        value.changes = [
-            DemandChange(id: "C001", createdAt: Date(), intent: "删除重复查券并处理照片失败。"),
-            DemandChange(id: "C002", createdAt: Date(), intent: "新增券码，必须按三方订单号校验。")
-        ]
-        let text = try plan(value).document()
-        XCTAssertTrue(text.contains("### C001")); XCTAssertTrue(text.contains("### C002"))
-        XCTAssertTrue(text.contains("成功仅返回照片配置"))
-        XCTAssertTrue(text.contains("新增couponCode"))
-        XCTAssertTrue(text.contains("改按商品、条件、价格及税点校验"))
-        XCTAssertTrue(text.contains("已提交推送"))
-        XCTAssertTrue(text.contains("未重跑测试"))
-        XCTAssertTrue(text.contains("三方固定错误码仍待确认"))
-        XCTAssertFalse(text.contains("字段契约阻塞"))
-        XCTAssertFalse(text.contains("原流程需要重复查券"))
-        XCTAssertFalse(text.contains("必须按三方订单号校验"))
-        XCTAssertFalse(text.contains("代码未提交推送"))
-    }
-
-    func testUnimplementedChangesAndSupplementKeepAllRequirementsWithoutClaimingCompletion() throws {
-        var value = item(milestones: [Milestone(date: "11.3", content: "[C002] 字段契约阻塞，未改代码。",
-            details: "需确认跨券码稳定的归属字段。")])
-        value.prompt = DemandPromptSections(intent: "新增服务。保留原入口。异常必须可恢复。",
-            reason: "只允许已有登录态调用。", rules: "权限不足不得读取或修改订单。").stored
-        value.changes = [DemandChange(id: "C002", createdAt: Date(),
-            intent: "新增券码入参。检查券码归属。失败不得更新验券流水中的券码，且要返回明确原因。")]
-        let text = try plan(value).document()
-        XCTAssertTrue(text.contains("异常必须可恢复。"))
-        XCTAssertTrue(text.contains("权限不足不得读取或修改订单。"))
-        XCTAssertTrue(text.contains("失败不得更新验券流水中的券码，且要返回明确原因。"))
-        XCTAssertTrue(text.contains("尚无可用的实现明细"))
-        XCTAssertTrue(text.contains("未改代码"))
-        XCTAssertFalse(text.contains("开发完成"))
-    }
-
-    func testDocumentPreservesCodeSpansAndRepeatedLinesInsideExamples() throws {
-        let example = "接口接收\u{60}request(a;b)\u{60}。\n```json\n{\n  \"params\": {\n  }\n}\n```"
-        let text = try plan(item(milestones: [Milestone(date: "11.3", content: "接口完成，待验收。",
-            details: example)])).document()
-        XCTAssertTrue(text.contains("\u{60}request(a;b)\u{60}"))
-        XCTAssertTrue(text.contains("```json\n{\n  \"params\": {\n  }\n}\n```"))
-        XCTAssertFalse(text.contains("- ```"))
-    }
-
-    func testTechnicalReferenceKeepsContractAndSkipsExamplesAndHistoricalStatus() throws {
-        let source = """
-        # 接口说明
-        ## 调用方式
-        ```java
-        Result<Response> execute(String voucher, String code);
-        ```
-        两个参数必填，开单后调用。
-        成功仅返回照片配置。
-        ## 失败返回
-        | 类型 | 含义 |
-        | --- | --- |
-        | RESULT_UNKNOWN | 先核实，不重试。 |
-        **失败示例**
-        ```json
-        { "code": -110, "data": null }
-        ```
-        所有失败停止后续流程。
-        ## 测试记录
-        旧版本未发布。
-        """
-        let reference = try XCTUnwrap(DemandDeliveryReference.excerpt(source))
-        let text = try plan().includingReference(reference).document()
-        XCTAssertTrue(text.contains("execute(String voucher, String code)"))
-        XCTAssertTrue(text.contains("两个参数必填，开单后调用"))
-        XCTAssertTrue(text.contains("成功仅返回照片配置"))
-        XCTAssertTrue(text.contains("| RESULT_UNKNOWN |"))
-        XCTAssertTrue(text.contains("所有失败停止后续流程"))
-        XCTAssertFalse(text.contains("```json"))
-        XCTAssertFalse(text.contains("旧版本未发布"))
-        XCTAssertNotEqual(try plan().key, try plan().includingReference(reference).key)
-    }
-
-    func testTechnicalReferenceUsesDeliveryBranchWhileRepositoryIsOnAnotherDemand() throws {
-        try temporary { directory in
-            let root = directory.appendingPathComponent("ultra")
-            let file = root.appendingPathComponent("doc/api/Delivery.md")
-            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            func git(_ arguments: [String]) throws {
-                let result = ProcessRunner.run("/usr/bin/git", arguments: ["-C", root.path] + arguments,
-                    environment: ProcessInfo.processInfo.environment, timeout: 5)
-                guard result.succeeded else { throw DemandDeliveryError.message("Git fixture failed") }
+    func testIntegrationBranchesAreRejectedBeforePreparingDelivery() throws {
+        for branch in ["merge/pre_1013", "integration/pre", "MERGE/pre"] {
+            XCTAssertThrowsError(try plan(item(branch: branch))) { error in
+                XCTAssertTrue(error.localizedDescription.contains("合并分支"))
             }
-            try git(["init", "-b", "feature/delivery"])
-            try "## 调用方式\n交付分支接口的参数必填，成功返回照片配置。\n".write(to: file, atomically: true, encoding: .utf8)
-            try git(["add", "."])
-            try git(["-c", "user.name=DBoard Test", "-c", "user.email=dboard-test@example.invalid",
-                "-c", "commit.gpgsign=false", "commit", "-m", "delivery fixture"])
-            try git(["checkout", "-b", "feature/another-demand"])
-            try "## 调用方式\n另一个需求的接口，不能作为当前交付。\n".write(to: file, atomically: true, encoding: .utf8)
-            let value = item(project: root.path, branch: "feature/delivery", milestones: [
-                Milestone(date: "11.3", content: "开发完成，待验收。", details: "接口说明见doc/api/Delivery.md。")])
-            let reference = DemandDeliveryReference.read(item: value, repositories: [],
-                projects: [DemandDeliveryProject(name: "ultra", branch: "feature/delivery")])
-            XCTAssertTrue(reference.contains("交付分支接口的参数必填"))
-            XCTAssertFalse(reference.contains("另一个需求的接口"))
-            // Document lookup is read-only; it must not switch the user's checkout.
-            XCTAssertTrue(try String(contentsOf: file, encoding: .utf8).contains("另一个需求"))
+            XCTAssertThrowsError(try plan(item(branch: "ultra:" + branch + "；audi:feature/vibe")))
         }
+        XCTAssertEqual(try plan(item(branch: "feature/cdd-lock-code")).projects.first?.branch, "feature/cdd-lock-code")
+        XCTAssertEqual(try plan(item(branch: "hotfix/cdd-serialization")).projects.first?.branch, "hotfix/cdd-serialization")
+        XCTAssertEqual(try plan(item(branch: "custom/cdd")).projects.first?.branch, "custom/cdd")
     }
 
-    func testReferenceDoesNotHideUnimplementedChangeOrTurnAPlanIntoImplementation() throws {
-        var value = item(milestones: [Milestone(date: "11.3", content: "[C003] 计划新增权限校验。",
-            details: "新增管理员校验，拒绝无权限调用。")])
-        value.changes = [DemandChange(id: "C003", createdAt: Date(), intent: "必须拒绝无权限调用，且不泄露订单信息。")]
-        let text = try plan(value).includingReference("#### 调用方式\n已有接口接收流水号。").document()
-        XCTAssertTrue(text.contains("C003 · 追加要求"))
-        XCTAssertTrue(text.contains("必须拒绝无权限调用，且不泄露订单信息。"))
-        XCTAssertTrue(text.contains("计划新增权限校验"))
-        XCTAssertFalse(text.contains("新增管理员校验"))
+    func testPreparedDocumentIsUsedExactlyAndProgressDoesNotRegenerateIt() throws {
+        let original = try plan()
+        var value = item(milestones: item().milestones + [Milestone(date: "11.9", content: "旧CR", details: "旧实现流水与日志不得拼入技术方案")])
+        XCTAssertEqual(try plan(value).key, original.key)
+        XCTAssertEqual(try plan(value).document(), value.technicalPlan?.markdown)
+        value.technicalPlan?.markdown += "\n\n新增兼容说明"
+        XCTAssertNotEqual(try plan(value).key, original.key)
+    }
+
+    func testMissingStaleOrEnvironmentPlanCannotPrepareDelivery() throws {
+        var value = item()
+        value.technicalPlan = nil
+        XCTAssertThrowsError(try plan(value))
+        value = item()
+        value.technicalPlan?.scopeHash = String(repeating: "c", count: 64)
+        XCTAssertThrowsError(try plan(value))
+        value = item()
+        value.technicalPlan?.projects = [DemandDeliveryProject(name: "ultra", branch: "feature/old")]
+        XCTAssertThrowsError(try plan(value))
+        value = item(branch: "feature/D019-pre")
+        value.environmentRepositories = [.init(path: "/work/ultra-pre", branch: "feature/D019-pre", role: "integration")]
+        XCTAssertThrowsError(try plan(value))
     }
 
     func testSuccessAndRepeatedClicksReuseDocumentAndDoNotAppendAgain() throws {
@@ -380,19 +341,53 @@ final class DemandDeliveryTests: XCTestCase {
         }
     }
 
-    func testReadsLatestSavedProjectBranchAndDoesNotUseAnUnsavedCard() throws {
+    func testLoadChecksLiveCodeAndLatestSavedPlan() throws {
         try temporary { directory in
             let cache = directory.appendingPathComponent("cache.md")
             try "## 🟡 重要\n".write(to: cache, atomically: true, encoding: .utf8)
-            var draft = DItemDraft(from: item())
+            let draft = DItemDraft(from: item())
             XCTAssertTrue(DItemStore.create(draft, at: cache))
-            let old = try DemandDeliveryPlan.load(id: draft.id, at: cache, repositoryName: { _ in "ultra" })
-            let original = try DItemStore.currentItem(id: draft.id, at: cache)
-            draft.branch = "feature/new"
-            XCTAssertTrue(DItemStore.save(draft, original: original, at: cache))
-            let latest = try DemandDeliveryPlan.load(id: draft.id, at: cache, repositoryName: { _ in "ultra" })
-            XCTAssertNotEqual(latest.key, old.key)
-            XCTAssertEqual(latest.projects.first?.branch, "feature/new")
+            XCTAssertThrowsError(try DemandDeliveryPlan.load(id: draft.id, at: cache, repositoryName: { _ in "ultra" }))
+            XCTAssertTrue(DItemStore.mutate(at: cache) { lines in
+                let range = DItemStore.blockRange(lines, id: draft.id)!
+                var block = Array(lines[range])
+                var document = self.item().technicalPlan!
+                document.scopeHash = DemandExecution.scopeHash(block)
+                try! DemandTechnicalPlan.set(&block, value: document)
+                lines.replaceSubrange(range, with: block)
+                return true
+            })
+            let plan = try DemandDeliveryPlan.load(id: draft.id, at: cache, repositoryName: { _ in "ultra" },
+                codeRevision: { _ in String(repeating: "b", count: 64) })
+            XCTAssertEqual(plan.projects.first?.branch, "feature/cdd-lock")
+            XCTAssertThrowsError(try DemandDeliveryPlan.load(id: draft.id, at: cache, repositoryName: { _ in "ultra" },
+                codeRevision: { _ in String(repeating: "c", count: 64) }))
+        }
+    }
+
+    func testNewPlanReusesOwnedDocumentAndRefusesExternalEdits() throws {
+        try temporary { directory in
+            let first = try self.plan()
+            let store = DemandDeliveryStore(url: directory.appendingPathComponent("r.json"))
+            try store.save(DemandDeliveryReceipt(key: first.key, itemID: first.item.id, reqID: first.link.id,
+                title: "旧技术交付", markdown: first.document(), documentURL: self.documentURL, confirmed: true))
+            var value = self.item()
+            value.technicalPlan?.markdown += "\n\n新方案正文"
+            let next = try self.plan(value)
+            var remote = first.document(), updates = 0, creates = 0, present = false
+            let services = DemandDeliveryServices(generate: { $0.document() }, validate: { _ in }, findDocument: { _ in nil },
+                createDocument: { _, _ in creates += 1; return self.documentURL },
+                verifyDocument: { _, expected in XCTAssertEqual(remote, expected) },
+                listDeliverables: { _ in try self.response(next, present: present) }, submit: { _, _ in present = true },
+                readDocument: { _ in remote }, updateDocument: { _, markdown in updates += 1; remote = markdown })
+            let flow = DemandDeliveryWorkflow(store: store, services: services)
+            XCTAssertTrue(try flow.run(next, stillCurrent: { true }).confirmed)
+            XCTAssertEqual(updates, 1); XCTAssertEqual(creates, 0)
+            value.technicalPlan?.markdown += "\n\n再更新"
+            let latest = try self.plan(value)
+            remote = "别人修改的内容"
+            XCTAssertThrowsError(try flow.run(latest, stillCurrent: { true }))
+            XCTAssertEqual(updates, 1); XCTAssertEqual(remote, "别人修改的内容")
         }
     }
 

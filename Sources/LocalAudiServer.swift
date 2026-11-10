@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Combine
+import Darwin
 
 enum AudiLocalLaunch {
     static var repositoryURL: URL {
@@ -63,271 +64,275 @@ enum AudiLocalLaunch {
     }
 }
 
+/// A single local audi instance is shared by demands using the same directory and branch.
 final class LocalAudiServer: ObservableObject {
     enum State: Equatable {
         case stopped
         case starting
         case running(base: URL, external: Bool)
+        case stopping
         case failed(String)
     }
-
     static let shared = LocalAudiServer()
-
     @Published private(set) var state: State = .stopped
+    @Published private(set) var activeTarget: AudiLocalTarget?
+    @Published private(set) var demandIDs: Set<String> = []
+    @Published private(set) var issue: String?
+    @Published private(set) var issueDemandID: String?
     var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
 
     private var process: Process?
+    private var request: URLSessionDataTask?
     private var pendingPage: String?
+    private var pageRequest = UUID()
     private var generation = UUID()
-    private var detectedBaseURL: URL?
+    private var lookup = UUID()
     private var startedAt = Date()
+    private var failureAfterStop: String?
     private let outputLock = NSLock()
     private var outputBuffer = Data()
+    private var outputRun = UUID()
+    private let loadTarget: @Sendable (String, URL) throws -> AudiLocalTarget
+    private let resolveNode: @Sendable () -> String?
+    private let helper: URL
+    private let session: URLSession
+    private let timeout: TimeInterval
 
-    private init() {}
-
-    var isStarting: Bool {
-        if case .starting = state { return true }
-        return false
+    init(loadTarget: @escaping @Sendable (String, URL) throws -> AudiLocalTarget = { try AudiLocalTarget.load(id: $0, at: $1) },
+         resolveNode: @escaping @Sendable () -> String? = { AudiLocalLaunch.resolveNodeExecutable() },
+         helper: URL = LocalAudiServer.helperURL,
+         session: URLSession = URLSession(configuration: .ephemeral),
+         timeout: TimeInterval = AudiLocalLaunch.startupTimeout) {
+        self.loadTarget = loadTarget; self.resolveNode = resolveNode
+        self.helper = helper; self.session = session; self.timeout = timeout
     }
 
-    var isRunning: Bool {
-        if case .running = state { return true }
-        return false
+    static var helperURL: URL {
+        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("CLI/audi_local_server.py"),
+           FileManager.default.fileExists(atPath: bundled.path) { return bundled }
+        return URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Tools/audi_local_server.py")
     }
 
-    func startAndOpen(page: String) {
-        switch state {
-        case .running(let base, _):
-            open(page: page, base: base)
-        case .starting:
-            pendingPage = page
-        case .stopped, .failed:
-            pendingPage = page
-            begin()
+    var isStarting: Bool { state == .starting }
+    var isRunning: Bool { if case .running = state { return true }; return false }
+    var isActive: Bool { isStarting || isRunning || state == .stopping }
+
+    func startAndOpen(id: String, at cacheURL: URL = URL(fileURLWithPath: CacheFile.path)) {
+        guard !isStarting, state != .stopping else { return }
+        issue = nil; issueDemandID = id
+        if !isRunning {
+            generation = UUID()
+            state = .starting
+            demandIDs = [id]
         }
-    }
-
-    func open(page: String) {
-        guard case .running(let base, _) = state else { return }
-        open(page: page, base: base)
+        let run = generation, ticket = UUID()
+        lookup = ticket
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let result = Result { () -> (AudiLocalTarget, String) in
+                let target = try self.loadTarget(id, cacheURL)
+                guard let node = self.resolveNode() else { throw AudiLocalError.message("找不到 node，请检查本地开发环境。") }
+                return (target, node)
+            }
+            DispatchQueue.main.async {
+                guard self.generation == run, self.lookup == ticket, self.state != .stopping else { return }
+                do {
+                    let (target, node) = try result.get()
+                    if case .running(let base, _) = self.state {
+                        guard self.activeTarget?.repository == target.repository,
+                              self.activeTarget?.branch == target.branch else {
+                            throw AudiLocalError.message("本地 audi 正在另一个目录或分支运行，请先停止，再启动本需求。")
+                        }
+                        self.demandIDs.insert(id)
+                        self.checkPage(base: base, page: target.page, run: run, openingOnly: true)
+                    } else {
+                        self.activeTarget = target
+                        self.pendingPage = target.page
+                        try self.spawn(node: node, target: target, run: run)
+                    }
+                } catch {
+                    if self.isRunning { self.issue = error.localizedDescription }
+                    else { self.fail(error.localizedDescription) }
+                }
+            }
+        }
     }
 
     func stop() {
-        invalidateRun()
-        terminateProcess()
+        lookup = UUID()
+        request?.cancel(); request = nil
         pendingPage = nil
-        state = .stopped
-    }
-
-    private func begin() {
-        invalidateRun()
-        terminateProcess()
-        state = .starting
-        detectedBaseURL = nil
-        startedAt = Date()
-        resetOutput()
-        let run = generation
-
-        Self.probeAudi(AudiLocalLaunch.probeURL) { [weak self] reachable in
-            DispatchQueue.main.async {
-                guard let self, self.generation == run, self.isStarting else { return }
-                if reachable {
-                    self.state = .running(base: AudiLocalLaunch.defaultBaseURL, external: true)
-                    self.flushPending()
-                } else {
-                    self.launch(run: run)
-                }
-            }
-        }
-    }
-
-    private func launch(run: UUID) {
-        guard generation == run, isStarting else { return }
-        let directory = AudiLocalLaunch.repositoryURL
-        let next = AudiLocalLaunch.nextExecutable
-        guard FileManager.default.fileExists(atPath: directory.appendingPathComponent("package.json").path) else {
-            fail("找不到本地 audi 仓库：" + directory.path)
+        issue = nil
+        failureAfterStop = nil
+        guard let process, process.isRunning else {
+            self.process = nil; activeTarget = nil; demandIDs = []
+            generation = UUID(); state = .stopped
             return
         }
-        guard FileManager.default.fileExists(atPath: next.path) else {
-            fail("本地 audi 依赖未安装，请先在仓库运行 npm install")
-            return
-        }
-
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let node = AudiLocalLaunch.resolveNodeExecutable()
-            DispatchQueue.main.async {
-                guard let self, self.generation == run, self.isStarting else { return }
-                guard let node else {
-                    self.fail("找不到可用的 node，请检查本地开发环境")
-                    return
-                }
-                self.spawn(node: node, next: next, directory: directory, run: run)
-            }
-        }
+        state = .stopping
+        // The supervisor terminates its entire owned group, including Next workers.
+        process.terminate()
     }
 
-    private func spawn(node: String, next: URL, directory: URL, run: UUID) {
-        guard generation == run, isStarting else { return }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: node)
-        process.arguments = [next.path, "dev"]
-        process.currentDirectoryURL = directory
+    private func spawn(node: String, target: AudiLocalTarget, run: UUID) throws {
+        guard FileManager.default.fileExists(atPath: helper.path) else {
+            throw AudiLocalError.message("本地启动工具缺失，请重新安装 D板。")
+        }
+        let port = try Self.availablePort()
+        let process = Process(), pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        process.arguments = [helper.path, "--parent", String(ProcessInfo.processInfo.processIdentifier),
+            "--repo", target.repository.path, "--node", node, "--port", String(port)]
+        process.currentDirectoryURL = target.repository
         process.standardInput = FileHandle.nullDevice
         var environment = ProcessInfo.processInfo.environment
-        environment["PATH"] = URL(fileURLWithPath: node).deletingLastPathComponent().path +
-            ":/opt/homebrew/bin:/usr/local/bin:\(NSHomeDirectory())/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        environment["NO_COLOR"] = "1"
-        environment["FORCE_COLOR"] = "0"
+        environment["PATH"] = URL(fileURLWithPath: node).deletingLastPathComponent().path + ":" + (environment["PATH"] ?? "/usr/bin:/bin")
         environment["NODE_ENV"] = "development"
+        environment["NEXT_TELEMETRY_DISABLED"] = "1"
+        environment["NO_COLOR"] = "1"; environment["FORCE_COLOR"] = "0"
         process.environment = environment
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
+        process.standardOutput = pipe; process.standardError = pipe
+        outputLock.lock(); outputBuffer = Data(); outputRun = run; outputLock.unlock()
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
-            guard let self, !data.isEmpty else { return }
-            self.consume(data, run: run)
+            guard !data.isEmpty else { return }
+            self?.appendOutput(data, run: run)
         }
         process.terminationHandler = { [weak self] finished in
             pipe.fileHandleForReading.readabilityHandler = nil
             DispatchQueue.main.async {
                 guard let self, self.generation == run else { return }
+                self.request?.cancel(); self.request = nil
                 self.process = nil
-                guard self.isStarting || self.isRunning else { return }
-                let tail = self.lastOutputLine()
-                let code = finished.terminationReason == .uncaughtSignal ? "信号终止" : "退出码 \(finished.terminationStatus)"
-                self.state = .failed(tail.isEmpty ? "本地 audi 已退出（\(code)）" : "本地 audi 已退出（\(code)）：\(tail)")
+                let stopping = self.state == .stopping
+                let error = self.failureAfterStop
+                self.activeTarget = nil; self.demandIDs = []
+                self.generation = UUID()
+                if let error { self.state = .failed(error) }
+                else if stopping { self.state = .stopped }
+                else { self.state = .failed("本地 audi 已退出。 " + self.lastOutputLine()) }
+                self.failureAfterStop = nil
             }
         }
-
-        do {
-            try process.run()
-            self.process = process
-            waitUntilReady(run: run)
-        } catch {
-            fail("本地 audi 启动失败：" + error.localizedDescription)
-        }
+        try process.run()
+        self.process = process
+        startedAt = Date()
+        let base = URL(string: "http://127.0.0.1:" + String(port))!
+        waitUntilReady(base: base, page: target.page, run: run)
     }
 
-    private func waitUntilReady(run: UUID) {
+    private func waitUntilReady(base: URL, page: String, run: UUID) {
         guard generation == run, isStarting else { return }
-        let elapsed = Date().timeIntervalSince(startedAt)
-        if elapsed >= AudiLocalLaunch.startupTimeout {
-            fail("本地 audi 启动超时，请检查 audi 仓库能否手动运行 npm run dev")
-            return
+        guard Date().timeIntervalSince(startedAt) < timeout else {
+            fail("本地 audi 启动超时。 " + lastOutputLine()); return
         }
-        guard let base = detectedBaseURL ?? (elapsed >= 8 ? AudiLocalLaunch.defaultBaseURL : nil) else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.waitUntilReady(run: run) }
-            return
-        }
-
-        Self.probe(AudiLocalLaunch.pageURL(base: base, page: AudiLocalLaunch.consolePath) ?? base) { [weak self] reachable in
+        guard let process, process.isRunning else { return }
+        let pid = process.processIdentifier, port = base.port!
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let owned = Self.ownsListener(port: port, supervisorPID: pid)
             DispatchQueue.main.async {
                 guard let self, self.generation == run, self.isStarting else { return }
-                if reachable {
-                    self.state = .running(base: base, external: false)
-                    self.flushPending()
-                } else {
+                if owned { self.checkPage(base: base, page: page, run: run, openingOnly: false) }
+                else {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-                        self?.waitUntilReady(run: run)
+                        self?.waitUntilReady(base: base, page: page, run: run)
                     }
                 }
             }
         }
     }
 
-    private func consume(_ data: Data, run: UUID) {
-        guard let base = appendingOutput(data).flatMap(AudiLocalLaunch.localBaseURL(in:)) else { return }
-        DispatchQueue.main.async {
-            guard self.generation == run, self.isStarting else { return }
-            self.detectedBaseURL = base
+    private func checkPage(base: URL, page: String, run: UUID, openingOnly: Bool) {
+        guard let url = AudiLocalLaunch.pageURL(base: base, page: page) else { fail("调试页路径无效。"); return }
+        let ticket = UUID()
+        pageRequest = ticket
+        request?.cancel()
+        var query = URLRequest(url: url)
+        query.timeoutInterval = openingOnly ? 30 : min(30, max(1, timeout - Date().timeIntervalSince(startedAt)))
+        query.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request = session.dataTask(with: query) { [weak self] _, response, error in
+            DispatchQueue.main.async {
+                guard let self, self.generation == run, self.pageRequest == ticket, self.state != .stopping else { return }
+                self.request = nil
+                let http = response as? HTTPURLResponse
+                if Self.pageReady(response: http, requested: url) {
+                    if !openingOnly { self.state = .running(base: base, external: false) }
+                    self.pendingPage = nil
+                    self.openURL(url)
+                } else if let http {
+                    let reason = "调试页 " + page + " 未就绪（HTTP " + String(http.statusCode) + "），请检查页面或编译错误。"
+                    if openingOnly { self.issue = reason } else { self.fail(reason + " " + self.lastOutputLine()) }
+                } else if openingOnly {
+                    self.issue = "本地调试页暂时无法访问：" + (error?.localizedDescription ?? "连接失败")
+                } else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                        self?.waitUntilReady(base: base, page: page, run: run)
+                    }
+                }
+            }
         }
+        request?.resume()
     }
 
-    private func open(page: String, base: URL) {
-        guard let url = AudiLocalLaunch.pageURL(base: base, page: page) else { return }
-        openURL(url)
+    static func pageReady(response: HTTPURLResponse?, requested: URL) -> Bool {
+        guard let response, (200..<300).contains(response.statusCode), let actual = response.url else { return false }
+        return actual.scheme == requested.scheme && actual.host == requested.host &&
+            actual.port == requested.port && actual.path == requested.path
     }
 
-    private func flushPending() {
-        guard let page = pendingPage else { return }
-        pendingPage = nil
-        open(page: page)
+    static func availablePort() throws -> Int {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw AudiLocalError.message("无法分配本地端口。") }
+        defer { close(fd) }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard bound == 0 else { throw AudiLocalError.message("无法分配本地端口。") }
+        var size = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let result = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &size) }
+        }
+        guard result == 0 else { throw AudiLocalError.message("无法读取本地端口。") }
+        return Int(UInt16(bigEndian: address.sin_port))
+    }
+
+    static func ownsListener(port: Int, supervisorPID: Int32) -> Bool {
+        let result = ProcessRunner.run("/usr/sbin/lsof",
+            arguments: ["-nP", "-t", "-iTCP:" + String(port), "-sTCP:LISTEN"], timeout: 2)
+        guard result.succeeded else { return false }
+        return String(decoding: result.stdout, as: UTF8.self).split(whereSeparator: \.isWhitespace)
+            .compactMap { Int32($0) }.contains { getpgid($0) == supervisorPID }
     }
 
     private func fail(_ message: String) {
-        invalidateRun()
-        terminateProcess()
+        request?.cancel(); request = nil
         pendingPage = nil
-        state = .failed(message)
-    }
-
-    private func invalidateRun() {
-        generation = UUID()
-        detectedBaseURL = nil
-        resetOutput()
-    }
-
-    private func terminateProcess() {
-        guard let process else { return }
-        self.process = nil
-        guard process.isRunning else { return }
-        process.terminate()
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) {
-            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        if let process, process.isRunning {
+            failureAfterStop = message
+            state = .stopping
+            process.terminate()
+        } else {
+            activeTarget = nil; demandIDs = []
+            generation = UUID(); state = .failed(message)
         }
     }
 
-    private func lastOutputLine() -> String {
-        let text = currentOutput()
-        let cleaned = text.replacingOccurrences(of: "\u{001B}\\[[0-9;?]*[A-Za-z]",
-                                                with: "", options: .regularExpression)
-        return cleaned.components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .last(where: { !$0.isEmpty }) ?? ""
-    }
-
-    private func appendingOutput(_ data: Data) -> String? {
+    private func appendOutput(_ data: Data, run: UUID) {
         outputLock.lock(); defer { outputLock.unlock() }
+        guard outputRun == run else { return }
         outputBuffer.append(data)
         if outputBuffer.count > 32_768 { outputBuffer = outputBuffer.suffix(16_384) }
-        return String(data: outputBuffer, encoding: .utf8)
     }
 
-    private func currentOutput() -> String {
-        outputLock.lock(); defer { outputLock.unlock() }
-        return String(data: outputBuffer, encoding: .utf8) ?? ""
-    }
-
-    private func resetOutput() {
-        outputLock.lock(); defer { outputLock.unlock() }
-        outputBuffer.removeAll(keepingCapacity: true)
-    }
-
-    private static func probeAudi(_ url: URL, completion: @escaping (Bool) -> Void) {
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 3
-        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        URLSession.shared.dataTask(with: request) { _, response, _ in
-            guard let http = response as? HTTPURLResponse,
-                  (200..<400).contains(http.statusCode),
-                  (http.value(forHTTPHeaderField: "X-Powered-By") ?? "").contains("Next") else {
-                completion(false)
-                return
-            }
-            completion(true)
-        }.resume()
-    }
-
-    private static func probe(_ url: URL, completion: @escaping (Bool) -> Void) {
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 3
-        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        URLSession.shared.dataTask(with: request) { _, response, _ in
-            completion((response as? HTTPURLResponse) != nil)
-        }.resume()
+    private func lastOutputLine() -> String {
+        outputLock.lock(); let data = outputBuffer; outputLock.unlock()
+        let text = String(decoding: data, as: UTF8.self)
+            .replacingOccurrences(of: "\u{001B}\\[[0-9;?]*[A-Za-z]", with: "", options: .regularExpression)
+        return text.components(separatedBy: .newlines).map(\.trimmed).last(where: { !$0.isEmpty }) ?? ""
     }
 }

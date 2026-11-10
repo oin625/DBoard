@@ -71,7 +71,7 @@ struct CockpitSection: View {
                 }
             }
         }
-        .cardStyle(theme.current)
+        .workspaceSurface()
     }
 }
 

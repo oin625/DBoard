@@ -58,9 +58,9 @@ enum DemandOverview {
     private static func items(_ content: String) throws -> [(DItem, [String])] {
         let normalized = content.replacingOccurrences(of: "\r\n", with: "\n")
         let lines = normalized.components(separatedBy: "\n")
-        let sourceHeadings = lines.filter { $0.range(of: #"^### D[0-9]"#, options: .regularExpression) != nil }
+        let sourceHeadings = lines.filter { $0.range(of: #"^### [DP][0-9]"#, options: .regularExpression) != nil }
         guard sourceHeadings.allSatisfy({
-            $0.range(of: #"^### D[0-9]{3,}(?=【|\s|$)"#, options: .regularExpression) != nil
+            $0.range(of: #"^### [DP][0-9]{3,}(?=【|\s|$)"#, options: .regularExpression) != nil
         }) else { throw ReadError.invalid }
         let parsed = CacheParser.parse(content: "## 🟡\n" + normalized).items
         guard Set(parsed.map(\.id)).count == parsed.count, parsed.count == sourceHeadings.count else {
@@ -80,7 +80,8 @@ enum DemandOverview {
         let projects = DemandRepositoryEntries.parse(item.project).map(DemandDeliveryProject.name)
         var seen = Set<String>()
         let project = projects.filter { seen.insert($0).inserted }.joined(separator: "；")
-        let title = compact(item.displayTitle.replacingOccurrences(of: #"\s*✅[0-9]{4}-[0-9]{2}-[0-9]{2}"#,
+        let publicTitle = item.isIncident ? item.headerTitle : item.displayTitle
+        let title = compact(publicTitle.replacingOccurrences(of: #"\s*✅[0-9]{4}-[0-9]{2}-[0-9]{2}"#,
             with: "", options: .regularExpression))
         let dates = matches(#"[📅🎯](?:[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{1,2}\.[0-9]{1,2})"#, in: block[0])
         var heading = "### " + item.id + (project.isEmpty ? " " : "【" + project + "】") +
@@ -88,9 +89,9 @@ enum DemandOverview {
         if !dates.isEmpty { heading += " " + dates.joined(separator: "→") }
         if let stamp = matches(#"✅[0-9]{4}-[0-9]{2}-[0-9]{2}"#, in: block[0]).first { heading += " " + stamp }
         var overview = try field("概括", in: block)
-        if overview.isEmpty { overview = item.title }
+        if overview.isEmpty && !item.isIncident { overview = item.title }
         if ["（待补充）", "待补充"].contains(overview) { overview = "" }
-        if overview.isEmpty {
+        if overview.isEmpty && !item.isIncident {
             let goal = compact(DemandPromptSections(stored: item.prompt).intent)
             overview = String(goal.prefix { !"。！？；;\n".contains($0) }).trimmed
         }

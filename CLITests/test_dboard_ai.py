@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+from handoff_fixture import feedback_flags
 
 CLI = Path(__file__).resolve().parents[1] / "Tools/dboard_ai.py"
 spec = importlib.util.spec_from_file_location("dboard_ai", CLI)
@@ -37,6 +38,10 @@ class FeedbackTests(unittest.TestCase):
         self.directory.cleanup()
 
     def call(self, *args, success=True):
+        args = list(args)
+        if args and args[0] in ("show", "context") and "--full" not in args:
+            args += ["--full"]  # These existing tests verify explicit complete snapshots.
+        args += feedback_flags(self.cache, args)
         proc = subprocess.run([sys.executable, str(CLI), "--cache", str(self.cache)] + list(args),
                               capture_output=True, text=True, timeout=15)
         result = json.loads(proc.stdout)
@@ -46,14 +51,21 @@ class FeedbackTests(unittest.TestCase):
         else:
             self.assertNotEqual(proc.returncode, 0)
             self.assertFalse(result["success"])
+        if success and args[0] == "report":
+            full = self.call("show", args[1], "--full")["item"]
+            result["item"].update({k: full[k] for k in ("progress", "progress_records", "prompt", "images")})
         return result
 
     def show(self):
         return self.call("show", "D014")["item"]
 
     def args(self, item, *extra):
-        return ["report", "D014", "--expect-title", item["title"],
-                "--expect-revision", item["revision"], "--no-sync"] + list(extra)
+        arguments = ["report", "D014", "--expect-title", item["title"],
+                     "--expect-revision", item["revision"], "--no-sync"]
+        if "--stage" in extra and extra[extra.index("--stage") + 1] != "developing" and item.get("code_revision") and "--expect-code" not in extra:
+            arguments += ["--expect-code", item["code_revision"]]
+        arguments += list(extra)
+        return arguments[:2] + feedback_flags(self.cache, arguments) + arguments[2:]
 
     def repo(self, name="repo", branch="feature/fixture"):
         path = self.root / name
@@ -347,6 +359,7 @@ class FeedbackTests(unittest.TestCase):
         item = self.show()
         argv = ["--cache", str(self.cache), "report", "D014", "--expect-title", item["title"],
                 "--expect-revision", item["revision"], "--progress", "验证通过", "--event-id", "sync-failure"]
+        argv += feedback_flags(self.cache, argv[2:])
         with mock.patch.object(module, "DEFAULT_CACHE", self.cache), \
              mock.patch.object(module, "sync_cache", return_value={"success": False, "status": "remote-failed"}):
             output = io.StringIO()

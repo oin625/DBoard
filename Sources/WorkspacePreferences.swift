@@ -28,6 +28,9 @@ final class WorkspacePreferences: ObservableObject {
     static let shared = WorkspacePreferences()
     static let defaultsFavorites = ["apprelease", "logs", "reqflow", "bizmap"]
     @Published var settingsPage: SettingsPage = .general
+    @Published var demandLayout: DemandLayout {
+        didSet { defaults.set(demandLayout.rawValue, forKey: "workspace.demandLayout") }
+    }
     @Published var favorites: [String] {
         didSet { defaults.set(favorites, forKey: "workspace.favorites") }
     }
@@ -41,11 +44,15 @@ final class WorkspacePreferences: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        demandLayout = DemandLayout(rawValue: defaults.string(forKey: "workspace.demandLayout") ?? "") ?? .list
         // Keep a previously saved monitor shortcut pointing to the native tool.
         let nativeTool: (String) -> String = { $0 == "sysmon" ? "activitymonitor" : $0 }
-        favorites = (defaults.stringArray(forKey: "workspace.favorites") ?? Self.defaultsFavorites).map(nativeTool)
-        recentModules = (defaults.stringArray(forKey: "workspace.recentModules") ?? []).map(nativeTool)
+        favorites = (defaults.stringArray(forKey: "workspace.favorites") ?? Self.defaultsFavorites)
+            .map(nativeTool).filter { $0 != "logsearch" }
+        recentModules = (defaults.stringArray(forKey: "workspace.recentModules") ?? [])
+            .map(nativeTool).filter { $0 != "logsearch" }
         pinnedWindows = Set(defaults.stringArray(forKey: "workspace.pinnedWindows") ?? [])
+            .filter { $0 != "logsearch" }
     }
 
     func setFavorite(_ id: String, enabled: Bool) {
@@ -76,7 +83,6 @@ struct WorkspacePinButton: View {
         Button { prefs.togglePin(id) } label: {
             Image(systemName: prefs.pinnedWindows.contains(id) ? "pin.fill" : "pin")
         }
-        .help(prefs.pinnedWindows.contains(id) ? "取消置顶" : "置顶窗口")
         .accessibilityLabel(prefs.pinnedWindows.contains(id) ? "取消置顶窗口" : "置顶窗口")
     }
 }
@@ -85,7 +91,6 @@ struct DBoardSettingsButton: View {
     @Environment(\.openSettings) private var openSettings
     var body: some View {
         Button { openSettings() } label: { Image(systemName: "gearshape") }
-            .help("设置 ⌘,")
             .accessibilityLabel("打开 D板设置")
     }
 }

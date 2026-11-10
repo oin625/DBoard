@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from handoff_fixture import feedback_flags
 
 CLI = Path(__file__).resolve().parents[1] / "Tools/dboard_ai.py"
 spec = importlib.util.spec_from_file_location("dboard_ai_images", CLI)
@@ -23,10 +24,17 @@ class DemandImageContextTests(unittest.TestCase):
         self.directory.cleanup()
 
     def call(self, *args):
+        args = list(args)
+        if args and args[0] in ("show", "context") and "--full" not in args: args += ["--full"]
+        args += feedback_flags(self.cache, args)
         proc = subprocess.run([sys.executable, str(CLI), "--cache", str(self.cache), *args],
                               capture_output=True, text=True, timeout=15)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        return json.loads(proc.stdout)
+        result = json.loads(proc.stdout)
+        if args[0] == "report":
+            full = self.call("show", args[1], "--full")["item"]
+            result["item"].update({k: full[k] for k in ("progress", "progress_records", "prompt", "images")})
+        return result
 
     def fixture(self):
         original = self.root / "原咒言 图片(1).png"

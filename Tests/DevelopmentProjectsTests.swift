@@ -27,6 +27,25 @@ final class DevelopmentProjectsTests: XCTestCase {
         XCTAssertEqual(response.tags, ["solution", "dev", "test"])
     }
 
+    func testLatestCorrectionForTheSameAuthorAndDocumentKeepsHistoryAndOtherContributions() throws {
+        let data = Data("""
+        {"success":true,"data":{"3":[
+          {"id":1,"authorId":"A","createTime":"2026-11-04T02:19:57Z","deliverableContent":"https://example.com/d014","deliverableDevProject":"ultra:merge/pre_1013,audi:feature/vibe"},
+          {"id":2,"authorId":"A","createTime":"2026-11-04T02:30:00Z","deliverableContent":"https://example.com/d014","deliverableDevProject":"ultra:feature/cdd-lock-code,audi:feature/vibe"},
+          {"id":3,"authorId":"B","createTime":"2026-11-04T02:20:00Z","deliverableContent":"https://example.com/d014","deliverableDevProject":"tesla:feature/saas"},
+          {"id":4,"authorId":"A","createTime":"2026-11-04T02:18:00Z","deliverableContent":"https://example.com/other","deliverableDevProject":"ultra:feature/other"}
+        ]}}
+        """.utf8)
+        let response = try DevelopmentDeliverables.decode(data)
+        XCTAssertEqual(response.items.count, 4)
+        XCTAssertEqual(response.projects, [
+            DeclaredDevelopmentProject(project: "ultra", branch: "feature/cdd-lock-code"),
+            DeclaredDevelopmentProject(project: "audi", branch: "feature/vibe"),
+            DeclaredDevelopmentProject(project: "tesla", branch: "feature/saas"),
+            DeclaredDevelopmentProject(project: "ultra", branch: "feature/other")
+        ])
+    }
+
     func testParsesExplicitSeparatorsAndKeepsDifferentBranches() {
         XCTAssertEqual(DeclaredDevelopmentProject.parse([
             " canary：feature/a， frontend；canary:feature/b\ncanary:feature/a ",

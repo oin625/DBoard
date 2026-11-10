@@ -177,7 +177,15 @@ final class DBoardViewModel: ObservableObject {
     @Published var editingFormCount = 0
     @Published var newItemDraft: DItemDraft?
     @Published var newItemFormOpen = false
+    @Published var newItemFormInWindow = false
+    var newDemandWindowPresenter: ((DBoardViewModel) -> Void)?
     @Published var demandEditor: DemandCardEditor?
+    @Published var demandEditorInWindow = false
+    var demandWindowPresenter: ((DBoardViewModel) -> Void)?
+    var demandWindowCenterRect: NSRect?
+    var newDemandWindowCenterRect: NSRect?
+    var demandWorkspacePresenter: (() -> Void)?
+    var demandEditorDismissal: ((@escaping () -> Void) -> Void)?
     @Published var newItemDraftError: String?
     let newItemDraftStore: NewDemandDraftStore?
     let promptDraftStore: DemandPromptDraftStore
@@ -188,9 +196,35 @@ final class DBoardViewModel: ObservableObject {
     @Published var workspacePage: WorkspacePage? = .overview
     @Published var demandFilter: DemandFilter = .all
     @Published var demandQuery = ""
+    @Published var showingKnowledge = false
     @Published var archivingIDs: Set<String> = []
+    @Published var reminderDrafts: [String: DemandReminderDraft] = [:]
+    var reminderSaveWork: [String: DispatchWorkItem] = [:]
+    @Published var handoffDrafts: [String: DemandHandoffDraft] = DemandHandoffDraft.load() {
+        didSet { DemandHandoffDraft.persist(handoffDrafts) }
+    }
+    var handoffSaveWork: [String: DispatchWorkItem] = [:]
+    @Published var releaseDrafts: [String: DemandReleaseDraft] = [:]
+    @Published var releaseEvidenceDrafts: [String: DemandReleaseEvidenceDraft] = [:]
+    @Published var releaseEvidenceErrors: [String: String] = [:]
     lazy var archiveJournal = ArchiveJournal()
-    lazy var demandArchives = DemandArchiveStore(allowsRemote: allowsRemoteOperations)
+    lazy var demandArchives: DemandArchiveStore = {
+        let store: DemandArchiveStore
+        if let configuredArchiveStore { store = configuredArchiveStore }
+        else if allowsRemoteOperations { store = DemandArchiveStore() }
+        else {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("DBoardEmptyArchive-" + UUID().uuidString)
+            store = DemandArchiveStore(cache: directory.appendingPathComponent("cache.md"),
+                journalURL: directory.appendingPathComponent("journal.json"), allowsRemote: false)
+        }
+        archiveObservation = store.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        return store
+    }()
+    var codeReviewRequest = UUID()
+    var codeReviewWork: DispatchWorkItem?
+    let completionRequest: ((DItem) -> Void)?
+    private let configuredArchiveStore: DemandArchiveStore?
+    private var archiveObservation: AnyCancellable?
     var attentionItems: [DItem] { items.filter { $0.isUrgent || $0.status == .inProgress }.sorted { $0.priority < $1.priority } }
 
     enum SyncKind { case idle, pending, syncing, done, fail }
@@ -209,7 +243,11 @@ final class DBoardViewModel: ObservableObject {
     init(loadCache: Bool = true, reqFlow: BizMapViewModel? = nil,
          newItemDraftStore: NewDemandDraftStore? = nil,
          promptDraftStore: DemandPromptDraftStore? = nil,
-         changeDraftStore: DemandChangeDraftStore? = nil) {
+         changeDraftStore: DemandChangeDraftStore? = nil,
+         archiveStore: DemandArchiveStore? = nil,
+         completionRequest: ((DItem) -> Void)? = nil) {
+        self.completionRequest = completionRequest
+        self.configuredArchiveStore = archiveStore
         self.allowsRemoteOperations = loadCache
         self.newItemDraftStore = newItemDraftStore ?? (loadCache ? NewDemandDraftStore() : nil)
         self.promptDraftStore = promptDraftStore ?? DemandPromptDraftStore(url: loadCache ? DemandPromptDraftStore.defaultURL : nil)
@@ -224,15 +262,50 @@ final class DBoardViewModel: ObservableObject {
         if loadCache { reload(); startWatching(); observeCalendarChanges() }
     }
 
-    func openDemandEditor(_ kind: DemandCardEditor.Kind, item: DItem) {
+    func openDemandEditor(_ kind: DemandCardEditor.Kind, item: DItem, deliveryPlan: DemandDeliveryPlan? = nil, centerIn: NSRect? = nil) {
+        if demandEditorInWindow, let dismissal = demandEditorDismissal,
+           demandEditor?.id != item.id + ":" + kind.rawValue {
+            dismissal { [weak self] in
+                self?.demandEditorDismissal = nil
+                self?.openDemandEditor(kind, item: item, deliveryPlan: deliveryPlan, centerIn: centerIn)
+            }
+            return
+        }
+        if allowsRemoteOperations && kind == .inspect { DemandQuickOpenRecents.shared.record(item.id) }
+        if let presenter = demandWindowPresenter, kind == .inspect || demandEditorInWindow {
+            demandWindowCenterRect = centerIn
+            demandEditorInWindow = true
+            demandEditor = DemandCardEditor(kind: kind, item: item, deliveryPlan: deliveryPlan)
+            presenter(self)
+            return
+        }
+        demandEditorInWindow = false
         NotificationCenter.default.post(name: .init("DBoardEditorWillOpen"), object: nil)
-        demandEditor = DemandCardEditor(kind: kind, item: item)
+        demandEditor = DemandCardEditor(kind: kind, item: item, deliveryPlan: deliveryPlan)
     }
 
     func focusItem(_ id: String) {
-        showDemands()
-        selectedID = id
-        expandedIDs.insert(id)
+        if items.contains(where: { $0.id == id }) {
+            showDemands()
+            selectedID = id
+            expandedIDs.insert(id)
+        } else {
+            demandArchives.reloadLocal()
+            guard let record = demandArchives.records.first(where: { $0.item.id == id }) else {
+                showFeedback("未找到这条需求，请刷新需求或归档记录", failed: true); return
+            }
+            focusArchive(record)
+        }
+    }
+
+    func focusArchive(_ record: ArchivedDemand) {
+        if items.contains(where: { $0.id == record.item.id }) {
+            workspacePage = .history
+        } else {
+            showDemands(.completed)
+            demandQuery = record.item.id
+        }
+        selectedID = record.id
     }
 
     func showFeedback(_ message: String, failed: Bool = false) {
@@ -269,6 +342,7 @@ final class DBoardViewModel: ObservableObject {
         if outcome.failed { showFeedback("周期已开始，但自动更新状态失败，请检查本地数据文件", failed: true) }
         let r = CacheParser.parse(content: content)
         items = r.items
+        refreshCodeReviews()
         syncTime = r.syncTime
 
         // 把历史未完成项顺延显示在今日零碎顶部
@@ -425,6 +499,16 @@ final class DBoardViewModel: ObservableObject {
                 es.append(PaletteEntry(id: "demand:" + id, label: it.displayTitle, sub: id, icon: "doc.text", action: { self.focusItem(id); self.paletteOpen = false }))
             }
         }
+        if !q.isEmpty {
+            let activeIDs = Set(items.map(\.id))
+            for record in demandArchives.records where !activeIDs.contains(record.item.id) &&
+                DemandSearch.matches(record.item, query: q) {
+                es.append(PaletteEntry(id: "archive:" + record.id, label: record.item.displayTitle,
+                    sub: record.item.id + " · 已完成", icon: "archivebox", action: {
+                        self.focusArchive(record); self.paletteOpen = false
+                    }))
+            }
+        }
         return es
     }
     func paletteMove(_ d: Int) {
@@ -455,7 +539,9 @@ final class DBoardViewModel: ObservableObject {
     }
 
     func cycleToStatus(_ id: String, target: ItemStatus) {
-        guard let item = items.first(where: { $0.id == id }), item.status != target else { return }
+        guard let item = items.first(where: { $0.id == id }) else { return }
+        if target == .completed { completeItem(item); return }
+        guard item.status != target else { return }
         if target == .pending, DemandCycle.hasStarted(start: item.startDate, deadline: item.deadline) {
             showFeedback("开始日期已到；要恢复待开始，请在编辑里调整开始日期", failed: true)
             return
@@ -515,7 +601,6 @@ final class DBoardViewModel: ObservableObject {
                 self.syncText = result.businessSucceeded ? "已同步钉钉" : "同步失败，改动保留在本机"
                 self.syncKind = result.businessSucceeded ? .done : .fail
                 if again { self.scheduleSync() }
-                else { self.showFeedback(self.syncText, failed: !result.businessSucceeded) }
                 self.reload()
             }
         }
@@ -524,6 +609,7 @@ final class DBoardViewModel: ObservableObject {
     deinit {
         feedbackDismiss?.cancel()
         syncDebounce?.cancel()
+        reminderSaveWork.values.forEach { $0.cancel() }
         fileObserver = nil
     }
 }
@@ -551,7 +637,7 @@ struct DBoardRootView: View {
                             Spacer()
                             Text((vm.workspacePage ?? .overview).title).font(.system(size: 13, weight: .semibold))
                         }
-                        .buttonStyle(.plain).padding(.horizontal, 20).padding(.vertical, 12)
+                        .demandButtonStyle(.plain).padding(.horizontal, 20).padding(.vertical, 12)
                     }
                     workspaceContent
                     FooterView()
@@ -567,15 +653,17 @@ struct DBoardRootView: View {
                         Section("常用入口") {
                             ForEach(prefs.favorites.compactMap { id in DBoardModule.visible.first { $0.id == id } }) { module in
                                 Button { module.launch() } label: { Label(module.title, systemImage: module.icon) }
-                                    .buttonStyle(.plain)
+                                    .demandButtonStyle(.plain)
                             }
                         }
                         Section {
                             Button { openSettings() } label: { Label("设置", systemImage: "gearshape") }
-                                .buttonStyle(.plain)
+                                .demandButtonStyle(.plain)
                         }
                     }
                     .listStyle(.sidebar)
+                    .scrollContentBackground(.hidden)
+                    .background { DemandCanvasBackground() }
                     .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
                 } detail: {
                     VStack(spacing: 0) {
@@ -583,6 +671,7 @@ struct DBoardRootView: View {
                         FooterView()
                     }
                     .frame(minWidth: 480)
+                    .background { DemandCanvasBackground() }
                     .navigationTitle((vm.workspacePage ?? .overview).title)
                     .toolbar {
                         ToolbarItemGroup(placement: .automatic) {
@@ -594,7 +683,7 @@ struct DBoardRootView: View {
                             }
                             Button { vm.paletteQuery = ""; vm.paletteSel = 0; vm.paletteOpen = true } label: {
                                 Image(systemName: "magnifyingglass")
-                            }.help("命令面板 ⌘K")
+                            }
                             DBoardModuleMenu()
                             WorkspacePinButton(id: "dboard")
                             DBoardSettingsButton()
@@ -617,7 +706,7 @@ struct DBoardRootView: View {
                         Text("已删除，可从本机恢复").font(.system(size: 12))
                         Button(title) { vm.undoLastDeletion() }.controlSize(.small)
                         Button { vm.undoTitle = nil } label: { Image(systemName: "xmark") }
-                            .buttonStyle(.plain).foregroundStyle(.secondary).help("不再提示恢复")
+                            .demandButtonStyle(.plain).foregroundStyle(.secondary)
                     }
                     .padding(12).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
                 }
@@ -628,13 +717,20 @@ struct DBoardRootView: View {
             .padding(16).padding(.bottom, 36)
             .transition(.opacity)
         }
-        .background(theme.current.background)
+        .background { DemandCanvasBackground() }
         .frame(minWidth: popoverMode ? 420 : 760, minHeight: popoverMode ? 480 : 560)
         .background(WindowNumberReader { windowNumber = $0 })
         .animation(reduceMotion ? nil : DBoardUI.spring, value: vm.paletteOpen)
         .demandEditorPresentation(enabled: !popoverMode)
         .onReceive(NotificationCenter.default.publisher(for: .init("openDBoardSettings"))) { _ in openSettings() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            vm.refreshCodeReviews()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { event in
+            if (event.object as? NSWindow)?.windowNumber == windowNumber { vm.refreshCodeReviews() }
+        }
         .onAppear {
+            vm.refreshCodeReviews()
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak vm] event in
                 guard event.window?.windowNumber == windowNumber else { return event }
                 return Self.handleKey(event, vm: vm) {
@@ -656,13 +752,7 @@ struct DBoardRootView: View {
                     case .overview:
                         WorkspaceOverview()
                     case .demands:
-                        DemandFilterBar()
-                        NewItemRow()
-                        if vm.filteredItems.isEmpty {
-                            EmptyWorkspaceState(icon: "magnifyingglass", title: vm.items.isEmpty ? "还没有需求" : "没有符合筛选的需求",
-                                detail: vm.items.isEmpty ? "点上方「新增需求」开始记录。" : "可清除筛选，或换个关键词。",
-                                actionTitle: vm.items.isEmpty ? nil : "查看全部", action: { vm.showDemands() })
-                        } else { NeedsSection() }
+                        DemandListView(store: vm.demandArchives)
                     case .todos:
                         TodaySection()
                     case .history:
@@ -774,7 +864,7 @@ struct PaletteRow: View {
         .background(selected ? Color.accentColor.opacity(0.1) : Color.clear)
         .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .demandButtonStyle(.plain)
         .accessibilityLabel(entry.label + "，" + entry.sub)
     }
 }
@@ -794,36 +884,35 @@ struct HeaderView: View {
     }()
 
     var body: some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text("D板").font(.system(size: 15, weight: .semibold))
+        HStack(spacing: 10) {
+            Image(systemName: "square.grid.2x2.fill")
+                .font(.system(size: 14, weight: .medium)).foregroundStyle(Color.accentColor)
+                .frame(width: 32, height: 32)
+                .background(Color.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("D板").font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(theme.current.textPrimary)
-                Text(Self.dateFmt.string(from: Date())).font(.system(size: 11))
+                Text(Self.dateFmt.string(from: Date())).font(.system(size: 10))
                     .foregroundStyle(theme.current.textTertiary)
             }
-            .help("下拉或双击可脱出为独立窗口")
             Spacer()
-            if vm.urgentCount > 0 {
+            if vm.workspacePage != .overview && vm.urgentCount > 0 {
                 Text("\(vm.urgentCount) 紧急").font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.red)
                     .padding(.horizontal, 7).padding(.vertical, 2)
                     .background(Capsule().fill(Color.red.opacity(0.12)))
                     .contentTransition(.numericText())
             }
-            if vm.inProgressCount > 0 {
+            if vm.workspacePage != .overview && vm.inProgressCount > 0 {
                 Text("\(vm.inProgressCount) 进行中").font(.system(size: 11))
                     .foregroundStyle(theme.current.textTertiary)
                     .contentTransition(.numericText())
             }
-            if popoverMode {
-                HeaderIconButton(icon: "arrow.up.left.and.arrow.down.right", help: "打开工作窗口") {
-                    (NSApp.delegate as? AppDelegate)?.detachPanel()
-                }
-            }
             HeaderIconButton(icon: "magnifyingglass", help: "命令面板 ⌘K") {
                 vm.paletteQuery = ""; vm.paletteSel = 0; vm.paletteOpen = true
             }
-            // 入口收敛: 所有模块收进一个菜单, 不再在头部平铺一排图标
+            // 入口收敛: 所有模块收进一个���单, 不再在头部平铺一排图标
             DBoardModuleMenu()
         }
         .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 6)
@@ -856,10 +945,10 @@ struct HeaderIconButton: View {
                 .frame(width: 24, height: 24)
                 .background(RoundedRectangle(cornerRadius: 6).fill(theme.current.textPrimary.opacity(hovered ? 0.07 : 0)))
         }
-        .buttonStyle(SmoothButtonStyle(scale: 0.9, hoverScale: 1.0))
+        .demandButtonStyle(SmoothButtonStyle(scale: 0.9, hoverScale: 1.0))
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: hovered)
         .onHover { hovered = $0 }
-        .help(help)
+        .accessibilityLabel(help)
     }
 }
 
@@ -869,7 +958,8 @@ struct NeedsSection: View {
     @EnvironmentObject var theme: ThemeManager
     @EnvironmentObject var fm: FontManager
     var focused = false
-    private var displayedItems: [DItem] { focused ? Array(vm.attentionItems.prefix(6)) : vm.filteredItems }
+    var items: [DItem]? = nil
+    private var displayedItems: [DItem] { items ?? (focused ? Array(vm.attentionItems.prefix(6)) : vm.filteredItems) }
 
     var groups: [(String, Color, [DItem])] {
         if vm.viewMode == .project {
@@ -896,9 +986,9 @@ struct NeedsSection: View {
                 Spacer()
                 Text("\(grp.2.count)").font(.system(size: 11, design: .monospaced)).foregroundStyle(theme.current.textMuted)
             }
-            .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 6)
+            .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 8)
             .transition(.move(edge: .top).combined(with: .opacity))
-            VStack(spacing: 6) {
+            VStack(spacing: 10) {
                 ForEach(Array(grp.2.enumerated()), id: \.element.id) { i, item in
                     ItemCardView(item: item, appearDelay: 0).id(item.id)
                 }
@@ -938,8 +1028,7 @@ struct DemandProgressHistoryView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
-                .help(expanded ? "只显示最新一条记录" : "展开更早的 \(milestones.count - 1) 条记录")
+                .demandButtonStyle(.plain)
             }
         }
     }
@@ -952,8 +1041,10 @@ struct ItemCardView: View {
     @EnvironmentObject var fm: FontManager
     let item: DItem
     var appearDelay: Double = 0
+    var isolatedExpansion = false
+    @State private var detailExpanded = true
     @State private var hovered = false
-    var expanded: Bool { vm.expandedIDs.contains(item.id) }
+    var expanded: Bool { isolatedExpansion ? detailExpanded : vm.expandedIDs.contains(item.id) }
     var pcolor: Color { item.priority.color }
     var projC: Color { .secondary }
     var showDesc: Bool { !item.title.isEmpty && item.title != "（待补充）" && item.title != item.displayTitle }
@@ -963,9 +1054,6 @@ struct ItemCardView: View {
     var hasDetail: Bool { showDesc || hasBranch || hasCycle || hasProgress || !item.changes.isEmpty || item.changeReadError != nil }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var progressBuf = ""
-    @State private var progressDetails = ""
-    @State private var addingProgressDetails = false
     @State private var showingAllProgress = false
 
     var body: some View {
@@ -979,15 +1067,30 @@ struct ItemCardView: View {
 
     @ViewBuilder
     private var cardContent: some View {
+        if isolatedExpansion {
+            cardBody.padding(24)
+        } else {
+            cardBody
+                .padding(.horizontal, 14).padding(.vertical, 13)
+                .workspaceSurface(highlighted: vm.selectedID == item.id || hovered)
+                .padding(.horizontal, 16)
+        }
+    }
+
+    private var cardBody: some View {
         VStack(alignment: .leading, spacing: 6) {
             VStack(alignment: .leading, spacing: 6) {
-                    Button { vm.toggleExpanded(item.id) } label: {
+                    Button {
+                        if isolatedExpansion { detailExpanded.toggle() }
+                        else { vm.toggleExpanded(item.id) }
+                    } label: {
                         cardHeader
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
                     }
-                        .buttonStyle(.plain).accessibilityLabel("\(expanded ? "收起" : "展开") \(item.id) \(item.displayTitle)")
+                        .demandButtonStyle(.plain).accessibilityLabel("\(expanded ? "收起" : "展开") \(item.id) \(item.displayTitle)")
                     cardMeta
+                    DemandReminderView(item: item)
                     if let version = item.version {
                         Label("\(version.label) · 基于 \(version.parentID)「\(version.parentTitle)」", systemImage: "arrow.triangle.branch")
                             .font(.system(size: 11)).foregroundStyle(.secondary)
@@ -1005,61 +1108,29 @@ struct ItemCardView: View {
                 if expanded {
                     DemandContextView(item: item)
                     cardDetails
-                    DemandDebuggingView(item: item)
-                    progressInput
+                    IncidentResultView(item: item)
+                    IncidentExperienceView(item: item)
+                    DemandHandoffView(item: item)
+                    DemandReleaseChecklistView(item: item)
+                    DemandWorktreesSection(item: item)
+                    if !item.isIncident || item.execution != nil { DemandDebuggingView(item: item) }
                     actionBar
                 }
         }
-        .padding(.horizontal, 14).padding(.vertical, 12)
-        .cardStyle(theme.current)
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .fill((vm.selectedID == item.id || hovered) ? theme.current.textPrimary.opacity(0.035) : Color.clear)
-                .allowsHitTesting(false)
-        )
-        .padding(.horizontal, 16)
-        .contentShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    private var progressInput: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 6) {
-                Image(systemName: "plus.circle").font(.system(size: 12)).foregroundStyle(theme.current.textMuted)
-                TextField("一句话记录今日进度，回车保存", text: $progressBuf)
-                    .textFieldStyle(.plain).font(.system(size: 13)).onSubmit { saveProgress() }
-                Button(addingProgressDetails ? "收起明细" : "补充明细") { addingProgressDetails.toggle() }
-                    .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
-                    .frame(minHeight: 28)
-                if !addingProgressDetails {
-                    Button("保存", action: saveProgress).controlSize(.small).disabled(progressBuf.trimmed.isEmpty)
-                }
-            }
-            if addingProgressDetails {
-                TextField("明细（可选，仅保留在本地）", text: $progressDetails, axis: .vertical)
-                    .textFieldStyle(.plain).font(.system(size: 13)).lineLimit(3...12)
-                HStack {
-                    Text("钉钉只同步一句话概括").font(.system(size: 11)).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("保存") { saveProgress() }.controlSize(.small).disabled(progressBuf.trimmed.isEmpty)
-                }
-            }
-        }
-        .padding(.horizontal, 8).padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 6).fill(theme.current.textPrimary.opacity(0.05)))
-    }
-
-    private func saveProgress() {
-        if vm.appendProgress(item.id, progressBuf, details: progressDetails) {
-            progressBuf = ""
-            progressDetails = ""
-            addingProgressDetails = false
-        }
+        .contentShape(Rectangle())
     }
 
     private var actionBar: some View {
         HStack(spacing: 10) {
-            actionBtn("编辑需求", "pencil") { vm.openDemandEditor(.details, item: item) }
+            actionBtn(item.isIncident ? "编辑排查" : "编辑需求", "pencil") { vm.openDemandEditor(.details, item: item) }
             actionBtn("追加变更", "wand.and.stars") { vm.openDemandEditor(.changes, item: item) }
+            if item.isIncident && item.status == .completed {
+                actionBtn("恢复排查", "arrow.uturn.backward") { vm.reopenIncident(item) }
+            } else {
+                actionBtn(vm.archivingIDs.contains(item.id) ? "正在完成…" : (item.isIncident ? "完结排查" : "完成"),
+                          "checkmark.circle") { vm.completeItem(item) }
+                    .disabled(vm.archivingIDs.contains(item.id))
+            }
             Spacer()
             Menu {
                 Menu("调整优先级") {
@@ -1069,11 +1140,10 @@ struct ItemCardView: View {
                         }
                     }
                 }
-                Button("完成并归档", systemImage: "archivebox") { vm.archiveItem(item) }
                 Divider()
                 Button("删除需求", systemImage: "trash", role: .destructive) { vm.deleteItem(item) }
             } label: { Label("更多", systemImage: "ellipsis").font(.system(size: 12)) }
-            .menuStyle(.borderlessButton).fixedSize()
+            .demandMenuStyle(.borderlessButton).fixedSize()
         }.padding(.top, 4)
     }
 
@@ -1083,7 +1153,7 @@ struct ItemCardView: View {
                 .padding(.horizontal, 6).frame(minHeight: 30).contentShape(Rectangle())
                 .foregroundStyle(tint ?? theme.current.textTertiary)
         }
-        .buttonStyle(.plain)
+        .demandButtonStyle(.plain)
     }
 
     @ViewBuilder
@@ -1091,14 +1161,14 @@ struct ItemCardView: View {
         HStack(spacing: 8) {
             Circle().fill(pcolor).frame(width: 6, height: 6)
             Text(item.displayTitle)
-                .font(fm.font(15, weight: .medium))
+                .font(fm.font(14, weight: .semibold))
                 .lineLimit(expanded ? nil : 2)
                 .foregroundStyle(theme.current.textPrimary)
             Spacer()
             if let label = item.deadlineLabel {
                 Text(label).font(.system(size: 11)).monospacedDigit()
                     .foregroundStyle(item.isUrgent ? Color.red : Color.secondary)
-                    .fixedSize().help(item.deadline ?? "")
+                    .fixedSize()
             }
             Image(systemName: "chevron.right").font(fm.font(13))
                 .rotationEffect(.degrees(expanded ? 90 : 0))
@@ -1108,24 +1178,36 @@ struct ItemCardView: View {
 
     @ViewBuilder
     private var cardMeta: some View {
-        HStack(spacing: 6) {
-            Text(item.id).font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(theme.current.textTertiary)
-            Text("·").font(fm.font(13)).foregroundStyle(theme.current.separator)
-            Text(item.project).font(fm.font(13)).foregroundStyle(theme.current.textTertiary)
-            Text("·").font(fm.font(13)).foregroundStyle(theme.current.separator)
-            StatusPill(status: item.status, onTap: {}, onSelect: { vm.cycleToStatus(item.id, target: $0) })
-            Spacer()
-            Button { vm.copyCurrentState(item.id) } label: {
-                Label("复制现状", systemImage: "doc.on.doc").font(.system(size: 12))
-                    .padding(.horizontal, 6).frame(minHeight: 28).contentShape(Rectangle())
+        HStack(spacing: 8) {
+            HStack(spacing: 5) {
+                DemandKindBadge(item: item)
+                Text(item.id).font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary).fixedSize()
+                if !item.project.isEmpty {
+                    Text("·").foregroundStyle(.tertiary)
+                    Text(DemandReminder.singleLine(item.project)).font(.system(size: 11))
+                        .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                }
+                StatusPill(status: item.status, onTap: {}, onSelect: { vm.cycleToStatus(item.id, target: $0) })
+                    .fixedSize()
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 4) {
+                Button { vm.copyCurrentState(item.id) } label: {
+                    Label("复制现状", systemImage: "doc.on.doc").fixedSize()
+                }
+                .demandButtonStyle(WorkspaceActionStyle())
+                .accessibilityLabel("复制现状").accessibilityIdentifier("demand-copy-" + item.id)
+                Button { vm.copyReviewTask(item.id) } label: {
+                    Image(systemName: "checkmark.bubble").font(.system(size: 12)).frame(width: 28, height: 28)
+                }
+                .demandButtonStyle(.plain).foregroundStyle(.secondary)
+                .accessibilityLabel("复制代码审查").accessibilityIdentifier("demand-review-copy-" + item.id)
+                Button { vm.openDemandEditor(.prompt, item: item) } label: {
+                    Image(systemName: "wand.and.stars").font(.system(size: 12)).frame(width: 28, height: 28)
+                }
+                .demandButtonStyle(.plain).foregroundStyle(.secondary)
+                .accessibilityLabel("编辑咒言").accessibilityIdentifier("demand-prompt-" + item.id)
             }
-            .buttonStyle(.plain).foregroundStyle(.secondary)
-            .accessibilityLabel("复制现状").accessibilityIdentifier("demand-copy-" + item.id)
-            .help("复制短指令，让 AI 通过 CLI 读取最新现状并继续")
-            Button { vm.openDemandEditor(.prompt, item: item) } label: {
-                Label("咒言", systemImage: "wand.and.stars")
-                    .font(.system(size: 12)).padding(.horizontal, 6).frame(minHeight: 28).contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityIdentifier("demand-prompt-" + item.id).foregroundStyle(.secondary).help("编写咒言，准备给 AI 的上下文")
         }
     }
 
@@ -1145,7 +1227,7 @@ struct ItemCardView: View {
                 .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain).accessibilityIdentifier("demand-chats-" + item.id)
+            .demandButtonStyle(.plain).accessibilityIdentifier("demand-chats-" + item.id).demandKeyboardID("demand-chats-" + item.id)
             if let error = item.chatReadError {
                 Text(error).font(.system(size: 12)).foregroundStyle(.orange)
             }
@@ -1154,7 +1236,7 @@ struct ItemCardView: View {
                     Label("追加变更 " + String(item.changes.count) + " 条", systemImage: "wand.and.stars")
                         .font(.system(size: 12)).foregroundStyle(.secondary)
                     Spacer()
-                    Button("查看变更") { vm.openDemandEditor(.changes, item: item) }.font(.system(size: 12)).buttonStyle(.plain)
+                    Button("查看变更") { vm.openDemandEditor(.changes, item: item) }.font(.system(size: 12)).demandButtonStyle(.plain)
                 }
             }
             if let error = item.changeReadError {
@@ -1163,8 +1245,9 @@ struct ItemCardView: View {
             if hasDetail {
                 if showDesc {
                     HStack(alignment: .top, spacing: 6) {
-                        Text("描述").font(fm.font(14)).foregroundStyle(theme.current.textMuted).frame(width: 30, alignment: .leading)
-                        Text(item.title).font(fm.font(14)).foregroundStyle(theme.current.textSecondary)
+                        Text(item.isIncident ? "现象" : "描述").font(fm.font(14)).foregroundStyle(theme.current.textMuted).frame(width: 30, alignment: .leading)
+                        if item.isIncident { DemandSpellContentView(text: item.title) }
+                        else { Text(item.title).font(fm.font(14)).foregroundStyle(theme.current.textSecondary) }
                     }
                 }
                 if hasBranch, let b = item.branch {
@@ -1194,6 +1277,7 @@ struct ItemCardView: View {
     @ViewBuilder
     private var contextMenuContent: some View {
         Button("复制现状", systemImage: "doc.text") { vm.copyCurrentState(item.id) }
+        Button("复制代码审查", systemImage: "checkmark.bubble") { vm.copyReviewTask(item.id) }
         Button("追加变更咒言", systemImage: "wand.and.stars") { vm.openDemandEditor(.changes, item: item) }
         Button("编辑咒言", systemImage: "wand.and.stars") { vm.openDemandEditor(.prompt, item: item) }
         Divider()
@@ -1244,7 +1328,7 @@ struct ItemCardView: View {
             }
         }
         Divider()
-        Button { vm.archiveItem(item) } label: { Label("完成并归档", systemImage: "archivebox") }
+        Button("完成", systemImage: "checkmark.circle") { vm.completeItem(item) }
         Button(role: .destructive) { vm.deleteItem(item) } label: { Label("删除", systemImage: "trash") }
     }
 }
@@ -1277,8 +1361,7 @@ struct StatusPill: View {
                 .foregroundStyle(fg).padding(.horizontal, 8).padding(.vertical, 4)
                 .background(fg.opacity(0.08), in: Capsule())
         }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-        .help("选择需求状态")
+        .demandMenuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
     }
 }
 
@@ -1291,7 +1374,7 @@ struct PrevSection: View {
     @State private var showHistory = false
     var body: some View {
         if let prev = vm.prevSec {
-            // 昨天：保持原有逻辑
+            // 昨天：保持����有逻辑
             if prev.allCompleted {
                 Button { expanded.toggle() } label: {
                     HStack {
@@ -1302,7 +1385,7 @@ struct PrevSection: View {
                     }
                     .padding(.horizontal, 16).padding(.vertical, 7)
                     .contentShape(Rectangle())
-                }.buttonStyle(.plain)
+                }.demandButtonStyle(.plain)
                 if expanded {
                     ForEach(Array(prev.items.filter { $0.isCompleted }.enumerated()), id: \.offset) { _, td in
                         TodoRow(idx: -1, todo: td, readOnly: true)
@@ -1320,7 +1403,7 @@ struct PrevSection: View {
                         }
                         .padding(.horizontal, 16).padding(.vertical, 7)
                         .contentShape(Rectangle())
-                    }.buttonStyle(.plain)
+                    }.demandButtonStyle(.plain)
                     if expanded {
                         ForEach(Array(done.enumerated()), id: \.offset) { _, td in
                             TodoRow(idx: -1, todo: td, readOnly: true)
@@ -1340,7 +1423,7 @@ struct PrevSection: View {
                     }
                     .padding(.horizontal, 16).padding(.vertical, 7)
                     .contentShape(Rectangle())
-                }.buttonStyle(.plain)
+                }.demandButtonStyle(.plain)
                 if showHistory {
                     ForEach(Array(vm.prevSecs.dropFirst()), id: \.dateLabel) { sec in
                         HistoryBlockView(sec: sec)
@@ -1368,7 +1451,7 @@ struct HistoryBlockView: View {
             }
             .padding(.horizontal, 16).padding(.vertical, 7)
             .contentShape(Rectangle())
-        }.buttonStyle(.plain)
+        }.demandButtonStyle(.plain)
         if expanded {
             ForEach(Array(sec.items.filter { $0.isCompleted }.enumerated()), id: \.offset) { _, td in
                 TodoRow(idx: -1, todo: td, readOnly: true)
@@ -1456,7 +1539,7 @@ struct TodaySection: View {
             Label(vm.newTodoText.isEmpty ? "添加" : "继续添加", systemImage: "plus")
                 .font(.system(size: 12))
         }
-        .buttonStyle(.plain).foregroundStyle(Color.accentColor)
+        .demandButtonStyle(.plain).foregroundStyle(Color.accentColor)
         .accessibilityLabel("添加今日零碎")
     }
 
@@ -1489,7 +1572,7 @@ struct TodoRow: View {
                     .font(.system(size: 18)).foregroundStyle(todo.isCompleted ? Color.green : Color.secondary)
                     .frame(width: 24, height: 24)
             }
-            .buttonStyle(.plain).disabled(readOnly || isEditing)
+            .demandButtonStyle(.plain).disabled(readOnly || isEditing)
             .accessibilityLabel(todo.isCompleted ? "恢复事项为未完成" : "完成事项")
             VStack(alignment: .leading, spacing: 8) {
                 if todo.isCarriedOver, let origin = todo.origin {
@@ -1520,8 +1603,7 @@ struct TodoRow: View {
                         if vm.items.contains(where: { $0.id == link }) { vm.focusItem(link) }
                         else { vm.showFeedback("关联需求不在当前本地看板中，请核对历史记录", failed: true) }
                     } label: { Label("关联 \(link)", systemImage: "link") }
-                    .font(.system(size: 11)).buttonStyle(.plain).foregroundStyle(Color.accentColor)
-                    .help("打开关联需求")
+                    .font(.system(size: 11)).demandButtonStyle(.plain).foregroundStyle(Color.accentColor)
                 }
                 if let time = todo.completedAt {
                     Text("完成于 \(time)").font(.system(size: 11)).foregroundStyle(.secondary)
@@ -1529,8 +1611,8 @@ struct TodoRow: View {
             }.frame(maxWidth: .infinity, alignment: .leading)
             if !readOnly {
                 Menu { actions } label: { Image(systemName: "ellipsis").frame(width: 24, height: 24) }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                    .disabled(isEditing).accessibilityLabel("事项操作").help("编辑、备注、复制或删除")
+                    .demandMenuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .disabled(isEditing).accessibilityLabel("事项操作")
             }
         }
         .padding(.horizontal, 20).padding(.vertical, 12)
@@ -1583,7 +1665,7 @@ struct IconBtn: View {
             Image(systemName: icon).font(fm.font(14)).foregroundStyle(color)
                 .frame(width: 20, height: 20)
         }
-        .buttonStyle(.plain)
+        .demandButtonStyle(.plain)
     }
 }
 
@@ -1595,6 +1677,7 @@ struct FooterView: View {
     var body: some View {
         HStack(spacing: 12) {
             EngineStrip()
+            LocalAudiServiceMenu()
             Spacer(minLength: 4)
             Text(vm.syncText.isEmpty ? "本地看板" : vm.syncText)
                 .font(.system(size: 11)).foregroundStyle(vm.syncKind == .fail ? Color.orange : Color.secondary)
@@ -1615,8 +1698,7 @@ struct FooterView: View {
                 Divider()
                 Button("设置…") { openSettings() }
             } label: { Image(systemName: "ellipsis.circle") }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-            .help("更多操作")
+            .demandMenuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
         }
         .padding(.horizontal, 20).padding(.vertical, 12)
         .background(.bar)
@@ -1636,7 +1718,7 @@ struct FooterButton: View {
                 .padding(.horizontal, 8).padding(.vertical, 4)
                 .background(RoundedRectangle(cornerRadius: 6).fill(hovered ? theme.current.accentPrimary.opacity(0.12) : Color.clear))
         }
-        .buttonStyle(SmoothButtonStyle(scale: 0.9))
+        .demandButtonStyle(SmoothButtonStyle(scale: 0.9))
         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: hovered)
         .onHover { hovered = $0 }
     }
@@ -1655,7 +1737,7 @@ struct FooterButtonIcon: View {
                 .padding(.horizontal, 6).padding(.vertical, 4)
                 .background(RoundedRectangle(cornerRadius: 6).fill(hovered ? theme.current.accentPrimary.opacity(0.12) : Color.clear))
         }
-        .buttonStyle(SmoothButtonStyle(scale: 0.9))
+        .demandButtonStyle(SmoothButtonStyle(scale: 0.9))
         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: hovered)
         .onHover { hovered = $0 }
     }

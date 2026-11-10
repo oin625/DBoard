@@ -27,7 +27,7 @@ final class DemandPromptDraftStore {
         do {
             let file = try JSONDecoder().decode(File.self, from: Data(contentsOf: url))
             guard file.version == 1,
-                  file.drafts.keys.allSatisfy({ $0.range(of: #"^D[0-9]{3,}$"#, options: .regularExpression) != nil }) else {
+                  file.drafts.keys.allSatisfy({ $0.range(of: #"^[DP][0-9]{3,}$"#, options: .regularExpression) != nil }) else {
                 throw CocoaError(.fileReadCorruptFile)
             }
             drafts = file.drafts

@@ -140,6 +140,26 @@ final class DemandChatPickerInteractionTests: XCTestCase {
     }
 
     @MainActor
+    func testRenderCrossOrganizationGroupNotice() async throws {
+        guard let output = ProcessInfo.processInfo.environment["DBOARD_INTERACTION_SNAPSHOTS"] else {
+            throw XCTSkip("Enable interaction snapshots explicitly")
+        }
+        let group = DemandChat(id: "cid-external", name: "高德-天猫深度合作")
+        let directory = DemandChatDirectory(knownURL: nil, fetch: { _ in
+            DemandChatPage(groups: [], nextCursor: nil)
+        }, search: { _, _ in DemandChatPage(groups: [], nextCursor: nil) }, discover: { _ in
+            DemandChatDiscovery(groups: [group], restrictedIDs: [group.id])
+        })
+        await directory.search("高德")
+        XCTAssertTrue(directory.groups.contains(group))
+        for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+            try render(DemandChatPicker(links: DemandChatLinks(primary: group), directory: directory,
+                confirm: { _ in }, cancel: {}), width: 560, height: 620,
+                name: "chat-cross-org-" + name, appearance: appearance, output: output)
+        }
+    }
+
+    @MainActor
     private func host<V: View>(_ view: V, width: CGFloat, height: CGFloat) -> NSWindow {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: NSRect(x: -10000, y: 0, width: width, height: height),

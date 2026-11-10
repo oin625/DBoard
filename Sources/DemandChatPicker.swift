@@ -32,6 +32,33 @@ struct DemandChatPage {
         }
         return DemandChatPage(groups: groups, nextCursor: cursor)
     }
+
+    static func decodeConversations(_ data: Data) throws -> DemandChatPage {
+        guard BusinessResponse.succeeded(data),
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = object["result"] as? [String: Any],
+              let rows = result["conversations"] as? [[String: Any]],
+              let more = result["hasMore"] as? NSNumber, CFGetTypeID(more) == CFBooleanGetTypeID() else {
+            throw DemandChatDirectoryError.unreadable
+        }
+        let groups = try rows.compactMap { row -> DemandChat? in
+            guard let single = row["singleChat"] as? NSNumber, CFGetTypeID(single) == CFBooleanGetTypeID() else {
+                throw DemandChatDirectoryError.unreadable
+            }
+            if single.boolValue { return nil }
+            guard let id = row["openConversationId"] as? String, let name = row["title"] as? String else {
+                throw DemandChatDirectoryError.unreadable
+            }
+            let chat = DemandChat(id: id, name: name)
+            guard chat.isValid else { throw DemandChatDirectoryError.unreadable }
+            return chat
+        }
+        let cursor = (result["nextCursor"] as? NSNumber).flatMap {
+            CFGetTypeID($0) == CFBooleanGetTypeID() ? nil : $0.stringValue
+        } ?? (result["nextCursor"] as? String)
+        if more.boolValue && (cursor == nil || cursor!.isEmpty) { throw DemandChatDirectoryError.unreadable }
+        return DemandChatPage(groups: groups, nextCursor: more.boolValue ? cursor : nil)
+    }
 }
 
 enum DemandChatDirectoryError: LocalizedError {
@@ -49,28 +76,77 @@ enum DemandChatDirectoryError: LocalizedError {
 final class DemandChatDirectory: ObservableObject {
     static let shared = DemandChatDirectory()
     typealias Fetch = (String?) async throws -> DemandChatPage
-    @Published private(set) var groups: [DemandChat]
+    typealias Search = (String, String?) async throws -> DemandChatPage
+    typealias Discover = (String) async throws -> DemandChatDiscovery
+    @Published private(set) var groups: [DemandChat] = []
     @Published private(set) var isLoading = false
+    @Published private(set) var isSearching = false
     @Published private(set) var error: String?
+    @Published private(set) var searchError: String?
+    @Published private(set) var restrictedGroupIDs: Set<String> = []
     private let fetch: Fetch
+    private let conversations: Fetch?
+    private let searchFetch: Search?
+    private let discoverFetch: Discover?
+    private let knownURL: URL?
+    private let cacheURL: URL?
     private var loadedAt: Date?
+    private var searchRequest = UUID()
 
     init(knownURL: URL? = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".dws/reply-daemon/known-groups.json"), fetch: Fetch? = nil) {
+            .appendingPathComponent(".dws/reply-daemon/known-groups.json"), fetch: Fetch? = nil,
+         conversations: Fetch? = nil, search: Search? = nil, discover: Discover? = nil, cacheURL: URL? = nil) {
+        self.knownURL = knownURL
+        self.cacheURL = cacheURL ?? (fetch == nil ? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/dboard-chat-directory.json") : nil)
+        self.fetch = fetch ?? { cursor in
+            var arguments = ["chat", "group", "list-all", "--limit", "200"]
+            if let cursor { arguments += ["--cursor", cursor] }
+            return try DemandChatPage.decode(await Self.run(arguments))
+        }
+        self.conversations = conversations ?? (fetch == nil ? { cursor in
+            var arguments = ["chat", "list-all-conversations", "--limit", "100"]
+            if let cursor { arguments += ["--cursor", cursor] }
+            return try DemandChatPage.decodeConversations(await Self.run(arguments))
+        } : nil)
+        self.searchFetch = search ?? (fetch == nil ? { query, cursor in
+            var arguments = ["chat", "search", "--query", query, "--limit", "100"]
+            if let cursor { arguments += ["--cursor", cursor] }
+            return try DemandChatPage.decode(await Self.run(arguments))
+        } : nil)
+        self.discoverFetch = discover ?? (fetch == nil ? DemandChatDiscoveryService.discover : nil)
+        if let cache = self.cacheURL, let bytes = try? Data(contentsOf: cache) {
+            if let stored = try? JSONDecoder().decode(DemandChatDirectoryCache.self, from: bytes) {
+                restrictedGroupIDs = stored.restrictedIDs
+                merge(stored.groups.filter(\.isValid), persist: false)
+            } else if let stored = try? JSONDecoder().decode([DemandChat].self, from: bytes) {
+                merge(stored.filter(\.isValid), persist: false)
+            }
+        }
         if let knownURL, let data = try? Data(contentsOf: knownURL),
            let known = try? JSONDecoder().decode([String: String].self, from: data) {
-            groups = known.map { DemandChat(id: $0.key, name: $0.value) }.filter(\.isValid)
-        } else { groups = [] }
-        self.fetch = fetch ?? { cursor in
-            try await Task.detached(priority: .utility) {
-                var arguments = ["chat", "group", "list-all", "--limit", "200", "--format", "json", "--timeout", "20"]
-                if let cursor { arguments += ["--cursor", cursor] }
-                // Passing nil to Process.environment loses the login environment on macOS.
-                let result = ProcessRunner.run(NSHomeDirectory() + "/.qoderwork/bin/dws", arguments: arguments,
-                    environment: ProcessInfo.processInfo.environment, timeout: 25)
-                guard result.succeeded else { throw DemandChatDirectoryError.unavailable }
-                return try DemandChatPage.decode(result.stdout)
-            }.value
+            merge(known.map { DemandChat(id: $0.key, name: $0.value) }.filter(\.isValid), persist: false)
+        }
+    }
+
+    private static func run(_ arguments: [String]) async throws -> Data {
+        try await Task.detached(priority: .utility) {
+            let result = ProcessRunner.run(NSHomeDirectory() + "/.qoderwork/bin/dws",
+                arguments: arguments + ["--format", "json", "--timeout", "20"],
+                environment: ProcessInfo.processInfo.environment, timeout: 25)
+            guard result.succeeded else { throw DemandChatDirectoryError.unavailable }
+            return result.stdout
+        }.value
+    }
+
+    private func merge(_ values: [DemandChat], persist: Bool = true) {
+        var indexed: [String: DemandChat] = [:]
+        for group in groups + values where group.isValid { indexed[group.id] = group }
+        groups = indexed.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        if persist, let cacheURL, let bytes = try? JSONEncoder().encode(
+            DemandChatDirectoryCache(groups: groups, restrictedIDs: restrictedGroupIDs)) {
+            try? FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? bytes.write(to: cacheURL, options: .atomic)
         }
     }
 
@@ -80,23 +156,83 @@ final class DemandChatDirectory: ObservableObject {
         isLoading = true
         error = nil
         defer { isLoading = false }
+        if let knownURL, let bytes = try? Data(contentsOf: knownURL),
+           let known = try? JSONDecoder().decode([String: String].self, from: bytes) {
+            merge(known.map { DemandChat(id: $0.key, name: $0.value) })
+        }
+        for source in [fetch, conversations].compactMap({ $0 }) {
+            var cursor: String?
+            var visited = Set<String>()
+            do {
+                repeat {
+                    try Task.checkCancellation()
+                    let page = try await source(cursor)
+                    try Task.checkCancellation()
+                    merge(page.groups)
+                    cursor = page.nextCursor
+                    if let cursor, !visited.insert(cursor).inserted { throw DemandChatDirectoryError.repeatedCursor }
+                } while cursor != nil
+            } catch is CancellationError { return }
+            catch { self.error = error.localizedDescription }
+        }
+        if error == nil { loadedAt = Date() }
+    }
+
+    func search(_ query: String) async {
+        let token = UUID()
+        searchRequest = token
+        searchError = nil
+        let query = query.trimmed
+        guard !query.isEmpty, let searchFetch else { isSearching = false; return }
+        isSearching = true
+        defer { if searchRequest == token { isSearching = false } }
         var cursor: String?
         var visited = Set<String>()
         do {
             repeat {
                 try Task.checkCancellation()
-                let page = try await fetch(cursor)
+                let page = try await searchFetch(query, cursor)
                 try Task.checkCancellation()
-                var indexed = Dictionary(uniqueKeysWithValues: groups.map { ($0.id, $0) })
-                for chat in page.groups { indexed[chat.id] = chat }
-                groups = indexed.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+                guard searchRequest == token else { return }
+                merge(page.groups)
                 cursor = page.nextCursor
                 if let cursor, !visited.insert(cursor).inserted { throw DemandChatDirectoryError.repeatedCursor }
             } while cursor != nil
-            loadedAt = Date()
-        } catch is CancellationError {
-            // Closing the picker stops further pages; existing associations remain untouched.
-        } catch { self.error = error.localizedDescription }
+        } catch is CancellationError { return }
+        catch { if searchRequest == token { searchError = "钉钉搜索暂时失败，当前仍可搜索已加载的群聊；请重试。" } }
+        guard searchRequest == token, !Task.isCancelled, let discoverFetch,
+              DemandChatSearch.normalize(query).count >= 2 else { return }
+        do {
+            let discovered = try await discoverFetch(query)
+            try Task.checkCancellation()
+            guard searchRequest == token else { return }
+            let verifiedIDs = Set(discovered.groups.map(\.id))
+            restrictedGroupIDs.subtract(verifiedIDs)
+            restrictedGroupIDs.formUnion(discovered.restrictedIDs.intersection(verifiedIDs))
+            merge(discovered.groups)
+            if !discovered.groups.isEmpty { searchError = nil }
+        } catch is CancellationError {}
+        catch {
+            if searchRequest == token {
+                searchError = "钉钉扩展搜索暂时失败，当前仍可选择已加载的群聊；请重试。"
+            }
+        }
+    }
+}
+
+enum DemandChatSearch {
+    static func normalize(_ value: String) -> String {
+        value.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current)
+            .unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters).contains($0) }
+            .map(String.init).joined()
+    }
+    static func matches(_ chat: DemandChat, query: String) -> Bool {
+        let terms = query.trimmed.split(whereSeparator: \.isWhitespace)
+        let name = normalize(chat.name)
+        return terms.allSatisfy { term in
+            let normalized = normalize(String(term))
+            return !normalized.isEmpty && (name.contains(normalized) || chat.id.localizedStandardContains(String(term)))
+        }
     }
 }
 
@@ -144,9 +280,8 @@ struct DemandChatLinksFields: View {
             .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier(role == .primary ? "demand-chat-primary-picker" : "demand-chat-secondary-picker")
-        .help("选择、更换或移除关联群聊")
+        .demandButtonStyle(.plain)
+        .accessibilityIdentifier(role == .primary ? "demand-chat-primary-picker" : "demand-chat-secondary-picker").demandKeyboardID(role == .primary ? "demand-chat-primary-picker" : "demand-chat-secondary-picker")
     }
 }
 
@@ -191,12 +326,7 @@ struct DemandChatPicker: View {
         }
     }
 
-    private var shown: [DemandChat] {
-        let terms = query.trimmed.split(whereSeparator: \.isWhitespace)
-        return candidates.filter { chat in
-            terms.allSatisfy { chat.name.localizedStandardContains(String($0)) || chat.id.localizedStandardContains(String($0)) }
-        }
-    }
+    private var shown: [DemandChat] { candidates.filter { DemandChatSearch.matches($0, query: query) } }
 
     private var result: DemandChatLinks {
         let indexed = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
@@ -227,9 +357,12 @@ struct DemandChatPicker: View {
                 Label("关联群聊", systemImage: "bubble.left.and.bubble.right")
                     .font(.system(size: 16, weight: .semibold))
                 Spacer()
-                Button { Task { await directory.load(force: true) } } label: {
+                Button { Task {
+                    await directory.load(force: true)
+                    if !query.trimmed.isEmpty { await directory.search(query) }
+                } } label: {
                     Label("刷新群列表", systemImage: "arrow.clockwise")
-                }.controlSize(.small).disabled(directory.isLoading)
+                }.controlSize(.small).disabled(directory.isLoading || directory.isSearching)
             }
             Text("选一个主要群聊，再按需添加次要群聊；都可以留空。")
                 .font(.system(size: 12)).foregroundStyle(.secondary)
@@ -238,10 +371,10 @@ struct DemandChatPicker: View {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("搜索群名称或群 ID", text: $query)
                     .textFieldStyle(.plain).focused($searchFocused)
-                    .accessibilityIdentifier("demand-chat-search")
+                    .accessibilityIdentifier("demand-chat-search").demandKeyboardID("demand-chat-search")
                 if !query.isEmpty {
                     Button { query = ""; searchFocused = true } label: { Image(systemName: "xmark.circle.fill") }
-                        .buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("清空群聊搜索")
+                        .demandButtonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("清空群聊搜索")
                 }
             }
             .padding(10).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
@@ -259,7 +392,7 @@ struct DemandChatPicker: View {
                             VStack(spacing: 8) {
                                 Image(systemName: query.isEmpty ? "bubble.left" : "magnifyingglass")
                                     .font(.system(size: 24)).foregroundStyle(.tertiary)
-                                Text(directory.isLoading && query.isEmpty ? "正在加载群聊…" : query.isEmpty ? "暂无可选群聊" : "没有匹配的群聊")
+                                Text(directory.isSearching ? "正在搜索钉钉群聊…" : directory.isLoading && query.isEmpty ? "正在加载群聊…" : query.isEmpty ? "暂无可选群聊" : "钉钉未返回匹配的群聊")
                                     .font(.system(size: 13)).foregroundStyle(.secondary)
                                 if !query.isEmpty { Button("清空搜索") { query = "" }.controlSize(.small) }
                             }.frame(maxWidth: .infinity).padding(.vertical, 40)
@@ -273,17 +406,21 @@ struct DemandChatPicker: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             HStack(spacing: 8) {
-                if directory.isLoading { ProgressView().controlSize(.small) }
-                Text(directory.isLoading ? "正在更新，已加载 \(directory.groups.count) 个群；现在就可以选择"
+                if directory.isLoading || directory.isSearching { ProgressView().controlSize(.small) }
+                Text(directory.isSearching ? "正在钉钉搜索群聊…"
+                     : directory.isLoading ? "正在更新，已加载 \(directory.groups.count) 个群；现在就可以选择"
                      : "可选 \(candidates.count) 个群 · 已选 \(selection.all.count) 个")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer()
             }
-            if let error = directory.error {
+            if let error = directory.searchError ?? directory.error {
                 HStack(spacing: 8) {
                     Label(error, systemImage: "exclamationmark.circle")
                         .font(.system(size: 11)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
-                    Button("重试") { Task { await directory.load(force: true) } }.controlSize(.small)
+                    Button("重试") { Task {
+                        if query.trimmed.isEmpty { await directory.load(force: true) }
+                        else { await directory.search(query) }
+                    } }.controlSize(.small)
                 }
             }
             if let feedbackError {
@@ -296,14 +433,20 @@ struct DemandChatPicker: View {
                 Spacer()
                 Button("取消", action: cancel).keyboardShortcut(.cancelAction)
                 Button("完成关联") { confirm(result) }
-                    .buttonStyle(.borderedProminent).keyboardShortcut(.return, modifiers: .command)
-                    .accessibilityIdentifier("demand-chat-confirm")
+                    .demandButtonStyle(.borderedProminent).keyboardShortcut(.return, modifiers: .command)
+                    .accessibilityIdentifier("demand-chat-confirm").demandKeyboardID("demand-chat-confirm")
             }
         }
         .padding(20).frame(minWidth: 480, idealWidth: 560, maxWidth: 640, minHeight: 520, idealHeight: 620)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background { DemandCanvasBackground() }
         .background(WindowNumberReader { windowNumber = $0 })
         .onChange(of: query) { _, _ in highlightedID = shown.first?.id }
+        .task(id: query.trimmed) {
+            if !query.trimmed.isEmpty {
+                do { try await Task.sleep(for: .milliseconds(400)) } catch { return }
+            }
+            await directory.search(query)
+        }
         .onAppear {
             searchFocused = true
             installKeyboard()
@@ -345,7 +488,7 @@ struct DemandChatPicker: View {
             Text(chat.name).font(.system(size: 12)).lineLimit(1)
             Button(action: remove) {
                 Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)).padding(4)
-            }.buttonStyle(.plain).accessibilityLabel("移除群聊：" + chat.name)
+            }.demandButtonStyle(.plain).accessibilityLabel("移除群聊：" + chat.name)
         }
         .padding(.leading, 8).padding(.trailing, 4).padding(.vertical, 4)
         .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
@@ -365,6 +508,10 @@ struct DemandChatPicker: View {
                     if duplicateName {
                         Text("群 ID …" + chat.id.suffix(10)).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
                     }
+                    if directory.restrictedGroupIDs.contains(chat.id) {
+                        Text("跨组织内部群 · 读取聊天记录需钉钉授权")
+                            .font(.system(size: 11)).foregroundStyle(.orange)
+                    }
                 }
                 Spacer()
                 if primary || secondary {
@@ -376,8 +523,8 @@ struct DemandChatPicker: View {
             .background(highlightedID == chat.id ? Color.accentColor.opacity(0.1) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain).disabled(disabled)
-        .accessibilityIdentifier("demand-chat-row-" + chat.id)
+        .demandButtonStyle(.plain).disabled(disabled)
+        .accessibilityIdentifier("demand-chat-row-" + chat.id).demandKeyboardID("demand-chat-row-" + chat.id)
         .accessibilityLabel(chat.name + (primary ? "，主要群" : secondary ? "，次要群" : ""))
     }
 

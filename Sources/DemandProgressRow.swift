@@ -23,7 +23,7 @@ struct DemandProgressRow: View {
                                 Image(systemName: detailsExpanded ? "chevron.up" : "chevron.down")
                             }.font(.system(size: 11)).foregroundStyle(theme.current.textTertiary)
                         }
-                        .buttonStyle(.plain).fixedSize().padding(.top, 2)
+                        .demandButtonStyle(.plain).fixedSize().padding(.top, 2)
                         .accessibilityLabel((detailsExpanded ? "收起明细：" : "展开明细：") + record.summary)
                     }
                 }

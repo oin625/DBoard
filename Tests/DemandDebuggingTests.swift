@@ -23,13 +23,22 @@ final class DemandDebuggingTests: XCTestCase {
         - **进度**：
             - 11.1: 开发完成，待联调。
         """.write(to: file, atomically: true, encoding: .utf8)
+        let repository = dir.appendingPathComponent("ultra")
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        XCTAssertTrue(HandoffCLIFixture.run("/usr/bin/git", arguments: ["-C", repository.path, "init", "-q", "-b", "feature/fixture"]).succeeded)
+        XCTAssertTrue(HandoffCLIFixture.run("/usr/bin/git", arguments: ["-C", repository.path, "-c", "user.name=DBoard Test",
+            "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "测试初始提交"]).succeeded)
+        let show = try cli(file, ["show", "D014"])
+        let item = try XCTUnwrap(show["item"] as? [String: Any])
+        _ = try cli(file, ["report", "D014", "--expect-title", try XCTUnwrap(item["title"] as? String),
+            "--expect-revision", try XCTUnwrap(item["revision"] as? String), "--repo", repository.path, "--no-sync"])
         try body(file)
     }
 
     private func cli(_ file: URL, _ arguments: [String]) throws -> [String: Any] {
         let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Tools/dboard_ai.py").path
-        let result = ProcessRunner.run("/usr/bin/env", arguments: ["python3", source, "--cache", file.path] + arguments)
+        let result = HandoffCLIFixture.run("/usr/bin/env", arguments: ["python3", source, "--cache", file.path] + arguments)
         XCTAssertEqual(result.exitCode, 0, String(data: result.stdout, encoding: .utf8) ?? "")
         return try XCTUnwrap(try JSONSerialization.jsonObject(with: result.stdout) as? [String: Any])
     }
@@ -39,7 +48,39 @@ final class DemandDebuggingTests: XCTestCase {
         _ = try cli(file, ["report", "D014", "--expect-title", try XCTUnwrap(item["title"] as? String),
                           "--expect-revision", try XCTUnwrap(item["revision"] as? String),
                           "--summary", "本轮核验结果已记录，待用户验收。", "--details", "已核对本需求接口与关键业务步骤。",
-                          "--stage", stage, "--no-sync"] + extra)
+                          "--stage", stage, "--no-sync"] + (stage == "developing" ? [] : ["--expect-code", try XCTUnwrap(item["code_revision"] as? String)]) + extra)
+    }
+
+    @MainActor
+    func testCodeChangesInvalidateCLIAndPanelWithoutChangingDemandScope() throws {
+        try fixture { file in
+            let code = file.deletingLastPathComponent().appendingPathComponent("ultra/service.swift")
+            try "original implementation".write(to: code, atomically: true, encoding: .utf8)
+            try report(file, stage: "development-complete")
+            try report(file, stage: "debug-page-ready", extra: ["--debug-page", "/test-console/fixture"])
+            try report(file, stage: "testing-passed")
+            let before = try DItemStore.currentItem(id: "D014", at: file)
+            XCTAssertFalse(before.executionNeedsReview)
+            XCTAssertEqual(before.execution?.code?.count, 1)
+            try "later implementation".write(to: code, atomically: true, encoding: .utf8)
+            let after = try DItemStore.currentItem(id: "D014", at: file)
+            XCTAssertEqual(after.executionScope, before.executionScope)
+            XCTAssertEqual(after.execution, before.execution)
+            XCTAssertTrue(after.executionNeedsReview)
+            XCTAssertEqual(after.executionLabel, "代码已变更 · 需重新核验")
+            XCTAssertTrue(AudiLocalTarget.canLaunch(after), "The existing page remains available for investigation")
+            let vm = DBoardViewModel(loadCache: false)
+            vm.items = CacheParser.parse(content: try String(contentsOf: file, encoding: .utf8)).items
+            XCTAssertEqual(vm.items[0].executionLabel, "代码版本待核对")
+            vm.refreshCodeReviews()
+            let deadline = Date().addingTimeInterval(5)
+            while vm.items[0].executionCodeReview == nil && Date() < deadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            }
+            XCTAssertEqual(vm.items[0].executionLabel, "代码已变更 · 需重新核验")
+            try report(file, stage: "developing")
+            XCTAssertEqual(try DItemStore.currentItem(id: "D014", at: file).execution?.debugPage, "/test-console/fixture")
+        }
     }
 
     func testPythonReportsParseInSwiftAndScopeInvalidatesOnRequirementChange() throws {

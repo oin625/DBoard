@@ -262,7 +262,6 @@ struct OpsActionRow: View {
                     if action.id == OpsAction.douyinCookie.id, let expiry = cookieReminder.expiry {
                         Text(expiry.summary).font(.system(size: 11))
                             .foregroundStyle(expiry.needsReminder ? Color.orange : theme.current.textTertiary)
-                            .help(expiry.detail)
                     }
                 }
                 Spacer(minLength: 6)
@@ -272,7 +271,6 @@ struct OpsActionRow: View {
                     }
                     .buttonStyle(.borderless)
                     .foregroundStyle(theme.current.textTertiary)
-                    .help("查看输出")
                 }
                 if st.phase == .running {
                     ProgressView().controlSize(.small)
@@ -331,7 +329,7 @@ struct DBoardModule: Identifiable {
         switch id {
         case "reqflow": return ["需求", "PRD", "项目", "交付物"]
         case "bizmap": return ["业务", "服务", "地图", "路由"]
-        case "logs", "logsearch": return ["日志", "查日志", "trace", "排查", "log"]
+        case "logs": return ["日志", "查日志", "trace", "排查", "log"]
         case "apprelease": return ["发布", "部署", "制品", "release", "deploy"]
         case "audihome": return ["首页", "后台", "audi"]
         case "clipboard": return ["剪贴板", "复制", "粘贴", "clip"]
@@ -362,7 +360,6 @@ struct DBoardModule: Identifiable {
         DBoardModule(id: "reqflow", title: "ReqFlow 需求流", icon: "point.3.connected.trianglepath.dotted", shortcut: "⌃E") { BizMapBoardWindowController.shared.toggleWindow(requirements: true) },
         DBoardModule(id: "bizmap", title: "BizMap 业务地图", icon: "map", shortcut: "") { BizMapBoardWindowController.shared.toggleWindow(requirements: false) },
         DBoardModule(id: "logs", title: "Audi 日志", icon: "doc.text.magnifyingglass", shortcut: "⌃L") { AppReleaseWindowController.shared.toggleLogs() },
-        DBoardModule(id: "logsearch", title: "日志快搜", icon: "magnifyingglass", shortcut: "⌃⇧L") { LogSearchWindowController.shared.show() },
         DBoardModule(id: "apprelease", title: "应用发布台", icon: "paperplane", shortcut: "⌃Q") { AppReleaseWindowController.shared.toggle() },
         DBoardModule(id: "audihome", title: "Audi 首页", icon: "house", shortcut: "⌃W") { AppReleaseWindowController.shared.toggleHome() },
         DBoardModule(id: "clipboard", title: "剪切板历史", icon: "doc.on.clipboard", shortcut: "⌥V") { ClipboardBoardWindowController.shared.show() },

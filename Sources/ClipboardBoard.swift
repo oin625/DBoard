@@ -852,7 +852,6 @@ struct ClipboardBoardView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(theme.current.textSecondary)
-                .help("关闭")
             } else {
                 TearOffButton(key: "ClipboardBoard")
             }
@@ -864,7 +863,6 @@ struct ClipboardBoardView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(theme.current.textSecondary)
-            .help("设置")
         }
         .padding(.horizontal, 12)
         .padding(.top, 10)
@@ -1136,7 +1134,6 @@ struct ClipRow: View, Equatable {
                 Image(systemName: "lock.fill")
                     .font(.system(size: 9))
                     .foregroundStyle(.orange.opacity(0.85))
-                    .help("敏感内容，到期自动删除")
             }
             if clip.pinned {
                 Image(systemName: "pin.fill")

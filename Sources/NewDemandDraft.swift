@@ -30,7 +30,7 @@ final class NewDemandDraftStore {
         do {
             let file = try JSONDecoder().decode(File.self, from: Data(contentsOf: url))
             guard file.version == 1,
-                  file.draft.id.range(of: #"^D[0-9]{3,}$"#, options: .regularExpression) != nil else {
+                  file.draft.id.range(of: #"^[DP][0-9]{3,}$"#, options: .regularExpression) != nil else {
                 throw CocoaError(.fileReadCorruptFile)
             }
             draft = file.draft
@@ -78,20 +78,32 @@ final class NewDemandDraftStore {
 }
 
 extension DBoardViewModel {
-    func beginNewItemDraft() {
-        NotificationCenter.default.post(name: .init("DBoardEditorWillOpen"), object: nil)
-        let nextID = DItemStore.nextID()
-        var value = newItemDraft ?? DItemDraft(newID: nextID, priority: .p1)
-        // A long-lived draft doesn't reserve an ID while other demands are created.
-        value.id = nextID
+    func beginNewItemDraft(kind: DemandKind? = nil, centerIn: NSRect? = nil) {
+        newDemandWindowCenterRect = centerIn
+        if newItemFormOpen {
+            newDemandWindowPresenter?(self)
+            return
+        }
+        var value = newItemDraft ?? DItemDraft(newID: "", priority: .p1)
+        if let kind, !value.hasUserInput {
+            value.kind = kind
+            if kind == .incident { value.priority = .p0; value.status = .inProgress }
+        }
+        // A long-lived draft does not reserve an ID while other tasks are created.
+        value.id = DItemStore.nextID(kind: value.effectiveKind)
         newItemDraft = value
+        newItemFormInWindow = newDemandWindowPresenter != nil
+        if !newItemFormInWindow {
+            NotificationCenter.default.post(name: .init("DBoardEditorWillOpen"), object: nil)
+        }
         newItemFormOpen = true
         updateNewItemDraft(value)
+        newDemandWindowPresenter?(self)
     }
 
-    func updateNewItemDraft(_ value: DItemDraft) {
-        // Disappearing forms must not resurrect a draft after successful creation or explicit clearing.
-        guard newItemDraft?.id == value.id else { return }
+    func updateNewItemDraft(_ value: DItemDraft, previousID: String? = nil) {
+        // Only the current editor can switch ID namespaces; late callbacks cannot resurrect a draft.
+        guard newItemDraft != nil, newItemDraft?.id == (previousID ?? value.id) else { return }
         newItemDraft = value
         if let store = newItemDraftStore {
             _ = store.save(value)
@@ -104,6 +116,7 @@ extension DBoardViewModel {
             newItemDraftError = "需求已创建，但草稿清除失败；请勿重复创建。"
         } else { newItemDraftError = nil }
         newItemFormOpen = false
+        newItemFormInWindow = false
         newItemDraft = nil
     }
 
@@ -114,6 +127,7 @@ extension DBoardViewModel {
         }
         newItemDraftError = nil
         newItemFormOpen = false
+        newItemFormInWindow = false
         newItemDraft = nil
     }
 }

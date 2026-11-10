@@ -1007,7 +1007,7 @@ struct AgentsBoardView: View {
                         Image(systemName: "doc.text").font(.system(size: 10))
                             .foregroundStyle(theme.current.textSecondary)
                     }
-                    .buttonStyle(.plain).help(a.path)
+                    .buttonStyle(.plain)
                 }
                 // 自建才能删; 物理删除, 两段式确认防误触
                 if a.origin == "自建" {
@@ -1029,7 +1029,7 @@ struct AgentsBoardView: View {
                             Image(systemName: "trash").font(.system(size: 10))
                                 .foregroundStyle(Color(hex: "#d94f4f").opacity(0.75))
                         }
-                        .buttonStyle(.plain).help("物理删除该 agent 文件（不可恢复）")
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -1260,7 +1260,7 @@ struct MemoryBoardView: View {
                         .font(.system(size: 9))
                         .foregroundStyle(theme.current.textMuted.opacity(0.7))
                 }
-                .buttonStyle(.plain).help("用默认编辑器打开原文件")
+                .buttonStyle(.plain)
             }
             .contentShape(Rectangle())
             .onTapGesture {

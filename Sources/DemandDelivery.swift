@@ -1,9 +1,16 @@
 import Foundation
 import SwiftUI
+import AppKit
 
 enum DemandDeliveryError: LocalizedError {
     case message(String)
-    var errorDescription: String? { if case .message(let value) = self { return value }; return nil }
+    case missingTechnicalPlan(DItem)
+    var errorDescription: String? {
+        switch self {
+        case .message(let value): return value
+        case .missingTechnicalPlan: return "尚未准备技术方案，请先复制方案指令交给 AI。"
+        }
+    }
 }
 
 struct DemandDeliveryProject: Codable, Equatable {
@@ -19,6 +26,12 @@ struct DemandDeliveryProject: Codable, Equatable {
     static func validName(_ value: String) -> Bool {
         !value.isEmpty && !["待定", "待补充", "（待补充）"].contains(value)
             && value.range(of: #"^[A-Za-z0-9_.-]+$"#, options: .regularExpression) != nil
+    }
+
+    static func isIntegrationBranch(_ value: String) -> Bool {
+        let branch = value.lowercased()
+        return ["pre", "staging", "release", "integration"].contains(branch) ||
+            branch.hasPrefix("merge/") || branch.hasPrefix("integration/") || branch.hasPrefix("release/")
     }
 
     static func validBranch(_ value: String) -> Bool {
@@ -44,7 +57,8 @@ struct DemandDeliveryPlan {
     }
 
     static func load(id: String, at url: URL = URL(fileURLWithPath: CacheFile.path),
-                     repositoryName: (String) throws -> String = gitRepositoryName) throws -> Self {
+                     repositoryName: (String) throws -> String = gitRepositoryName,
+                     codeRevision: ([DemandVersion.Repository]) -> String? = DemandTechnicalPlan.currentCodeRevision) throws -> Self {
         guard let snapshot = CacheFile.withLock(at: url, {
             Result<(DItem, [String]), Error> {
                 let text = try String(contentsOf: url, encoding: .utf8)
@@ -64,11 +78,18 @@ struct DemandDeliveryPlan {
             }
         }) else { throw DemandDeliveryError.message("需求数据暂时无法读取，请重试。") }
         let (item, block) = try snapshot.get()
+        if item.technicalPlan == nil && item.technicalPlanReadError == nil {
+            throw DemandDeliveryError.missingTechnicalPlan(item)
+        }
         let prefix = "<!-- dboard-ai-feedback:v1:"
         let repositories = block.contains { $0.hasPrefix(prefix) }
             ? try DemandVersion.repositoryHints(block, item: item) : []
         let plan = try make(item: item, repositories: repositories, repositoryName: repositoryName)
-        return plan.includingReference(DemandDeliveryReference.read(item: item, repositories: repositories, projects: plan.projects))
+        guard let document = item.technicalPlan,
+              document.reviewReason(item: item, codeRevision: codeRevision(repositories)) == nil else {
+            throw DemandDeliveryError.message("技术方案与当前需求或代码不匹配，请先让 AI 核对更新。")
+        }
+        return plan
     }
 
     static func make(item: DItem, repositories: [DemandVersion.Repository] = [],
@@ -117,14 +138,23 @@ struct DemandDeliveryPlan {
               Set(projects.map(\.name)).count == projects.count else {
             throw DemandDeliveryError.message("项目或分支不完整、重复或格式不正确，请先编辑补全。")
         }
-        let progress = item.milestones.filter { $0.content != feedbackSummary }.map(\.fullContent)
-        let identity: [String: Any] = ["documentFormat": DemandDeliveryDocument.formatVersion,
-            "id": item.id, "title": item.displayTitle,
-            "reqId": link.id, "reqNo": link.no, "project": projects.map(\.declaration),
-            "status": item.status.rawValue, "prompt": item.prompt, "description": item.title,
-            "changes": item.changes.map { ["id": $0.id, "intent": $0.intent] }, "progress": progress]
-        let data = try JSONSerialization.data(withJSONObject: identity, options: [.sortedKeys])
-        return Self(item: item, link: link, projects: projects, key: ContentRevision.hash(String(decoding: data, as: UTF8.self)))
+        if let project = projects.first(where: { DemandDeliveryProject.isIntegrationBranch($0.branch) }) {
+            throw DemandDeliveryError.message("\(project.name) 的 \(project.branch) 是合并分支，请先填写本需求的实际开发分支再提交。")
+        }
+        guard let document = item.technicalPlan, document.isValid, item.technicalPlanReadError == nil else {
+            throw DemandDeliveryError.message(item.technicalPlanReadError ?? "尚未准备技术方案，请先复制方案指令交给 AI。")
+        }
+        guard document.scopeHash == item.executionScope else {
+            throw DemandDeliveryError.message("需求已变化，请先让 AI 核对技术方案。")
+        }
+        guard Set(document.projects.map(\.declaration)) == Set(projects.map(\.declaration)),
+              !projects.contains(where: { project in item.environmentRepositories.contains {
+                  $0.branch == project.branch && (try? repositoryName($0.path)) == project.name
+              } }) else {
+            throw DemandDeliveryError.message("方案中的开发分支与当前记录不一致，或使用了预发／发布分支，请先核对。")
+        }
+        let identity = document.revision + "\0" + String(link.id) + "\0" + link.no
+        return Self(item: item, link: link, projects: projects, key: ContentRevision.hash(identity))
     }
 
     static func gitRepositoryName(_ path: String) throws -> String {
@@ -147,7 +177,7 @@ struct DemandDeliveryPlan {
     }
 
     func document() -> String {
-        DemandDeliveryDocument.render(self)
+        item.technicalPlan?.markdown ?? ""
     }
 
     func matches(_ response: DevelopmentDeliverables.Response, url: String) -> Bool {
@@ -172,6 +202,8 @@ struct DemandDeliveryReceipt: Codable {
     var submitting = false
     var confirmed = false
     var progressRecorded = false
+    var previousDocumentMarkdown: String? = nil
+    var previousDocumentTitle: String? = nil
 }
 
 final class DemandDeliveryStore {
@@ -200,6 +232,9 @@ struct DemandDeliveryServices {
     var verifyDocument: (String, String) throws -> Void
     var listDeliverables: (Int) throws -> DevelopmentDeliverables.Response
     var submit: (DemandDeliveryPlan, String) throws -> Void
+    var readDocument: ((String) throws -> String)? = nil
+    var updateDocument: ((String, String) throws -> Void)? = nil
+    var renameDocument: ((String, String, String) throws -> Void)? = nil
 }
 
 /// Serialized durable checkpoints protect retries even across application restarts.
@@ -218,14 +253,18 @@ final class DemandDeliveryWorkflow {
     func run(_ plan: DemandDeliveryPlan, stillCurrent: () throws -> Bool,
              phase: (String) -> Void = { _ in }) throws -> DemandDeliveryReceipt {
         try services.validate(plan.link)
-        var receipt = try store.read()[plan.key] ?? DemandDeliveryReceipt(key: plan.key, itemID: plan.item.id,
-            reqID: plan.link.id, title: "\(plan.link.no)-\(plan.item.id) \(plan.item.displayTitle) · 技术交付（\(Self.timestamp())）",
-            markdown: "")
+        let records = try store.read()
+        let previous = records.values.filter { $0.itemID == plan.item.id && $0.reqID == plan.link.id && $0.confirmed && $0.documentURL != nil }
+            .sorted { $0.title < $1.title }.last
+        var receipt = records[plan.key] ?? DemandDeliveryReceipt(key: plan.key, itemID: plan.item.id,
+            reqID: plan.link.id, title: "\(plan.link.no)-\(plan.item.id) \(plan.item.technicalPlan?.title ?? plan.item.displayTitle + " · 技术方案")",
+            markdown: "", documentURL: previous?.documentURL, previousDocumentMarkdown: previous?.markdown,
+            previousDocumentTitle: previous?.title)
         guard receipt.key == plan.key, receipt.itemID == plan.item.id, receipt.reqID == plan.link.id else {
             throw DemandDeliveryError.message("本地交付记录与需求不一致，已停止提交。")
         }
         if receipt.markdown.isEmpty {
-            phase("整理技术交付说明…")
+            phase("读取已准备的技术方案…")
             receipt.markdown = try services.generate(plan)
             try store.save(receipt)
         }
@@ -250,8 +289,28 @@ final class DemandDeliveryWorkflow {
             try store.save(receipt)
         }
         guard let url = receipt.documentURL else { throw DemandDeliveryError.message("未取得技术文档链接。") }
-        phase("核验文档与交付物…")
+        phase("核验技术方案与交付物…")
+        if let previousMarkdown = receipt.previousDocumentMarkdown, previousMarkdown != receipt.markdown {
+            guard let read = services.readDocument, let update = services.updateDocument else {
+                throw DemandDeliveryError.message("已有方案需要更新，请核对文档后重试。")
+            }
+            let actual = try read(url)
+            if !DemandDeliveryDocumentVerification.matches(actual: actual, expected: receipt.markdown) {
+                guard DemandDeliveryDocumentVerification.matches(actual: actual, expected: previousMarkdown) else {
+                    throw DemandDeliveryError.message("远端技术方案已被修改，内容已保留；请核对后再提交。")
+                }
+                guard try stillCurrent() else { throw DemandDeliveryError.message("需求或代码已变化，方案未更新、交付物未提交。") }
+                phase("更新已有技术方案…")
+                try update(url, receipt.markdown)
+            }
+        }
         try services.verifyDocument(url, receipt.markdown)
+        if let oldTitle = receipt.previousDocumentTitle, oldTitle != receipt.title, let rename = services.renameDocument {
+            try rename(url, oldTitle, receipt.title)
+        }
+        receipt.previousDocumentMarkdown = nil
+        receipt.previousDocumentTitle = nil
+        try store.save(receipt)
         let remote = try services.listDeliverables(plan.link.id)
         if plan.matches(remote, url: url) {
             receipt.confirmed = true; receipt.submitting = false
@@ -303,11 +362,46 @@ final class DemandDeliveryCoordinator: ObservableObject {
     private let queue = DispatchQueue(label: "com.zz.dboard.development-delivery", qos: .utility)
     let workflow: DemandDeliveryWorkflow
     let cacheURL: URL
-    init(workflow: DemandDeliveryWorkflow = DemandDeliveryWorkflow(), cacheURL: URL = URL(fileURLWithPath: CacheFile.path)) {
+    private let copyPlanInstruction: (String) -> Bool
+    init(workflow: DemandDeliveryWorkflow = DemandDeliveryWorkflow(),
+         cacheURL: URL = URL(fileURLWithPath: CacheFile.path),
+         copyPlanInstruction: @escaping (String) -> Bool = {
+             NSPasteboard.general.clearContents()
+             return NSPasteboard.general.setString($0, forType: .string)
+         }) {
         self.workflow = workflow; self.cacheURL = cacheURL
+        self.copyPlanInstruction = copyPlanInstruction
     }
 
-    func submit(id: String, refresh: @escaping (Int) -> Void) {
+    func prepare(id: String, completion: @escaping (DemandDeliveryPlan?) -> Void) {
+        guard states[id]?.running != true else { return }
+        states[id] = DemandDeliveryState(running: true, message: "核对方案与开发分支…")
+        queue.async { [weak self] in
+            guard let self else { return }
+            do {
+                let plan = try DemandDeliveryPlan.load(id: id, at: self.cacheURL)
+                DispatchQueue.main.async { self.states[id] = DemandDeliveryState(); completion(plan) }
+            } catch DemandDeliveryError.missingTechnicalPlan(let item) {
+                DispatchQueue.main.async {
+                    let instruction = DboardAITaskContext.planInstruction(item: item,
+                        cacheURL: self.cacheURL.path == CacheFile.path ? nil : self.cacheURL)
+                    let copied = self.copyPlanInstruction(instruction)
+                    self.states[id] = DemandDeliveryState(
+                        message: copied ? "技术方案尚未准备，生成指令已复制，发给 AI 即可。"
+                            : "技术方案尚未准备，复制指令失败，请点击「复制方案指令」重试。",
+                        failed: true)
+                    completion(nil)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.states[id] = DemandDeliveryState(message: error.localizedDescription, failed: true)
+                    completion(nil)
+                }
+            }
+        }
+    }
+
+    func submit(id: String, expectedKey: String? = nil, refresh: @escaping (Int) -> Void) {
         guard states[id]?.running != true else { return }
         states[id] = DemandDeliveryState(running: true, message: "读取最新现状…")
         queue.async { [weak self] in
@@ -315,6 +409,9 @@ final class DemandDeliveryCoordinator: ObservableObject {
             var key: String?
             do {
                 let plan = try DemandDeliveryPlan.load(id: id, at: self.cacheURL)
+                guard expectedKey == nil || expectedKey == plan.key else {
+                    throw DemandDeliveryError.message("技术方案或开发分支已变化，请重新预览后提交。")
+                }
                 key = plan.key
                 var receipt = try self.workflow.run(plan, stillCurrent: {
                     try DemandDeliveryPlan.load(id: id, at: self.cacheURL).key == plan.key
@@ -348,22 +445,25 @@ final class DemandDeliveryCoordinator: ObservableObject {
 }
 
 struct DemandDeliveryAction: View {
+    @EnvironmentObject private var vm: DBoardViewModel
     let item: DItem
     @ObservedObject var coordinator: DemandDeliveryCoordinator
     let refresh: (Int) -> Void
     private var state: DemandDeliveryState { coordinator.states[item.id] ?? DemandDeliveryState() }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            DemandTechnicalPlanSection(item: item, cacheURL: coordinator.cacheURL)
             HStack {
                 Button(state.running ? state.message : "提交开发交付", systemImage: "square.and.arrow.up") {
-                    coordinator.submit(id: item.id, refresh: refresh)
+                    coordinator.prepare(id: item.id) { plan in
+                        if let plan { vm.openDemandEditor(.delivery, item: plan.item, deliveryPlan: plan) }
+                    }
                 }
                 .controlSize(.small).disabled(state.running)
-                .accessibilityIdentifier("demand-development-delivery-" + item.id)
-                .help("整理精炼完整的技术说明到“技术交付物汇总”，将文档链接和已记录工程分支提交到关联需求")
+                .accessibilityIdentifier("demand-development-delivery-" + item.id).demandKeyboardID("demand-development-delivery-" + item.id)
                 Spacer()
                 if let url = state.documentURL, let target = URL(string: url) {
-                    Link("查看技术说明", destination: target).font(.system(size: 11))
+                    Link("查看技术方案", destination: target).font(.system(size: 11))
                 }
             }
             if !state.running && !state.message.isEmpty {
@@ -371,5 +471,76 @@ struct DemandDeliveryAction: View {
                     .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+}
+
+struct DemandDeliveryPreviewView: View {
+    let plan: DemandDeliveryPlan
+    let close: () -> Void
+    let submit: () -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("确认开发交付").font(.system(size: 17, weight: .semibold))
+                Text(plan.link.no + " · " + plan.item.displayTitle)
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("开发工程与分支").font(.system(size: 12, weight: .semibold))
+                    Text("\(plan.projects.count) 个工程").font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                ScrollView(.vertical) {
+                    Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 8) {
+                        ForEach(plan.projects, id: \.name) { project in
+                            GridRow {
+                                Text(project.name)
+                                Text(project.branch).foregroundStyle(.tint).textSelection(.enabled)
+                            }
+                        }
+                    }
+                    .font(.system(size: 12))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                }
+                .scrollIndicators(.visible)
+                .scrollIndicatorsFlash(onAppear: true)
+                .frame(height: min(CGFloat(max(plan.projects.count, 1)) * 26 + 16, 112))
+                .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                Text("技术方案").font(.system(size: 13, weight: .semibold))
+                ScrollView(.vertical) {
+                    DemandTechnicalPlanBody(markdown: plan.document())
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                }
+                .scrollIndicators(.visible)
+                .scrollIndicatorsFlash(onAppear: true)
+                .frame(minHeight: 300, maxHeight: .infinity)
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary, lineWidth: 1))
+                .accessibilityIdentifier("demand-delivery-plan-scroll").demandKeyboardID("demand-delivery-plan-scroll")
+            }
+            .frame(maxHeight: .infinity)
+            .layoutPriority(1)
+            VStack(alignment: .leading, spacing: 8) {
+                Divider()
+                Text("确认后保存／更新技术方案，并提交以上开发分支。")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                HStack {
+                    Spacer()
+                    Button("返回核对", action: close).keyboardShortcut(.cancelAction)
+                    Button("确认提交", action: submit).demandButtonStyle(.borderedProminent)
+                        .accessibilityIdentifier("demand-delivery-confirm").demandKeyboardID("demand-delivery-confirm")
+                }
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 640, idealWidth: 820, maxWidth: .infinity,
+               minHeight: 700, idealHeight: 780, maxHeight: .infinity)
+        .background { DemandCanvasBackground() }
     }
 }

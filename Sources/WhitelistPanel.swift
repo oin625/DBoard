@@ -404,7 +404,6 @@ private struct MemberRowView: View {
         .scaleEffect(hovered ? 1.012 : 1.0)
         .animation(.spring(response: 0.3, dampingFraction: 0.75), value: hovered)
         .onHover { hovered = $0 }
-        .help(g.id)  // ID 不再占版面, hover 悬停查看
     }
 }
 
@@ -597,6 +596,5 @@ private struct PickerRowView: View {
         .buttonStyle(SmoothButtonStyle(scale: 0.99, hoverScale: 1.0))
         .animation(.spring(response: 0.3, dampingFraction: 0.75), value: hovered)
         .onHover { hovered = $0 }
-        .help(item.id)
     }
 }

@@ -70,7 +70,6 @@ struct TearOffButton: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(theme.current.textSecondary)
-        .help("撕出为独立窗口（也可下拉顶部）")
     }
 }
 

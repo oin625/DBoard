@@ -33,6 +33,5 @@ struct DBoardModuleMenu: View {
             }
         } label: { Image(systemName: "square.grid.2x2") }
         .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-        .help("全部模块")
     }
 }

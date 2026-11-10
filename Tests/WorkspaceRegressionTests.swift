@@ -52,6 +52,33 @@ final class WorkspaceRegressionTests: XCTestCase {
         XCTAssertTrue(prefs.overrides.isEmpty)
     }
 
+    func testRemovedLogSearchCannotReturnFromSavedPreferences() throws {
+        let (defaults, name) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let oldShortcut = GlobalShortcut(keyCode: UInt32(kVK_ANSI_L),
+            modifiers: UInt32(controlKey | shiftKey), keyLabel: "L")
+        let audiShortcut = try XCTUnwrap(ShortcutPreferences.defaultsBindings["logs"])
+        defaults.set(try JSONEncoder().encode(["logsearch": oldShortcut, "logs": audiShortcut]),
+                     forKey: "shortcuts.bindings")
+        defaults.set(["logsearch", "reqflow"], forKey: "shortcuts.disabled")
+        defaults.set(["logsearch", "logs", "reqflow"], forKey: "workspace.favorites")
+        defaults.set(["clipboard", "logsearch", "logs"], forKey: "workspace.recentModules")
+        defaults.set(["dboard", "logsearch"], forKey: "workspace.pinnedWindows")
+        let shortcuts = ShortcutPreferences(defaults: defaults)
+        XCTAssertNil(shortcuts.binding(for: "logsearch"))
+        XCTAssertNil(shortcuts.overrides["logsearch"])
+        XCTAssertEqual(shortcuts.binding(for: "logs"), audiShortcut)
+        XCTAssertEqual(shortcuts.disabled, ["reqflow"])
+        shortcuts.setEnabled(false, for: "logsearch")
+        XCTAssertEqual(shortcuts.disabled, ["reqflow"])
+        let workspace = WorkspacePreferences(defaults: defaults)
+        XCTAssertEqual(workspace.favorites, ["logs", "reqflow"])
+        XCTAssertEqual(workspace.recentModules, ["clipboard", "logs"])
+        XCTAssertEqual(workspace.pinnedWindows, ["dboard"])
+        XCTAssertFalse(DBoardModule.all.contains { $0.id == "logsearch" })
+        XCTAssertTrue(DBoardModule.all.contains { $0.id == "logs" })
+    }
+
     func testRecentModulesDeduplicateAndKeepSixWithIndependentPins() {
         let (defaults, name) = isolatedDefaults()
         defer { defaults.removePersistentDomain(forName: name) }
@@ -118,7 +145,7 @@ final class WorkspaceRegressionTests: XCTestCase {
         vm.newTodoText = "未保存的输入"
         XCTAssertFalse(vm.afterWrite(false, fail: "保存失败"))
         XCTAssertEqual(vm.newTodoText, "未保存的输入")
-        XCTAssertEqual(vm.syncKind, .fail)
+        XCTAssertEqual(vm.syncKind, .idle)
         XCTAssertEqual(vm.feedback?.message, "保存失败")
         XCTAssertEqual(vm.feedback?.failed, true)
     }

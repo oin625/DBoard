@@ -85,6 +85,22 @@ final class SyncDisplayTests: XCTestCase {
     }
 
     @MainActor
+    func testOperationFailurePreservesActualSyncState() {
+        let vm = DBoardViewModel(loadCache: false)
+        for state in [DBoardViewModel.SyncKind.idle, .pending, .syncing, .done, .fail] {
+            vm.syncKind = state
+            vm.syncText = "实际同步状态"
+            vm.flash("正式需求尚未验收完成")
+            XCTAssertEqual(vm.syncKind, state)
+            XCTAssertEqual(vm.syncText, "实际同步状态")
+            XCTAssertEqual(vm.feedback?.message, "正式需求尚未验收完成")
+            XCTAssertEqual(vm.feedback?.failed, true)
+            vm.feedback = nil
+            XCTAssertEqual(vm.syncText, "实际同步状态")
+        }
+    }
+
+    @MainActor
     func testSyncRecoveryKeepsUnrelatedFailureFeedback() {
         let vm = DBoardViewModel(loadCache: false)
         vm.syncKind = .fail

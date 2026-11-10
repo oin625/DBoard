@@ -436,7 +436,6 @@ struct ReplyInboxView: View {
                 .background(Capsule().fill(theme.current.accentPrimary.opacity(0.12)))
             }
             .buttonStyle(SmoothButtonStyle())
-            .help("管理自动值守白名单群")
             Button(action: { showNewRecipe = true }) {
                 HStack(spacing: 3) {
                     Image(systemName: "plus").font(.system(size: 10, weight: .bold))
@@ -447,7 +446,6 @@ struct ReplyInboxView: View {
                 .background(Capsule().fill(theme.current.accentPrimary.opacity(0.12)))
             }
             .buttonStyle(SmoothButtonStyle())
-            .help("手动新建一张操作配方")
             if !vm.items.isEmpty {
                 Button(action: { showClearConfirm = true }) {
                     HStack(spacing: 3) {
@@ -459,7 +457,6 @@ struct ReplyInboxView: View {
                     .background(Capsule().fill(Color(hex: "#ff6b6b").opacity(0.12)))
                 }
                 .buttonStyle(SmoothButtonStyle())
-                .help("清空全部待回复（已在钉钉回过的残留）")
             }
             if let date = vm.lastUpdate {
                 Text(date, style: .time)
@@ -574,7 +571,6 @@ struct ReplyCard: View {
                     .background(Capsule().strokeBorder(theme.current.accentPrimary.opacity(0.5), lineWidth: 1))
             }
             .buttonStyle(SmoothButtonStyle())
-            .help("我已经在钉钉里亲自回过了，直接划掉这条（不记任何学习样本）")
             Button(action: { onDismiss() }) {
                 Text("不用回")
                     .font(.system(size: 10, weight: .medium))
@@ -583,7 +579,6 @@ struct ReplyCard: View {
                     .background(Capsule().strokeBorder(theme.current.separator.opacity(0.7), lineWidth: 1))
             }
             .buttonStyle(SmoothButtonStyle())
-            .help("不回复这条，并让我记住这类消息通常无需回复")
             Text(shortTime(item.incomingTime))
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundStyle(theme.current.textTertiary)
@@ -668,7 +663,6 @@ struct ReplyCard: View {
                 }
                 .buttonStyle(SmoothButtonStyle())
                 .disabled(executing)
-                .help(item.readOnly == true ? "只读查询, 跑完自动带结果回复" : "写操作, 点这里即视为你已确认")
             } else {
                 Button(action: { withAnimation { showTeach.toggle() } }) {
                     HStack(spacing: 5) {
@@ -753,7 +747,6 @@ struct ReplyCard: View {
                                 .background(RoundedRectangle(cornerRadius: 7).fill(theme.current.separator.opacity(0.3)))
                         }
                         .buttonStyle(SmoothButtonStyle(scale: 0.8))
-                        .help(pair.1)
                     }
                 }
                 .padding(8)
@@ -813,7 +806,6 @@ struct ReplyCard: View {
                             .background(RoundedRectangle(cornerRadius: 7).fill(theme.current.separator.opacity(0.5)))
                     }
                     .buttonStyle(SmoothButtonStyle())
-                    .help("复制")
                     Button(action: { onSend(draft, "draft-\(idx + 1)") }) {
                         HStack(spacing: 3) {
                             Image(systemName: "paperplane.fill").font(.system(size: 9))
@@ -824,7 +816,6 @@ struct ReplyCard: View {
                         .background(Capsule().fill(Color(hex: "#34c759")))
                     }
                     .buttonStyle(SmoothButtonStyle())
-                    .help("直接发送这条")
                 }
                 .padding(9)
                 .background(
@@ -1009,6 +1000,5 @@ struct EmotionChip: View {
         .scaleEffect(hovered ? 1.08 : 1.0)
         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: hovered)
         .onHover { hovered = $0 }
-        .help("以本人身份贴到对方消息上")
     }
 }

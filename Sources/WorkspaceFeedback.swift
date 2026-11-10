@@ -15,7 +15,7 @@ struct WorkspaceFeedbackView: View {
                 .foregroundStyle(feedback.failed ? Color.orange : Color.green)
             Text(feedback.message).font(.system(size: 12)).textSelection(.enabled)
             Button(action: dismiss) { Image(systemName: "xmark") }
-                .buttonStyle(.plain).foregroundStyle(.secondary).help("关闭提示")
+                .demandButtonStyle(.plain).foregroundStyle(.secondary)
         }
         .padding(12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))

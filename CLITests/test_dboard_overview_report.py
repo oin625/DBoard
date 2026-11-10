@@ -12,6 +12,9 @@ import dboard_ai as cli
 
 class OverviewReportTests(unittest.TestCase):
     def call(self, args):
+        args = list(args)
+        if "show" in args: args += ["--full"]
+        if "report" in args: args += ["--compression-decision", "skip", "--compression-reason", "仅更新总览，没有新增进度"]
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             code = cli.main(args)
@@ -31,7 +34,7 @@ class OverviewReportTests(unittest.TestCase):
             code, result = self.call(args)
             self.assertEqual(code, 0)
             self.assertEqual(result["item"]["overview"], "拆出锁券接口并补齐换码校验。")
-            self.assertEqual(result["item"]["progress_records"], item["progress_records"])
+            self.assertEqual(self.call(["--cache", str(cache), "show", "D014"])[1]["item"]["progress_records"], item["progress_records"])
             self.assertIn("本地完整输入", cache.read_text())
             self.assertEqual(result["sync"]["status"], "skipped")
             code, result = self.call(args)

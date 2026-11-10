@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from handoff_fixture import feedback_flags
 
 CLI = Path(__file__).resolve().parents[1] / "Tools/dboard_ai.py"
 spec = importlib.util.spec_from_file_location("dboard_ai_chats", CLI)
@@ -29,6 +30,9 @@ class DemandChatContextTests(unittest.TestCase):
         self.cache.write_text(self.base + "- **关联群聊**：" + json.dumps(links, ensure_ascii=False) + "\n")
 
     def call(self, *args, success=True):
+        args = list(args)
+        if args and args[0] in ("show", "context") and "--full" not in args: args += ["--full"]
+        args += feedback_flags(self.cache, args)
         result = subprocess.run([sys.executable, str(CLI), "--cache", str(self.cache), *args],
                                 capture_output=True, text=True, timeout=15)
         response = json.loads(result.stdout)

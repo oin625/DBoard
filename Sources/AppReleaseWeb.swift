@@ -52,8 +52,7 @@ private final class AppReleaseWebHost: NSViewController {
     func setPinned(_ pinned: Bool) {
         pinButton.image = NSImage(systemSymbolName: pinned ? "pin.fill" : "pin", accessibilityDescription: nil)
         pinButton.contentTintColor = pinned ? .controlAccentColor : .secondaryLabelColor
-        pinButton.toolTip = pinned ? "取消置顶" : "置顶窗口（切换应用时保持显示）"
-        pinButton.setAccessibilityLabel(pinButton.toolTip)
+        pinButton.setAccessibilityLabel(pinned ? "取消置顶" : "置顶窗口")
         pinButton.setAccessibilityValue(pinned ? "已置顶" : "未置顶")
     }
 

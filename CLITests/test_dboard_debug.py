@@ -6,7 +6,12 @@ module = base.module
 
 
 class DebugTaskTests(unittest.TestCase):
-    setUp = base.FeedbackTests.setUp
+    def setUp(self):
+        base.FeedbackTests.setUp(self)
+        path = base.FeedbackTests.repo(self, "repo")
+        base.subprocess.run(["git", "-C", str(path), "-c", "user.name=DBoard Test", "-c", "user.email=test@example.invalid",
+                             "commit", "--allow-empty", "-qm", "测试初始提交"], check=True)
+        self.call(*self.args(self.show(), "--repo", str(path)))
     tearDown = base.FeedbackTests.tearDown
     call = base.FeedbackTests.call
     show = base.FeedbackTests.show
@@ -47,13 +52,31 @@ class DebugTaskTests(unittest.TestCase):
         self.assertEqual(self.call("context", "D014", "--task", "debug-page", "--change", "C001", success=False)["error"]["code"],
                          "INVALID_ARGUMENT")
 
+    def test_fault_handoff_and_feedback_preserve_page_and_user_state(self):
+        self.milestone("development-complete")
+        self.milestone("debug-page-ready", "--debug-page", "/test-console/coupon")
+        self.milestone("testing-passed")
+        context = self.call("context", "D014")
+        self.assertIn("用户在复制指令后补充的联调报错", context["context"])
+        self.assertIn("填写区留空", context["feedback_instructions"])
+        self.milestone("developing")
+        self.assertEqual(self.show()["execution"]["debug_page"], "/test-console/coupon")
+        self.assertEqual(self.show()["status"], "进行中")
+        self.milestone("development-complete")
+        self.milestone("debug-page-ready")
+        self.assertEqual(self.show()["execution"]["debug_page"], "/test-console/coupon")
+
     def test_milestones_roundtrip_do_not_complete_user_state(self):
         result = self.milestone("debug-page-ready", "--debug-page", "/test-console/coupon", success=False)
         self.assertEqual(result["error"]["code"], "DEVELOPMENT_NOT_VERIFIED")
         self.milestone("development-complete")
         result = self.milestone("testing-passed", success=False)
         self.assertEqual(result["error"]["code"], "DEBUG_PAGE_NOT_READY")
-        self.milestone("debug-page-ready", "--debug-page", "/test-console/coupon", "--repo", str(self.repo("audi")))
+        audi = self.repo("audi")
+        base.subprocess.run(["git", "-C", str(audi), "-c", "user.name=DBoard Test", "-c", "user.email=test@example.invalid",
+                             "commit", "--allow-empty", "-qm", "调试页初始提交"], check=True)
+        self.call(*self.args(self.show(), "--repo", str(audi)))
+        self.milestone("debug-page-ready", "--debug-page", "/test-console/coupon")
         result = self.milestone("testing-passed", "--debug-url", "https://audi.example/test-console/coupon")
         item = result["item"]
         self.assertEqual(item["status"], "进行中")

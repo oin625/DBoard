@@ -44,7 +44,7 @@ def source_items(content):
             if line.startswith(prefix):
                 priority = value
                 in_todos = False
-        match = re.match(r"^### (D[0-9]{3,})(?=【|\s|$)", line)
+        match = re.match(r"^### ([DP][0-9]{3,})(?=【|\s|$)", line)
         if not match or in_todos:
             continue
         item_id = match[1]
@@ -54,6 +54,7 @@ def source_items(content):
         start, end = locate(lines, item_id)
         block = lines[start:end]
         data = fields(block)
+        is_incident = data.get("类型") == "线上排查"
         states = [s for s in ("待开始", "进行中", "已完成", "挂起") if "#" + s in line]
         if len(states) != 1:
             raise CLIError("INVALID_STATUS", "Demand status cannot be confirmed; overview was not uploaded")
@@ -71,7 +72,7 @@ def source_items(content):
             title = title.replace("#" + state, "")
         title = re.sub(r"→?[📅🎯](?:[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{1,2}\.[0-9]{1,2})", "", title)
         title = re.sub(r"\s*✅[0-9]{4}-[0-9]{2}-[0-9]{2}", "", title).strip()
-        title = compact(title) or (compact(data.get("描述", "")) if data.get("描述", "") != "（待补充）" else "") or "（未命名）"
+        title = compact(title) or (compact(data.get("描述", "")) if not is_incident and data.get("描述", "") != "（待补充）" else "") or "（未命名）"
         dates = re.findall(r"[📅🎯](?:[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{1,2}\.[0-9]{1,2})", line)
         period = ""
         if dates:
@@ -80,10 +81,11 @@ def source_items(content):
         completed = re.search(r"✅[0-9]{4}-[0-9]{2}-[0-9]{2}", line)
         if completed:
             heading += " " + completed[0]
-        overview = data.get("概括", "").strip() or data.get("描述", "").strip()
+        # Incident descriptions contain raw reports, logs and screenshots; only an explicit overview is public.
+        overview = data.get("概括", "").strip() or ("" if is_incident else data.get("描述", "").strip())
         if overview in ("（待补充）", "待补充"):
             overview = ""
-        if not overview:
+        if not overview and not is_incident:
             assembled = assemble_prompt(data.get("提示词", ""))
             intent = re.search(r"^## 要做什么\n(.*?)(?=^## |\Z)", assembled, re.M | re.S)
             overview = intent[1] if intent else ""
@@ -105,8 +107,8 @@ def source_items(content):
         entries.append({"priority": priority, "heading": heading, "overview": overview,
                         "progress": progress, "pending": pending, "flow": flow})
     # Refuse malformed demand headings rather than silently dropping a real demand.
-    invalid = [line for line in lines if re.match(r"^### D[0-9]", line)
-               and not re.match(r"^### D[0-9]{3,}(?=【|\s|$)", line)]
+    invalid = [line for line in lines if re.match(r"^### [DP][0-9]", line)
+               and not re.match(r"^### [DP][0-9]{3,}(?=【|\s|$)", line)]
     if invalid:
         raise CLIError("INVALID_ID", "Malformed demand heading; overview was not uploaded")
     return entries

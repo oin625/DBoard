@@ -34,7 +34,7 @@ final class DemandArchiveTests: XCTestCase {
     }
 
     private func response(_ args: [String]) throws -> [String: Any] {
-        let result = ProcessRunner.run("/usr/bin/env", arguments: ["python3", cli, "--cache", cache.path] + args)
+        let result = HandoffCLIFixture.run("/usr/bin/env", arguments: ["python3", cli, "--cache", cache.path] + args)
         XCTAssertEqual(result.exitCode, 0, String(data: result.stdout, encoding: .utf8) ?? "")
         return try XCTUnwrap(try JSONSerialization.jsonObject(with: result.stdout) as? [String: Any])
     }
@@ -181,7 +181,7 @@ final class DemandArchiveTests: XCTestCase {
         let stored = "## 🟡 重要\n" + block.joined(separator: "\n")
         try stored.write(to: cache, atomically: true, encoding: .utf8)
         XCTAssertThrowsError(try DItemStore.currentItem(id: "D014", at: cache))
-        let result = ProcessRunner.run("/usr/bin/env", arguments: ["python3", cli, "--cache", cache.path, "context", "D014"])
+        let result = HandoffCLIFixture.run("/usr/bin/env", arguments: ["python3", cli, "--cache", cache.path, "context", "D014"])
         XCTAssertNotEqual(result.exitCode, 0)
         XCTAssertTrue(String(data: result.stdout, encoding: .utf8)?.contains("INVALID_VERSION_DATA") == true)
         XCTAssertEqual(try String(contentsOf: cache, encoding: .utf8), stored)

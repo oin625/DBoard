@@ -38,18 +38,18 @@ struct GlobalShortcut: Codable, Equatable {
 
 final class ShortcutPreferences: ObservableObject {
     static let shared = ShortcutPreferences()
-    static let order = ["dboard", "clipboard", "reqflow", "logs", "apprelease", "audihome", "logsearch"]
-    static let names = ["dboard": "D板首页", "clipboard": "剪切板历史", "reqflow": "ReqFlow 需求流",
+    static let order = ["dboard", "quickopen", "clipboard", "reqflow", "logs", "apprelease", "audihome"]
+    static let names = ["dboard": "D板首页", "quickopen": "快速打开需求 / 排查", "clipboard": "剪切板历史", "reqflow": "ReqFlow 需求流",
                         "logs": "Audi 日志", "apprelease": "应用发布台",
-                        "audihome": "Audi 首页", "logsearch": "剪贴板直搜日志"]
+                        "audihome": "Audi 首页"]
     static let defaultsBindings: [String: GlobalShortcut] = [
+        "quickopen": GlobalShortcut(keyCode: UInt32(kVK_ANSI_P), modifiers: UInt32(cmdKey), keyLabel: "P"),
         "dboard": GlobalShortcut(keyCode: UInt32(kVK_ANSI_D), modifiers: UInt32(controlKey | shiftKey), keyLabel: "D"),
         "clipboard": GlobalShortcut(keyCode: UInt32(kVK_ANSI_V), modifiers: UInt32(optionKey), keyLabel: "V"),
         "reqflow": GlobalShortcut(keyCode: UInt32(kVK_ANSI_E), modifiers: UInt32(controlKey), keyLabel: "E"),
         "logs": GlobalShortcut(keyCode: UInt32(kVK_ANSI_L), modifiers: UInt32(controlKey), keyLabel: "L"),
         "apprelease": GlobalShortcut(keyCode: UInt32(kVK_ANSI_Q), modifiers: UInt32(controlKey), keyLabel: "Q"),
         "audihome": GlobalShortcut(keyCode: UInt32(kVK_ANSI_W), modifiers: UInt32(controlKey), keyLabel: "W"),
-        "logsearch": GlobalShortcut(keyCode: UInt32(kVK_ANSI_L), modifiers: UInt32(controlKey | shiftKey), keyLabel: "L"),
     ]
     @Published private(set) var overrides: [String: GlobalShortcut]
     @Published private(set) var disabled: Set<String>
@@ -60,12 +60,13 @@ final class ShortcutPreferences: ObservableObject {
         self.defaults = defaults
         overrides = defaults.data(forKey: "shortcuts.bindings").flatMap {
             try? JSONDecoder().decode([String: GlobalShortcut].self, from: $0)
-        } ?? [:]
+        }?.filter { Self.defaultsBindings[$0.key] != nil } ?? [:]
         disabled = Set(defaults.stringArray(forKey: "shortcuts.disabled") ?? [])
+            .filter { Self.defaultsBindings[$0] != nil }
     }
 
     func binding(for id: String) -> GlobalShortcut? {
-        guard !disabled.contains(id) else { return nil }
+        guard Self.defaultsBindings[id] != nil, !disabled.contains(id) else { return nil }
         return overrides[id] ?? Self.defaultsBindings[id]
     }
 
@@ -95,6 +96,7 @@ final class ShortcutPreferences: ObservableObject {
     }
 
     func setEnabled(_ enabled: Bool, for id: String) {
+        guard Self.defaultsBindings[id] != nil else { return }
         if enabled {
             if let shortcut = overrides[id] ?? Self.defaultsBindings[id] {
                 _ = set(shortcut, for: id)

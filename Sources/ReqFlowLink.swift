@@ -82,9 +82,8 @@ struct ReqFlowLinkedRequirementView: View {
             .padding(.horizontal, 6).frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .demandButtonStyle(.plain)
         .accessibilityLabel("打开关联需求 " + link.no)
-        .help("正式状态来自需求流；个人状态在 D板单独记录")
     }
 }
 
@@ -112,7 +111,7 @@ struct ReqFlowRequirementPicker: View {
                 if flow.regenerating { ProgressView().controlSize(.small) }
                 Button { flow.refreshRequirements() } label: {
                     Image(systemName: "arrow.clockwise")
-                }.help("刷新需求流").disabled(flow.regenerating)
+                }.disabled(flow.regenerating)
                 Button("取消", action: cancel).keyboardShortcut(.cancelAction)
             }
             Text("选择已有需求，标题会带入 D板，正式状态可在关联处查看。")
@@ -193,7 +192,7 @@ struct ReqFlowRequirementPicker: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
             .contentShape(Rectangle())
-        }.buttonStyle(.plain)
+        }.demandButtonStyle(.plain)
     }
 }
 

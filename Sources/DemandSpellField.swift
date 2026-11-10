@@ -7,6 +7,15 @@ final class DemandSpellInputController: ObservableObject {
     weak var editor: DemandSpellTextView?
     @Published var error: String?
     func chooseImages() { editor?.chooseImages() }
+    func paste() { editor?.paste(nil) }
+    func endEditing() {
+        guard let editor else { return }
+        if let window = editor.window, window.firstResponder === editor {
+            window.makeFirstResponder(nil)
+        }
+        if editor.hasMarkedText() { editor.unmarkText() }
+        editor.didChangeText()
+    }
 }
 
 struct DemandSpellField: View {
@@ -15,13 +24,26 @@ struct DemandSpellField: View {
     let placeholder: String
     var autofocus = false
     var imageStore: DemandImageStore = .shared
-    @StateObject private var controller = DemandSpellInputController()
+    var height: CGFloat = 200
+    var showPasteButton = false
+    var onEditingEnded: () -> Void
+    @StateObject private var controller: DemandSpellInputController
+
+    init(text: Binding<String>, title: String, placeholder: String, autofocus: Bool = false,
+         imageStore: DemandImageStore = .shared, height: CGFloat = 200, showPasteButton: Bool = false,
+         onEditingEnded: @escaping () -> Void = {}, controller: DemandSpellInputController? = nil) {
+        _text = text
+        self.title = title; self.placeholder = placeholder; self.autofocus = autofocus
+        self.imageStore = imageStore; self.height = height; self.showPasteButton = showPasteButton
+        self.onEditingEnded = onEditingEnded
+        _controller = StateObject(wrappedValue: controller ?? DemandSpellInputController())
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             DemandSpellInput(text: $text, title: title, controller: controller,
-                             autofocus: autofocus, imageStore: imageStore)
-                .frame(height: 200)
+                             autofocus: autofocus, imageStore: imageStore, onEditingEnded: onEditingEnded)
+                .frame(height: height)
                 .overlay(alignment: .topLeading) {
                     if text.isEmpty {
                         Text(placeholder).font(.system(size: 13)).foregroundStyle(.tertiary)
@@ -31,8 +53,12 @@ struct DemandSpellField: View {
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
             HStack(spacing: 8) {
+                if showPasteButton {
+                    Button("粘贴", systemImage: "doc.on.clipboard") { controller.paste() }
+                        .demandButtonStyle(.borderless).font(.system(size: 12))
+                }
                 Button("添加图片", systemImage: "photo.badge.plus") { controller.chooseImages() }
-                    .buttonStyle(.borderless).font(.system(size: 12))
+                    .demandButtonStyle(.borderless).font(.system(size: 12))
                 Text("也可粘贴或拖入图片，双击查看原图")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
@@ -50,9 +76,10 @@ struct DemandSpellInput: NSViewRepresentable {
     let controller: DemandSpellInputController
     var autofocus = false
     var imageStore: DemandImageStore = .shared
+    var onEditingEnded: () -> Void = {}
     @Environment(\.colorScheme) private var colorScheme
 
-    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text, onEditingEnded: onEditingEnded) }
 
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = PromptContextInput.PromptContextScrollView()
@@ -109,8 +136,11 @@ struct DemandSpellInput: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.text = $text
+        context.coordinator.onEditingEnded = onEditingEnded
         guard let editor = scroll.documentView as? DemandSpellTextView else { return }
         controller.editor = editor
+        // Marked text belongs to the input method until it commits, including its attributes and selection.
+        guard !editor.hasMarkedText() else { return }
         if DemandSpellText.markdown(editor.attributedString()) != text {
             let selection = editor.selectedRange()
             editor.textStorage?.setAttributedString(DemandSpellText.attributed(text))
@@ -135,10 +165,23 @@ struct DemandSpellInput: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var text: Binding<String>
-        init(text: Binding<String>) { self.text = text }
+        var onEditingEnded: () -> Void
+        init(text: Binding<String>, onEditingEnded: @escaping () -> Void) {
+            self.text = text; self.onEditingEnded = onEditingEnded
+        }
+        private func publish(_ editor: NSTextView) {
+            guard !editor.hasMarkedText() else { return }
+            let value = DemandSpellText.markdown(editor.attributedString())
+            if value != text.wrappedValue { text.wrappedValue = value }
+        }
         func textDidChange(_ notification: Notification) {
             guard let editor = notification.object as? NSTextView else { return }
-            text.wrappedValue = DemandSpellText.markdown(editor.attributedString())
+            publish(editor)
+        }
+        func textDidEndEditing(_ notification: Notification) {
+            guard let editor = notification.object as? NSTextView, !editor.hasMarkedText() else { return }
+            publish(editor)
+            onEditingEnded()
         }
     }
 }
@@ -335,7 +378,7 @@ struct DemandSpellContentView: View {
                         Button { NSWorkspace.shared.open(URL(fileURLWithPath: image.path)) } label: {
                             Image(nsImage: thumbnail).resizable().scaledToFit().frame(maxHeight: 160)
                         }
-                        .buttonStyle(.plain).help("查看原图")
+                        .demandButtonStyle(.plain)
                         .accessibilityLabel("查看图片：" + image.label)
                     } else {
                         Label("图片无法读取：" + image.label, systemImage: "photo.badge.exclamationmark")

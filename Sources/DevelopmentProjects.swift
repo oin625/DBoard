@@ -101,12 +101,23 @@ enum DevelopmentDeliverables {
                 tagged["_tag"] = tag
                 all.append(tagged)
                 if key == "3", let raw = item["deliverableDevProject"], !(raw is NSNull) {
-                    guard let text = raw as? String else { throw ReadError.invalidResponse }
-                    declarations.append(text)
+                    guard raw is String else { throw ReadError.invalidResponse }
                 }
             }
         }
         all.sort { ($0["createTime"] as? String ?? "") > ($1["createTime"] as? String ?? "") }
+        var currentDocuments = Set<String>()
+        for item in all where item["_tag"] as? String == "dev" {
+            // A correction by the same author for the same document replaces its old
+            // project declaration; all original deliverables remain visible in history.
+            if let author = item["authorId"] as? String, !author.isEmpty,
+               let content = item["deliverableContent"] as? String, !content.trimmed.isEmpty,
+               let date = item["createTime"] as? String, !date.isEmpty {
+                let key = author + "\u{0}" + content.trimmed
+                if !currentDocuments.insert(key).inserted { continue }
+            }
+            if let text = item["deliverableDevProject"] as? String { declarations.append(text) }
+        }
         return Response(tags: tags, items: all, projects: DeclaredDevelopmentProject.parse(declarations))
     }
 }
@@ -130,12 +141,11 @@ struct DevelopmentProjectsView: View {
                 Spacer()
                 if loading { ProgressView().controlSize(.small) }
                 Button(action: refresh) { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.plain).help("重新读取开发交付").disabled(loading)
+                    .demandButtonStyle(.plain).disabled(loading)
             }
             if let snapshot {
                 if snapshot.projects.isEmpty {
                     Text("—").font(.system(size: 13)).foregroundStyle(.secondary)
-                        .help("开发交付中尚未声明工程")
                 } else {
                     Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
                         GridRow {

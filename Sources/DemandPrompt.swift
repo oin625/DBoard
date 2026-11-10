@@ -158,13 +158,11 @@ struct DemandPromptFields: View {
                     label("代码入口")
                     contextInput(text: $sections.codeEntry, title: "代码入口",
                                  placeholder: "服务、流程的中文描述或工程路径")
-                        .help("可以写中文服务名或流程描述，也可以写代码路径；全新模块写「全新模块」。复制时会引导 AI 查找并阅读。")
                 }
                 GridRow(alignment: .top) {
                     label("可能有用的资料")
                     contextInput(text: $sections.materials, title: "可能有用的资料",
                                  placeholder: "资料名称、链接或路径（可选）")
-                        .help("可填写文档、记录或其他参考资料的名称、链接或路径；复制时会引导 AI 查找并阅读，没有可以留空。")
                 }
             }
             .font(.system(size: 13)).textFieldStyle(.roundedBorder)
@@ -182,7 +180,6 @@ struct DemandPromptFields: View {
                     optionalLabel("补充说明")
                     contextInput(text: $sections.supplement, title: "补充说明",
                                  placeholder: "文档没写清，或本次需要额外交代的内容")
-                        .help("选填：例如本次范围、额外约束、处理偏好或口头确认的信息。需求文档已写清的内容无需重复。")
                 }
             }
         }
@@ -270,11 +267,11 @@ struct DemandPromptEditor: View {
                 Button("关闭", action: requestClose).keyboardShortcut(.cancelAction)
                 Button("保存") { save(copy: false) }.keyboardShortcut("s", modifiers: .command)
                 Button("保存并复制") { save(copy: true) }
-                    .buttonStyle(.borderedProminent).keyboardShortcut(.return, modifiers: .command)
+                    .demandButtonStyle(.borderedProminent).keyboardShortcut(.return, modifiers: .command)
             }
         }
         .padding(24).frame(minWidth: 480, idealWidth: 640, maxWidth: 800, minHeight: 480, idealHeight: 640)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background { DemandCanvasBackground() }
         .alert("放弃咒言草稿？", isPresented: $confirmingDiscard) {
             Button("继续编辑", role: .cancel) {}
             Button("放弃草稿", role: .destructive) {

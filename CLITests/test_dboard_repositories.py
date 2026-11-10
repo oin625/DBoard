@@ -73,6 +73,23 @@ class RepositoryIdentityTests(unittest.TestCase):
         self.assertEqual(self.cache.read_bytes(), before)
         self.assertEqual(retry["item"]["branch"], "feature/vibe")
 
+    def test_merge_checkout_cannot_overwrite_development_branch_but_progress_can_be_saved(self):
+        ultra = self.repo("ultra", "feature/cdd-lock")
+        self.call(*self.args(self.show(), "--repo", str(ultra)))
+        subprocess.run(["git", "-C", str(ultra), "checkout", "-qb", "merge/pre_1013"], check=True)
+        before = self.cache.read_bytes()
+        rejected = self.call(*self.args(self.show(), "--repo", str(ultra),
+                                      "--summary", "合入预发，待发布。"), success=False)
+        self.assertEqual(rejected["error"]["code"], "INTEGRATION_BRANCH")
+        self.assertEqual(self.cache.read_bytes(), before)
+        result = self.call(*self.args(self.show(), "--summary", "合入预发，待发布。",
+                                    "--details", "merge/pre_1013 已包含开发提交，未部署。"))["item"]
+        self.assertEqual(result["repositories"][0]["branch"], "feature/cdd-lock")
+        self.assertEqual(result["branch"], "feature/cdd-lock")
+        self.assertIn("合入预发，待发布。", result["progress"])
+        self.assertEqual(subprocess.check_output(["git", "-C", str(ultra), "branch", "--show-current"],
+                                               text=True).strip(), "merge/pre_1013")
+
     def test_replacement_cannot_remove_a_different_live_repository_or_an_unknown_target(self):
         old = self.repo("ultra")
         new = self.repo("audi")

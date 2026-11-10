@@ -23,5 +23,15 @@
     "name": "mechanical-workspace-replay-keeps-the-last-development-result",
     "source": "## 🟡\n### D014【ultra】锁券改造 #进行中\n- **概括**：拆出锁券接口。\n- **进度**：\n    - 11.3: [C002] 接口完成，待验收。\n    - 11.3: [C002] 已在独立工作区重放15个文件，Luban收到15条事件，代码及Git状态保持一致。\n",
     "expected": "# 进行时 · 需求总览\n\n> 本文只展示需求概况和当前进度；完整咒言、资料、变更、工程分支与历史记录保存在 D板本机。\n\n## 🟡 重要不紧急\n\n### D014【ultra】锁券改造 #进行中\n- **概括**：拆出锁券接口。\n- **进度**：\n    - 11.3: [C002] 接口完成，待验收。\n"
+  },
+  {
+    "name": "incident-logs-and-plan-stay-local-before-ai-overview",
+    "source": "## 🔴\n### D025【ultra】照片为空 #进行中\n- **类型**：线上排查\n- **描述**：原始请求与日志明细应留本机\n    TraceID: private-incident-trace\n    ![截图](/Users/zz/private.png)\n- **提示词**：\n    ## 要做什么\n    本机排查方案不可作为总览\n- **进度**：\n    - 11.5: 正在核对上游响应。\n        明细：\n        原始响应 private-response\n",
+    "expected": "# 进行时 · 需求总览\n\n> 本文只展示需求概况和当前进度；完整咒言、资料、变更、工程分支与历史记录保存在 D板本机。\n\n## 🔴 重要且紧急\n\n### D025【ultra】照片为空 #进行中\n- **进度**：\n    - 11.5: 正在核对上游响应。\n"
+  },
+  {
+    "name": "incident-explicit-overview-and-progress-only",
+    "source": "## 🔴\n### D025【ultra】照片为空 #进行中\n- **类型**：线上排查\n- **描述**：原始请求与日志明细应留本机\n    TraceID: private-incident-trace\n    ![截图](/Users/zz/private.png)\n- **提示词**：\n    ## 要做什么\n    本机排查方案不可作为总览\n- **进度**：\n    - 11.5: 正在核对上游响应。\n        明细：\n        原始响应 private-response\n- **概括**：核对照片查询为空的原因。\n",
+    "expected": "# 进行时 · 需求总览\n\n> 本文只展示需求概况和当前进度；完整咒言、资料、变更、工程分支与历史记录保存在 D板本机。\n\n## 🔴 重要且紧急\n\n### D025【ultra】照片为空 #进行中\n- **概括**：核对照片查询为空的原因。\n- **进度**：\n    - 11.5: 正在核对上游响应。\n"
   }
 ]

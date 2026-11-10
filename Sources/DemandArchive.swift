@@ -21,6 +21,7 @@ struct ArchivedDemand: Identifiable {
             repositories: try DemandVersion.repositoryHints(block, item: previous))
         guard version.isValid else { throw DemandVersion.ReadError.invalid }
         var draft = DItemDraft(newID: id, priority: priority)
+        draft.kind = previous.kind
         let title = previous.displayTitle.replacingOccurrences(of: #"\s+[0-9]+\.0$"#, with: "", options: .regularExpression)
         draft.name = title + " " + version.label
         draft.project = previous.project
@@ -52,7 +53,7 @@ enum DemandArchive {
         var index = 0
         while index < lines.count {
             for value in ItemPriority.allCases where lines[index].hasPrefix(value.sectionPrefix) { priority = value }
-            guard lines[index].range(of: #"^### D[0-9]{3,}(?=【|\s|$)"#, options: .regularExpression) != nil else {
+            guard lines[index].range(of: #"^### [DP][0-9]{3,}(?=【|\s|$)"#, options: .regularExpression) != nil else {
                 index += 1; continue
             }
             let start = index
@@ -96,7 +97,7 @@ enum DemandArchive {
 
     static func merged(_ remote: [ArchivedDemand], journal: ArchiveJournal) -> [ArchivedDemand] {
         var records = remote
-        for entry in journal.entries.values.sorted(by: { $0.createdAt > $1.createdAt }) where entry.state == .removed {
+        for entry in journal.entries.values.sorted(by: { $0.createdAt < $1.createdAt }) where entry.state != .submitted {
             guard let parsed = try? parse(entry.archived.joined(separator: "\n")), let archived = parsed.first else { continue }
             if let index = records.firstIndex(where: { $0.id == archived.id }) ??
                 records.firstIndex(where: { $0.item.id == archived.item.id && $0.completedDate == archived.completedDate }) {
@@ -109,8 +110,25 @@ enum DemandArchive {
     }
 }
 
+struct ArchivedCodeReview: Codable, Identifiable {
+    let itemID: String
+    let sourceRevision: String
+    let summary: String
+    let details: String
+    let eventID: String
+    var id: String { itemID + "-" + eventID }
+
+    enum CodingKeys: String, CodingKey {
+        case itemID = "id", sourceRevision = "source_revision", summary, details, eventID = "event_id"
+    }
+
+    struct File: Decodable { let version: Int; let records: [ArchivedCodeReview] }
+}
+
 final class DemandArchiveStore: ObservableObject {
     @Published private(set) var records: [ArchivedDemand] = []
+    @Published private(set) var reviewNotes: [ArchivedCodeReview] = []
+    var cacheURL: URL { cache }
     @Published private(set) var loading = false
     @Published private(set) var error: String?
     @Published private(set) var readAt: Date?
@@ -126,16 +144,25 @@ final class DemandArchiveStore: ObservableObject {
     }
 
     func reloadLocal() {
+        let reviewURL = cache.deletingLastPathComponent().appendingPathComponent("dboard-archive-code-reviews.json")
+        if let data = try? Data(contentsOf: reviewURL),
+           let file = try? JSONDecoder().decode(ArchivedCodeReview.File.self, from: data), file.version == 1 {
+            reviewNotes = file.records
+        } else { reviewNotes = [] }
         let journal = ArchiveJournal(url: journalURL)
-        let content = try? String(contentsOf: cache, encoding: .utf8)
+        var remote = records
+        var readError: String?
         do {
-            records = DemandArchive.merged(try content.map { try DemandArchive.parse($0) } ?? [], journal: journal)
-            if !journal.readable { error = "本机归档恢复记录无法读取；当前仅显示可读取的归档" }
-            readAt = (try? cache.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-        } catch { self.error = error.localizedDescription }
+            remote = FileManager.default.fileExists(atPath: cache.path)
+                ? try DemandArchive.parse(String(contentsOf: cache, encoding: .utf8)) : []
+        } catch { readError = error.localizedDescription }
+        records = DemandArchive.merged(remote, journal: journal)
+        error = !journal.readable ? "本机归档恢复记录无法读取；当前仅显示可读取的归档" : readError
+        readAt = (try? cache.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
     }
 
     func refresh() {
+        reloadLocal()
         guard allowsRemote, !loading else { return }
         loading = true
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -152,9 +179,12 @@ final class DemandArchiveStore: ObservableObject {
                     self.records = DemandArchive.merged(parsed, journal: journal)
                     self.readAt = Date()
                     self.error = journal.readable ? nil : "本机归档恢复记录无法读取；当前显示钉钉归档"
-                    let maximum = self.records.compactMap { Int($0.item.id.dropFirst()) }.max() ?? 0
-                    if maximum > UserDefaults.standard.integer(forKey: "dboard.lastDID") {
-                        UserDefaults.standard.set(maximum, forKey: "dboard.lastDID")
+                    for kind in DemandKind.allCases {
+                        let maximum = self.records.filter { $0.item.id.hasPrefix(kind.idPrefix) }
+                            .compactMap { DemandNumbering.number($0.item.id) }.max() ?? 0
+                        if maximum > UserDefaults.standard.integer(forKey: kind.counterKey) {
+                            UserDefaults.standard.set(maximum, forKey: kind.counterKey)
+                        }
                     }
                 } catch { self.error = error.localizedDescription }
             }

@@ -77,7 +77,7 @@ final class DboardAIFeedbackTests: XCTestCase {
         let instruction = DboardAITaskContext.readInstruction(item: old, cacheURL: file, home: fixtureHome.path)
         XCTAssertTrue(DItemStore.appendProgress(id: "D014", text: "复制之后新增的进度", at: file))
         let latestBytes = try Data(contentsOf: file)
-        let read = ProcessRunner.run("/bin/sh", arguments: ["-c", instruction.components(separatedBy: "\n")[1]])
+        let read = HandoffCLIFixture.run("/bin/sh", arguments: ["-c", instruction.components(separatedBy: "\n")[1]])
         XCTAssertEqual(read.exitCode, 0, String(data: read.stdout, encoding: .utf8) ?? "")
         let response = try XCTUnwrap(try JSONSerialization.jsonObject(with: read.stdout) as? [String: Any])
         let context = try XCTUnwrap(response["context"] as? String)
@@ -123,16 +123,16 @@ final class DboardAIFeedbackTests: XCTestCase {
         let originalPrompt = draft.prompt
         try "## 🟡 重要\n".write(to: file, atomically: true, encoding: .utf8)
         XCTAssertTrue(DItemStore.create(draft, at: file))
-        XCTAssertEqual(ProcessRunner.run("/usr/bin/env", arguments: ["git", "init", "-q", repository.path]).exitCode, 0)
-        XCTAssertEqual(ProcessRunner.run("/usr/bin/env", arguments: ["git", "-C", repository.path,
+        XCTAssertEqual(HandoffCLIFixture.run("/usr/bin/env", arguments: ["git", "init", "-q", repository.path]).exitCode, 0)
+        XCTAssertEqual(HandoffCLIFixture.run("/usr/bin/env", arguments: ["git", "-C", repository.path,
             "symbolic-ref", "HEAD", "refs/heads/feature/lock-coupon"]).exitCode, 0)
-        let read = ProcessRunner.run("/usr/bin/env",
+        let read = HandoffCLIFixture.run("/usr/bin/env",
             arguments: ["python3", cli, "--cache", file.path, "show", "D014"])
         XCTAssertEqual(read.exitCode, 0)
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: read.stdout) as? [String: Any])
         let item = try XCTUnwrap(json["item"] as? [String: Any])
         let revision = try XCTUnwrap(item["revision"] as? String)
-        let result = ProcessRunner.run("/usr/bin/env", arguments: ["python3", cli, "--cache", file.path,
+        let result = HandoffCLIFixture.run("/usr/bin/env", arguments: ["python3", cli, "--cache", file.path,
             "report", "D014", "--expect-title", "锁券接口", "--expect-revision", revision,
             "--repo", repository.path, "--progress", "实现完成，测试通过，待验收",
             "--event-id", "swift-interop", "--no-sync"])
@@ -154,7 +154,7 @@ final class DboardAIFeedbackTests: XCTestCase {
         XCTAssertEqual(updated.branch, "feature/lock-coupon")
         XCTAssertEqual(updated.milestones.count, 3)
         XCTAssertTrue(updated.milestones.contains { $0.content == "用户补充的联调记录" })
-        let contextRead = ProcessRunner.run("/usr/bin/env", arguments: ["python3", cli, "--cache", file.path, "context", "D014"])
+        let contextRead = HandoffCLIFixture.run("/usr/bin/env", arguments: ["python3", cli, "--cache", file.path, "context", "D014"])
         XCTAssertEqual(contextRead.exitCode, 0)
         let contextResponse = try XCTUnwrap(try JSONSerialization.jsonObject(with: contextRead.stdout) as? [String: Any])
         let handoff = try XCTUnwrap(contextResponse["context"] as? String)

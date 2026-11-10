@@ -3,7 +3,12 @@ import test_dboard_ai as base
 
 
 class DebugPagePolicyTests(unittest.TestCase):
-    setUp = base.FeedbackTests.setUp
+    def setUp(self):
+        base.FeedbackTests.setUp(self)
+        path = base.FeedbackTests.repo(self, "repo")
+        base.subprocess.run(["git", "-C", str(path), "-c", "user.name=DBoard Test", "-c", "user.email=test@example.invalid",
+                             "commit", "--allow-empty", "-qm", "测试初始提交"], check=True)
+        self.call(*self.args(self.show(), "--repo", str(path)))
     tearDown = base.FeedbackTests.tearDown
     call = base.FeedbackTests.call
     show = base.FeedbackTests.show

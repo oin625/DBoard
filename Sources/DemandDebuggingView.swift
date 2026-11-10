@@ -2,24 +2,15 @@ import SwiftUI
 
 struct DemandDebuggingView: View {
     @EnvironmentObject var vm: DBoardViewModel
-    @ObservedObject private var audi = LocalAudiServer.shared
+    @ObservedObject var audi = LocalAudiServer.shared
     let item: DItem
 
-    private var canLaunchLocal: Bool {
-        guard !item.debugPageNotNeeded,
-              item.debugPageReadError == nil,
-              item.executionReadError == nil,
-              !item.executionNeedsReview,
-              let execution = item.execution,
-              execution.debugPage != nil,
-              [.debugPageReady, .testingPassed].contains(execution.stage) else { return false }
-        return true
-    }
+    private var canLaunchLocal: Bool { AudiLocalTarget.canLaunch(item) }
 
     private var symbol: String {
         if item.debugPageReadError != nil { return "exclamationmark.circle" }
-        if item.debugPageNotNeeded { return "minus.circle" }
         if item.executionReadError != nil || item.executionNeedsReview { return "exclamationmark.circle" }
+        if item.debugPageNotNeeded { return "minus.circle" }
         switch item.execution?.stage {
         case .testingPassed: return "checkmark.circle"
         case .debugPageReady: return "slider.horizontal.3"
@@ -39,26 +30,33 @@ struct DemandDebuggingView: View {
                     }
                     .controlSize(.small)
                     .disabled(item.status == .completed || item.debugPageReadError != nil)
-                    .accessibilityIdentifier("demand-debug-undo-" + item.id)
+                    .accessibilityIdentifier("demand-debug-undo-" + item.id).demandKeyboardID("demand-debug-undo-" + item.id)
                 } else {
                     Button("无需调试页") { vm.setDebugPageNotNeeded(item.id, value: true) }
-                        .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
+                        .demandButtonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
                         .frame(minHeight: 28)
                         .disabled(item.status == .completed || item.debugPageReadError != nil)
-                        .accessibilityIdentifier("demand-debug-skip-" + item.id)
+                        .accessibilityIdentifier("demand-debug-skip-" + item.id).demandKeyboardID("demand-debug-skip-" + item.id)
                     Button { vm.copyDebugTask(item.id) } label: {
                         Label("复制调试咒言", systemImage: "wand.and.stars")
                     }
                     .controlSize(.small)
                     .disabled(item.status == .completed || item.executionReadError != nil || item.debugPageReadError != nil)
-                    .help("交给 AI 核验开发，在 audi 建调试页，并记录试调结果")
-                    .accessibilityIdentifier("demand-debug-copy-" + item.id)
+                    .accessibilityIdentifier("demand-debug-copy-" + item.id).demandKeyboardID("demand-debug-copy-" + item.id)
                 }
             }
-            Label(item.executionLabel, systemImage: symbol)
-                .font(.system(size: 11))
-                .foregroundStyle(item.debugPageReadError != nil || (!item.debugPageNotNeeded && (item.executionNeedsReview || item.executionReadError != nil)) ? Color.orange : Color.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Label(item.executionLabel, systemImage: symbol)
+                    .font(.system(size: 11))
+                    .foregroundStyle(item.debugPageReadError != nil || item.executionNeedsReview || item.executionReadError != nil ? Color.orange : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                if item.execution != nil {
+                    Button { vm.refreshCodeReviews() } label: { Image(systemName: "arrow.clockwise") }
+                        .demandButtonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
+                        .accessibilityLabel("刷新代码核验")
+                }
+            }
             if !item.debugPageNotNeeded, let execution = item.execution, let page = execution.debugPage {
                 HStack(spacing: 8) {
                     Text("audi · " + page).font(.system(size: 11)).foregroundStyle(.secondary)
@@ -76,6 +74,13 @@ struct DemandDebuggingView: View {
                     localDebugRow(page: page)
                 }
             }
+            if !canLaunchLocal && audi.isActive && audi.demandIDs.contains(item.id) {
+                LocalAudiServiceMenu(audi: audi)
+            }
+            if audi.issueDemandID == item.id, let issue = audi.issue {
+                Text(issue).font(.system(size: 11)).foregroundStyle(.orange)
+                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(9)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
@@ -87,12 +92,11 @@ struct DemandDebuggingView: View {
             switch audi.state {
             case .stopped:
                 HStack(spacing: 8) {
-                    Button { audi.startAndOpen(page: page) } label: {
+                    Button { audi.startAndOpen(id: item.id) } label: {
                         Label("启动本地 audi", systemImage: "play.circle")
                     }
                     .controlSize(.small)
-                    .help("在本地 audi 仓库运行开发服务，并在浏览器打开此调试页")
-                    .accessibilityIdentifier("demand-debug-local-start-" + item.id)
+                    .accessibilityIdentifier("demand-debug-local-start-" + item.id).demandKeyboardID("demand-debug-local-start-" + item.id)
                     Text("运行本地开发服务后在浏览器调试").font(.system(size: 11)).foregroundStyle(.secondary)
                     Spacer(minLength: 0)
                 }
@@ -102,41 +106,43 @@ struct DemandDebuggingView: View {
                     Text("正在启动本地 audi…").font(.system(size: 11)).foregroundStyle(.secondary)
                     Spacer(minLength: 0)
                     Button("取消") { audi.stop() }
-                        .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
+                        .demandButtonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
                         .frame(minHeight: 28)
-                        .accessibilityIdentifier("demand-debug-local-cancel-" + item.id)
+                        .accessibilityIdentifier("demand-debug-local-cancel-" + item.id).demandKeyboardID("demand-debug-local-cancel-" + item.id)
                 }
-            case .running(let base, let external):
+            case .running(let base, _):
                 HStack(spacing: 8) {
-                    Button { audi.open(page: page) } label: {
+                    Button { audi.startAndOpen(id: item.id) } label: {
                         Label("打开本地调试页", systemImage: "arrow.up.right.square")
                     }
                     .controlSize(.small)
-                    .accessibilityIdentifier("demand-debug-local-open-" + item.id)
-                    Text((external ? "本地 audi 已在运行 · " : "本地 audi 已启动 · ") + base.absoluteString)
+                    .accessibilityIdentifier("demand-debug-local-open-" + item.id).demandKeyboardID("demand-debug-local-open-" + item.id)
+                    Text("本地 audi 已启动 · " + base.absoluteString)
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .textSelection(.enabled).lineLimit(2)
                     Spacer(minLength: 0)
-                    if !external {
-                        Button("停止") { audi.stop() }
-                            .buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(.secondary)
-                            .frame(minHeight: 28)
-                            .accessibilityIdentifier("demand-debug-local-stop-" + item.id)
-                    }
+                    Button("停止") { audi.stop() }
+                        .controlSize(.small)
+                        .accessibilityIdentifier("demand-debug-local-stop-" + item.id).demandKeyboardID("demand-debug-local-stop-" + item.id)
+                }
+            case .stopping:
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("正在停止本地 audi…").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
             case .failed(let message):
                 HStack(spacing: 8) {
-                    Button { audi.startAndOpen(page: page) } label: {
+                    Button { audi.startAndOpen(id: item.id) } label: {
                         Label("重试启动本地 audi", systemImage: "arrow.clockwise.circle")
                     }
                     .controlSize(.small)
-                    .accessibilityIdentifier("demand-debug-local-retry-" + item.id)
+                    .accessibilityIdentifier("demand-debug-local-retry-" + item.id).demandKeyboardID("demand-debug-local-retry-" + item.id)
                     Spacer(minLength: 0)
                 }
                 Text(message).font(.system(size: 11)).foregroundStyle(.orange).lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .accessibilityIdentifier("demand-debug-local-" + item.id)
+        .accessibilityIdentifier("demand-debug-local-" + item.id).demandKeyboardID("demand-debug-local-" + item.id)
     }
 }

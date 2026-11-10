@@ -5,6 +5,7 @@ struct DemandVersion: Codable, Equatable {
     struct Repository: Codable, Equatable {
         let path: String
         let branch: String
+        var role: String? = nil
     }
     let number: Int
     let parentID: String
@@ -25,7 +26,7 @@ struct DemandVersion: Codable, Equatable {
 
     var isValid: Bool {
         number >= 2 && number < Int.max &&
-        [parentID, rootID].allSatisfy { $0.range(of: #"^D[0-9]{3,}$"#, options: .regularExpression) != nil } &&
+        [parentID, rootID].allSatisfy { $0.range(of: #"^[DP][0-9]{3,}$"#, options: .regularExpression) != nil } &&
         !parentTitle.trimmed.isEmpty && !background.trimmed.isEmpty &&
         sourceRevision.range(of: #"^[0-9a-f]{64}$"#, options: .regularExpression) != nil &&
         repositories.allSatisfy { !$0.path.trimmed.isEmpty && !$0.branch.trimmed.isEmpty }
@@ -80,6 +81,21 @@ struct DemandVersion: Codable, Equatable {
         text.append(contentsOf: archiveNotes(block))
         if let previous = item.version { text.append("更早版本的背景：\n" + previous.background) }
         return text.joined(separator: "\n")
+    }
+
+
+    static func environmentHints(_ block: [String]) throws -> [Repository] {
+        guard let line = block.first(where: { $0.hasPrefix("<!-- dboard-ai-feedback:v1:") }) else { return [] }
+        let prefix = "<!-- dboard-ai-feedback:v1:"
+        guard line.hasSuffix(" -->"), let data = Data(base64Encoded: String(line.dropFirst(prefix.count).dropLast(4))),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ReadError.invalid }
+        guard let raw = object["environment_repositories"] else { return [] }
+        guard let rows = raw as? [[String: String]] else { throw ReadError.invalid }
+        return try rows.map {
+            guard let path = $0["path"], let branch = $0["branch"], let role = $0["role"],
+                  !path.isEmpty, !branch.isEmpty, ["integration", "release"].contains(role) else { throw ReadError.invalid }
+            return Repository(path: path, branch: branch, role: role)
+        }
     }
 
     static func repositoryHints(_ block: [String], item: DItem) throws -> [Repository] {

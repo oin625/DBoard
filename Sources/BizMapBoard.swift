@@ -1648,7 +1648,6 @@ struct BizMapBoardView: View {
             prdFreshness
             if let g = vm.cache?.generated {
                 Text("生成 " + g).font(fm.font(10)).foregroundStyle(theme.current.textMuted)
-                    .help("看板生成时间，不代表服务职责与路由已重新核验")
             }
             if let ge = vm.genError {
                 Button(action: {
@@ -1658,7 +1657,6 @@ struct BizMapBoardView: View {
                         .foregroundStyle(Color.red)
                 }
                 .buttonStyle(.plain)
-                .help(vm.authExpired ? "登录态已失效，点击更新 Cookie" : ge)
             }
             Button(action: { vm.regenerate() }) {
                 if vm.regenerating && vm.refreshProgress == nil { ProgressView().controlSize(.mini) }
@@ -1666,7 +1664,6 @@ struct BizMapBoardView: View {
             }
             .buttonStyle(.plain).foregroundStyle(theme.current.textSecondary)
             .disabled(vm.regenerating)
-            .help(vm.perspective == .services ? "拉取最新代码并分析各服务变化" : "刷新需求数据")
             if let prog = vm.refreshProgress {
                 HStack(spacing: 4) {
                     ProgressView(value: Double(prog.current), total: Double(prog.total))
@@ -1696,15 +1693,6 @@ struct BizMapBoardView: View {
                 if d <= 0 { return "PRD 今日" }
                 return "PRD \(d) 天前"
             }()
-            // 时间未知不能说"较新" —— 解析失败就诚实说 unknown, 不假 ok
-            let tip: String = {
-                if ageDays == nil {
-                    return "PRD 快照时间未知。面板 ↻ 只重拼旧快照，若怀疑陈旧可对 AI 说「刷新PRD」（点此复制）"
-                }
-                return lvl == 0
-                    ? "PRD 快照较新。面板 ↻ 只重拼旧快照，拉新需对 AI 说「刷新PRD」（点此复制）"
-                    : "PRD 快照已陈旧，新需求/状态变更可能未体现。点此复制刷新指令，粘给 AI 即可"
-            }()
             Button(action: {
                 let t = vm.copyRefreshPrompt()
                 copiedHint = "已复制「\(t)」，粘给 AI 即可"
@@ -1724,7 +1712,6 @@ struct BizMapBoardView: View {
                 .foregroundStyle(color)
             }
             .buttonStyle(.plain)
-            .help(tip)
         }
     }
 
@@ -2054,7 +2041,6 @@ struct BizMapBoardView: View {
                                 .padding(6)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .background(RoundedRectangle(cornerRadius: 6).fill(prdBlue.opacity(0.06)))
-                                .help(p.note ?? "")
                             }
                         }
                     }
@@ -2143,7 +2129,6 @@ struct BizMapBoardView: View {
                             .background(Capsule().fill(prdBlue.opacity(0.10)))
                             .foregroundStyle(prdBlue)
                         }
-                        .help("在浏览器中打开钉钉 AI 表格「项目列表」")
                         Button {
                             vm.showTableProjects = true
                             vm.loadTableProjects()
@@ -2158,7 +2143,6 @@ struct BizMapBoardView: View {
                             .foregroundStyle(prdBlue)
                         }
                         .buttonStyle(.plain)
-                        .help("拉取项目表中开发包含你的全部项目")
                     }
                     if vm.myActive.isEmpty {
                         Text("暂无我进行中的需求").font(fm.font(10.5)).foregroundStyle(theme.current.textMuted)
@@ -2219,7 +2203,6 @@ struct BizMapBoardView: View {
             Button(action: { vm.openURL("https://ai.tmallyc.com/prd/index.html") }) {
                 Text("浏览器登录").font(fm.font(10)).foregroundStyle(theme.current.accentPrimary)
             }.buttonStyle(.plain)
-            .help("在 Chrome 登录后由 Cookie Bridge 自动同步；未安装扩展时可手动提取")
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10).fill(red.opacity(0.06)))
@@ -2243,7 +2226,6 @@ struct BizMapBoardView: View {
                 }
                 .buttonStyle(.plain).foregroundStyle(theme.current.textSecondary)
                 .disabled(vm.tableProjectsLoading)
-                .help("重新拉取")
                 Button(action: { vm.showTableProjects = false }) {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 16)).foregroundStyle(.secondary)
                 }.buttonStyle(.plain)
@@ -2285,16 +2267,12 @@ struct BizMapBoardView: View {
                 let stage = proj.displayStage(requirement: requirement)
                 if proj.role == "member" {
                     Text("成员").font(.system(size: 11)).foregroundStyle(.secondary)
-                        .help("你在「其它成员」里，主要负责人不是你")
                 }
                 Text(stage.label)
                     .font(.system(size: 11, weight: .medium)).monospacedDigit()
                     .padding(.horizontal, 8).padding(.vertical, 2)
                     .background(Capsule().fill(stage.tint.opacity(0.12)))
                     .foregroundStyle(stage.tint)
-                    .help(requirement != nil || !(proj.requirementStatus ?? "").isEmpty
-                          ? "需求流：\(requirement?.no ?? proj.requirementNo ?? "")；状态来自正式需求，排期日期单独展示"
-                          : "未找到唯一对应的需求流记录；排期仅供参考，开发日期已到不能确认仍在开发")
             }
             if !proj.desc.isEmpty {
                 Text(proj.desc).font(fm.font(10.5))
@@ -2437,14 +2415,13 @@ struct BizMapBoardView: View {
                     let sync = vm.syncStatus[p.name] ?? "unsynced"
                     if sync == "syncing" { ProgressView().controlSize(.small) }
                     else if sync == "synced" && !vm.syncChanged.contains(p.name) {
-                        Image(systemName: "checkmark.circle").foregroundStyle(.green).help("已与项目表同步")
+                        Image(systemName: "checkmark.circle").foregroundStyle(.green)
                     } else {
                         Button { vm.syncOne(name: p.name) } label: {
                             Image(systemName: sync == "error" ? "exclamationmark.arrow.circlepath" : "arrow.triangle.2.circlepath")
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(sync == "error" ? Color.orange : Color.secondary)
-                        .help(sync == "error" ? "同步失败，重试" : "同步到项目表")
                     }
                 }
             }
@@ -2470,7 +2447,6 @@ struct BizMapBoardView: View {
                 Button { vm.openURL(p.url) } label: {
                     Label("网页详情", systemImage: "arrow.up.right.square")
                 }
-                .help("在浏览器中打开这条需求")
                 if hero || p.scopes.contains("pending") {
                     if let next = nextStatus(p.code) {
                         Button(next.name) { vm.pushStatus(reqId: p.id, toStatus: next.code, actionName: next.name) }
@@ -2627,7 +2603,7 @@ struct BizMapBoardView: View {
                                             Text(branch).font(fm.font(11))
                                                 .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
                                                 .contentShape(Rectangle())
-                                        }.buttonStyle(.plain).help(branch)
+                                        }.buttonStyle(.plain)
                                     }
                                     .listStyle(.plain)
                                     .frame(width: 190, height: min(CGFloat(vm.devBranchResults.count) * 36, 180))
@@ -2884,7 +2860,6 @@ private struct FlowChipsLinks: View {
                         .foregroundStyle(prdBlue)
                 }
                 .buttonStyle(.plain)
-                .help(it.url)
             }
         }
     }

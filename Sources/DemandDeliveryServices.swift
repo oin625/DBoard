@@ -51,10 +51,7 @@ extension DemandDeliveryServices {
             guard let markdown = document["markdown"] as? String else {
                 throw DemandDeliveryError.message("技术说明已创建，但正文暂时无法核验，尚未提交交付物；可打开文档查看。")
             }
-            func normalize(_ text: String) -> String {
-                String(text.filter { !$0.isWhitespace && !"#*`-".contains($0) })
-            }
-            guard normalize(markdown).contains(normalize(expected)) else {
+            guard DemandDeliveryDocumentVerification.matches(actual: markdown, expected: expected) else {
                 throw DemandDeliveryError.message("技术文档正文与本次说明不一致，已保留链接，尚未提交交付物；请打开核对。")
             }
         }, listDeliverables: { id in
@@ -65,6 +62,27 @@ extension DemandDeliveryServices {
                 "deliverableContent": url, "attachmentIds": [], "deliverableAiCreate": 0,
                 "deliverableDevProject": plan.projects.map(\.declaration).joined(separator: ",")]
             _ = try DemandDeliveryRemote.requestData("deliverable/uploadWithAttachments", body: body)
+        }, readDocument: { url in
+            let value = try DemandDeliveryRemote.dws(["doc", "read", "--node", url])
+            guard let markdown = value["markdown"] as? String else {
+                throw DemandDeliveryError.message("技术方案正文暂时无法读取，未更新远端文档。")
+            }
+            return markdown
+        }, updateDocument: { url, markdown in
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("DBoardPlan-" + UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let file = directory.appendingPathComponent("plan.md")
+            try markdown.write(to: file, atomically: true, encoding: .utf8)
+            _ = try DemandDeliveryRemote.dws(["doc", "update", "--node", url, "--content-file", file.path,
+                "--mode", "overwrite", "--yes"])
+        }, renameDocument: { url, previous, title in
+            let current = try DemandDeliveryRemote.dws(["doc", "read", "--node", url])
+            if current["title"] as? String == title { return }
+            guard current["title"] as? String == previous else {
+                throw DemandDeliveryError.message("远端方案标题已被修改，请核对后再提交。")
+            }
+            _ = try DemandDeliveryRemote.dws(["drive", "rename", "--node", url, "--name", title])
         })
     }
 }

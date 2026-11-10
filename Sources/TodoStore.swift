@@ -54,8 +54,8 @@ enum TodoStore {
             body = String(body[..<r.lowerBound])
         }
         var link: String?
-        if let r = body.range(of: #"`?→\s*D[0-9]{3,}`?"#, options: .regularExpression) {
-            link = String(body[r]).replacingOccurrences(of: #"[^D0-9]"#, with: "", options: .regularExpression)
+        if let r = body.range(of: #"`?→\s*[DP][0-9]{3,}`?"#, options: .regularExpression) {
+            link = String(body[r]).replacingOccurrences(of: #"[^DP0-9]"#, with: "", options: .regularExpression)
             body.removeSubrange(r)
         }
         return TodoItem(text: body.trimmed, isCompleted: completed, linkedDItem: link,

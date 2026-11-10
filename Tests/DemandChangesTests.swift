@@ -60,7 +60,7 @@ final class DemandChangesTests: XCTestCase {
         XCTAssertFalse(copied.contains("增加照片字段"))
         let cli = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Tools/dboard_ai.py").path
-        let read = ProcessRunner.run("/usr/bin/env", arguments: ["python3", cli, "--cache", file.path,
+        let read = HandoffCLIFixture.run("/usr/bin/env", arguments: ["python3", cli, "--cache", file.path,
             "context", "D014", "--change", selected.id])
         XCTAssertEqual(read.exitCode, 0)
         let response = try XCTUnwrap(try JSONSerialization.jsonObject(with: read.stdout) as? [String: Any])
@@ -103,7 +103,7 @@ final class DemandChangesTests: XCTestCase {
         _ = try XCTUnwrap(DItemStore.appendChange(id: "D014", intent: "补充照片查询\n保留原有联调待办", at: file))
         let cli = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Tools/dboard_ai.py").path
-        let read = ProcessRunner.run("/usr/bin/env", arguments: ["python3", cli, "--cache", file.path, "show", "D014"])
+        let read = HandoffCLIFixture.run("/usr/bin/env", arguments: ["python3", cli, "--cache", file.path, "show", "D014"])
         XCTAssertEqual(read.exitCode, 0)
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: read.stdout) as? [String: Any])
         let item = try XCTUnwrap(json["item"] as? [String: Any])
@@ -112,13 +112,13 @@ final class DemandChangesTests: XCTestCase {
         XCTAssertEqual(changes.first?["intent"] as? String, "补充照片查询\n保留原有联调待办")
         let revision = try XCTUnwrap(item["revision"] as? String)
         let progress = "[C001] 已做：照片查询；待做：联调；验证：未执行"
-        let result = ProcessRunner.run("/usr/bin/env", arguments: ["python3", cli, "--cache", file.path, "report", "D014",
+        let result = HandoffCLIFixture.run("/usr/bin/env", arguments: ["python3", cli, "--cache", file.path, "report", "D014",
             "--expect-title", "锁券改造", "--expect-revision", revision, "--progress", progress,
             "--event-id", "change-round", "--no-sync"])
         XCTAssertEqual(result.exitCode, 0, String(data: result.stdout, encoding: .utf8) ?? "")
         let updated = try DItemStore.currentItem(id: "D014", at: file)
         XCTAssertEqual(updated.changes.count, 1)
-        let contextRead = ProcessRunner.run("/usr/bin/env", arguments: ["python3", cli, "--cache", file.path,
+        let contextRead = HandoffCLIFixture.run("/usr/bin/env", arguments: ["python3", cli, "--cache", file.path,
             "context", "D014", "--change", "C001"])
         XCTAssertEqual(contextRead.exitCode, 0)
         let contextJSON = try XCTUnwrap(try JSONSerialization.jsonObject(with: contextRead.stdout) as? [String: Any])

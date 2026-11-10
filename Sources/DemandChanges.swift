@@ -187,14 +187,14 @@ struct DemandChangesEditor: View {
                 Button("添加变更") { save(copy: false) }
                     .keyboardShortcut("s", modifiers: .command)
                     .disabled(session.intent.trimmed.isEmpty || latest == nil || loadError != nil)
-                Button("添加并复制") { save(copy: true) }.buttonStyle(.borderedProminent)
+                Button("添加并复制") { save(copy: true) }.demandButtonStyle(.borderedProminent)
                     .keyboardShortcut(.return, modifiers: .command)
                     .disabled(session.intent.trimmed.isEmpty || latest == nil || loadError != nil)
             }
         }
         .padding(20)
         .frame(minWidth: 520, idealWidth: 640, maxWidth: 760, minHeight: 400, idealHeight: 560)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background { DemandCanvasBackground() }
         .alert("放弃变更草稿？", isPresented: $confirmingDiscard) {
             Button("继续编辑", role: .cancel) {}
             Button("放弃草稿", role: .destructive) {
@@ -228,7 +228,7 @@ private struct DemandChangeHistoryRow: View {
                     Text(change.createdAt, format: .dateTime.month().day().hour().minute())
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                     Spacer()
-                    Button("复制这次变更", action: copy).font(.system(size: 11)).buttonStyle(.borderless)
+                    Button("复制这次变更", action: copy).font(.system(size: 11)).demandButtonStyle(.borderless)
                 }
                 Text(change.intent.split(separator: "\n").first.map(String.init) ?? "查看变更内容")
                     .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)

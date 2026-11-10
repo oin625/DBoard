@@ -5,6 +5,11 @@ import Combine
 
 @main
 struct DBoardApp: App {
+    init() {
+        if let index = CommandLine.arguments.firstIndex(of: "--dboard-delivery-cli") {
+            DemandDeliveryCommand.run(Array(CommandLine.arguments[index...]))
+        }
+    }
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
@@ -26,6 +31,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var replyInboxWindow: ReplyInboxWindowController!
 
     private var mainWindowInteraction: WorkspaceWindowInteraction?
+    private let demandDetailWindow = DemandDetailWindowController()
+    private let newDemandWindow = NewDemandWindowController()
+    private let demandQuickOpenWindow = DemandQuickOpenWindowController()
     private let mainFocusReturn = PanelFocusReturn()
     private var debugTriggerTimer: Timer?
 
@@ -54,6 +62,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         NSLog("DBoard: statusItem created: \(statusItem != nil)")
 
         viewModel = DBoardViewModel()
+        viewModel.demandWindowPresenter = { [weak self] vm in
+            guard let self else { return }
+            self.closeMainPopover(restoreFocus: false)
+            self.demandDetailWindow.show(vm)
+        }
+        viewModel.demandWorkspacePresenter = { [weak self] in self?.detachPanel() }
+        viewModel.newDemandWindowPresenter = { [weak self] vm in
+            guard let self else { return }
+            self.closeMainPopover(restoreFocus: false)
+            self.newDemandWindow.show(vm)
+        }
 
         if let button = statusItem.button {
             NSLog("DBoard: statusItem button exists")
@@ -171,12 +190,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             "logs": { UsageStats.hit("logs"); WorkspacePreferences.shared.remember("logs"); AppReleaseWindowController.shared.toggleLogs() },
             "apprelease": { UsageStats.hit("apprelease"); WorkspacePreferences.shared.remember("apprelease"); AppReleaseWindowController.shared.toggle() },
             "audihome": { UsageStats.hit("audihome"); WorkspacePreferences.shared.remember("audihome"); AppReleaseWindowController.shared.toggleHome() },
-            "logsearch": { UsageStats.hit("logsearch"); WorkspacePreferences.shared.remember("logsearch"); LogSearchWindowController.shared.searchWithClipboard() },
         ].mapValues { [weak self] action in
             return { self?.closeMainPopover(restoreFocus: false); action() }
         }
         // Home must toggle before any popover close; other module shortcuts retain their behavior.
         shortcutActions["dboard"] = { [weak self] in self?.toggleHome() }
+        shortcutActions["quickopen"] = { [weak self] in self?.toggleQuickOpen() }
         GlobalShortcutManager.shared.configure(actions: shortcutActions)
         // 快捷键状态与配置变化由管理器统一处理，默认保留原有组合。
 
@@ -191,10 +210,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             switch c {
             case "optv": ClipboardBoardWindowController.shared.show()
             case "ctrlr": BizMapBoardWindowController.shared.toggleWindow(requirements: true)
-            case "logsearch": LogSearchWindowController.shared.show()
             case "apprelease": AppReleaseWindowController.shared.show()
             case "panel": self?.detachPanel()
             case "home": self?.toggleHome()
+            case "quickopen": self?.toggleQuickOpen()
             case "settings":
                 self?.detachPanel()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
@@ -206,9 +225,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             case let cmd where c.hasPrefix("expand="):
                 self?.viewModel.expandedIDs.insert(String(cmd.dropFirst("expand=".count)))
                 self?.detachPanel()
-            case let cmd where c.hasPrefix("logsearchq="):
-                LogSearchWindowController.shared.debugSearch(String(cmd.dropFirst("logsearchq=".count)))
-
             case "report":
                 let w = ClipboardBoardWindowController.shared.debugWindowInfo()
                 try? w.write(toFile: "/tmp/dboard-debug-report.txt", atomically: true, encoding: .utf8)
@@ -236,6 +252,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     // MARK: - 主面板交互 (popover 模式)
+
+    func toggleQuickOpen() {
+        closeMainPopover(restoreFocus: false)
+        demandQuickOpenWindow.toggle(viewModel)
+    }
 
     func toggleHome() {
         UsageStats.hit("dboard")

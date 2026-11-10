@@ -23,11 +23,12 @@ struct DemandExecution: Codable, Equatable {
     let debugPage: String?
     let debugURL: String?
     let updatedAt: String
+    var code: [DemandCodeSnapshot]? = nil
     static let prefix = "<!-- dboard-execution:v1:"
     static let suffix = " -->"
 
     enum CodingKeys: String, CodingKey {
-        case stage, scopeHash = "scope_hash", debugPage = "debug_page", debugURL = "debug_url", updatedAt = "updated_at"
+        case stage, scopeHash = "scope_hash", debugPage = "debug_page", debugURL = "debug_url", updatedAt = "updated_at", code
     }
     enum ReadError: LocalizedError {
         case invalid
@@ -49,6 +50,7 @@ struct DemandExecution: Codable, Equatable {
     var isValid: Bool {
         guard scopeHash.range(of: #"^[0-9a-f]{64}$"#, options: .regularExpression) != nil,
               !updatedAt.isEmpty, !updatedAt.unicodeScalars.contains(where: { $0.value < 32 }) else { return false }
+        if let code, code.isEmpty || !code.allSatisfy(\.isValid) || Set(code.map(\.path)).count != code.count { return false }
         if let page = debugPage, !Self.validPage(page) { return false }
         if stage == .debugPageReady || stage == .testingPassed, debugPage == nil { return false }
         if let url = debugURL {
@@ -91,24 +93,34 @@ struct DemandExecution: Codable, Equatable {
             } else { i += 1 }
         }
         let keys = ["项目", "描述", "提示词", "变更咒言", "需求流", "关联群聊"]
-        let values = [header] + keys.map { fields[$0] ?? "" } +
+        var values = [header] + keys.map { fields[$0] ?? "" } +
             block.filter { $0.hasPrefix(DemandVersion.prefix) }
+        if let kind = fields["类型"], kind != DemandKind.development.rawValue { values.append("kind=" + kind) }
         return SHA256.hash(data: Data(values.joined(separator: "\0").utf8))
             .map { String(format: "%02x", $0) }.joined()
     }
 }
 
 extension DItem {
-    var executionNeedsReview: Bool {
+    var executionScopeNeedsReview: Bool {
         guard let execution else { return false }
         return execution.scopeHash != executionScope
     }
+    var executionReviewReason: String? {
+        guard let execution else { return nil }
+        if executionScopeNeedsReview { return "需求已变更 · 需重新核验" }
+        if execution.stage == .developing { return nil }
+        if execution.code == nil { return "旧结论未绑定代码 · 需重新核验" }
+        guard let review = executionCodeReview else { return "代码版本待核对" }
+        return review.needsReview ? review.reason ?? "代码已变更 · 需重新核验" : nil
+    }
+    var executionNeedsReview: Bool { executionReviewReason != nil }
     var executionLabel: String {
         if debugPageReadError != nil { return "调试页设置无法读取" }
-        if debugPageNotNeeded { return "无需调试页" }
         if executionReadError != nil { return "调试记录无法读取" }
-        if executionNeedsReview { return "需求已变更 · 需重新核验" }
-        if execution?.stage == .developmentComplete, execution?.debugPage != nil { return "开发已核验 · 调试页待更新" }
+        if let reason = executionReviewReason { return reason }
+        if debugPageNotNeeded { return "无需调试页" }
+        if execution?.stage == .developmentComplete, execution?.debugPage != nil { return "开发已核验 · 调试页待同步" }
         return execution?.stage.label ?? "尚未核验开发完成情况"
     }
 }

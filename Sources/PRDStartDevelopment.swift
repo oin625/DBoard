@@ -129,7 +129,6 @@ struct PRDStartDevelopmentSheet: View {
                                 calendarDate = PRDStartDevelopmentDraft.date(launchBinding.wrappedValue) ?? Date()
                                 showCalendar = true
                             } label: { Image(systemName: "calendar") }
-                                .help("选择计划上线日期")
                                 .popover(isPresented: $showCalendar) {
                                     VStack(spacing: 12) {
                                         DatePicker("计划上线日期", selection: $calendarDate, displayedComponents: .date)
