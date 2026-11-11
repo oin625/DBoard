@@ -46,7 +46,7 @@ struct DemandSpellField: View {
                 .frame(height: height)
                 .overlay(alignment: .topLeading) {
                     if text.isEmpty {
-                        Text(placeholder).font(.system(size: 13)).foregroundStyle(.tertiary)
+                        Text(placeholder).dboardFont(size: 13).foregroundStyle(.tertiary)
                             .padding(.horizontal, 8).padding(.vertical, 6).allowsHitTesting(false)
                     }
                 }
@@ -55,15 +55,15 @@ struct DemandSpellField: View {
             HStack(spacing: 8) {
                 if showPasteButton {
                     Button("粘贴", systemImage: "doc.on.clipboard") { controller.paste() }
-                        .demandButtonStyle(.borderless).font(.system(size: 12))
+                        .demandButtonStyle(.borderless).dboardFont(size: 12)
                 }
                 Button("添加图片", systemImage: "photo.badge.plus") { controller.chooseImages() }
-                    .demandButtonStyle(.borderless).font(.system(size: 12))
+                    .demandButtonStyle(.borderless).dboardFont(size: 12)
                 Text("也可粘贴或拖入图片，双击查看原图")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .dboardFont(size: 11).foregroundStyle(.secondary)
             }
             if let error = controller.error {
-                Text(error).font(.system(size: 12)).foregroundStyle(.orange)
+                Text(error).dboardFont(size: 12).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -78,8 +78,12 @@ struct DemandSpellInput: NSViewRepresentable {
     var imageStore: DemandImageStore = .shared
     var onEditingEnded: () -> Void = {}
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dboardFontOverride) private var fontOverride
+    @ObservedObject private var fonts = FontManager.shared
 
-    func makeCoordinator() -> Coordinator { Coordinator(text: $text, onEditingEnded: onEditingEnded) }
+    private var editorFont: NSFont { (fontOverride ?? fonts.current).appKitFont(13) }
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text, onEditingEnded: onEditingEnded, font: editorFont) }
 
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = PromptContextInput.PromptContextScrollView()
@@ -96,7 +100,7 @@ struct DemandSpellInput: NSViewRepresentable {
         editor.isRichText = true
         editor.importsGraphics = false
         editor.allowsUndo = true
-        editor.font = .systemFont(ofSize: 13)
+        editor.font = editorFont
         editor.backgroundColor = .textBackgroundColor
         editor.textContainerInset = NSSize(width: 8, height: 6)
         editor.isHorizontallyResizable = false
@@ -112,13 +116,13 @@ struct DemandSpellInput: NSViewRepresentable {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byCharWrapping
         editor.defaultParagraphStyle = paragraph
-        editor.typingAttributes = [.font: NSFont.systemFont(ofSize: 13), .paragraphStyle: paragraph]
+        editor.typingAttributes = [.font: editorFont, .paragraphStyle: paragraph]
         editor.textContainer?.widthTracksTextView = true
         editor.textContainer?.heightTracksTextView = false
         editor.textContainer?.lineFragmentPadding = 0
         editor.textContainer?.lineBreakMode = .byCharWrapping
         editor.setAccessibilityLabel(title)
-        editor.textStorage?.setAttributedString(DemandSpellText.attributed(text))
+        editor.textStorage?.setAttributedString(DemandSpellText.attributed(text, font: editorFont))
         editor.delegate = context.coordinator
         editor.registerForDraggedTypes([.fileURL, .png, .tiff])
         scroll.documentView = editor
@@ -137,19 +141,21 @@ struct DemandSpellInput: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.text = $text
         context.coordinator.onEditingEnded = onEditingEnded
+        context.coordinator.font = editorFont
         guard let editor = scroll.documentView as? DemandSpellTextView else { return }
         controller.editor = editor
         // Marked text belongs to the input method until it commits, including its attributes and selection.
         guard !editor.hasMarkedText() else { return }
         if DemandSpellText.markdown(editor.attributedString()) != text {
             let selection = editor.selectedRange()
-            editor.textStorage?.setAttributedString(DemandSpellText.attributed(text))
+            editor.textStorage?.setAttributedString(DemandSpellText.attributed(text, font: editorFont))
             editor.setSelectedRange(NSRange(location: min(selection.location, editor.string.utf16.count), length: 0))
         }
         applyColors(to: editor)
     }
 
     private func applyColors(to editor: NSTextView) {
+        DBoardEditorFont.apply(editorFont, to: editor)
         let appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
         var color = NSColor.labelColor
         appearance?.performAsCurrentDrawingAppearance {
@@ -158,7 +164,6 @@ struct DemandSpellInput: NSViewRepresentable {
         editor.textColor = color
         editor.insertionPointColor = color
         editor.typingAttributes[.foregroundColor] = color
-        editor.typingAttributes[.font] = NSFont.systemFont(ofSize: 13)
         editor.textStorage?.addAttribute(.foregroundColor, value: color,
                                         range: NSRange(location: 0, length: editor.attributedString().length))
     }
@@ -166,11 +171,14 @@ struct DemandSpellInput: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var text: Binding<String>
         var onEditingEnded: () -> Void
-        init(text: Binding<String>, onEditingEnded: @escaping () -> Void) {
-            self.text = text; self.onEditingEnded = onEditingEnded
+        var font: NSFont
+        init(text: Binding<String>, onEditingEnded: @escaping () -> Void, font: NSFont) {
+            self.text = text; self.onEditingEnded = onEditingEnded; self.font = font
         }
         private func publish(_ editor: NSTextView) {
             guard !editor.hasMarkedText() else { return }
+            // A preference changed during IME composition is applied when text commits.
+            DBoardEditorFont.apply(font, to: editor)
             let value = DemandSpellText.markdown(editor.attributedString())
             if value != text.wrappedValue { text.wrappedValue = value }
         }
@@ -250,7 +258,8 @@ final class DemandSpellTextView: NSTextView {
     func insertImageLinks(_ links: [String]) {
         let selection = selectedRange()
         let prefix = selection.location > 0 && (string as NSString).substring(with: NSRange(location: selection.location - 1, length: 1)) != "\n" ? "\n" : ""
-        let content = DemandSpellText.attributed(prefix + links.joined(separator: "\n") + "\n")
+        let font = typingAttributes[.font] as? NSFont ?? self.font ?? .systemFont(ofSize: 13)
+        let content = DemandSpellText.attributed(prefix + links.joined(separator: "\n") + "\n", font: font)
         insertText(content, replacementRange: selection)
         scrollRangeToVisible(selectedRange())
     }
@@ -370,7 +379,7 @@ struct DemandSpellContentView: View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(pieces) { piece in
                 if let text = piece.text, !text.trimmingCharacters(in: .newlines).isEmpty {
-                    Text(text.trimmingCharacters(in: .newlines)).font(.system(size: 13)).textSelection(.enabled)
+                    Text(text.trimmingCharacters(in: .newlines)).dboardFont(size: 13).textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if let image = piece.image {
@@ -382,7 +391,7 @@ struct DemandSpellContentView: View {
                         .accessibilityLabel("查看图片：" + image.label)
                     } else {
                         Label("图片无法读取：" + image.label, systemImage: "photo.badge.exclamationmark")
-                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                            .dboardFont(size: 12).foregroundStyle(.secondary)
                     }
                 }
             }

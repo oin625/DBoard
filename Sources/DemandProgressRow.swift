@@ -21,7 +21,7 @@ struct DemandProgressRow: View {
                             HStack(spacing: 3) {
                                 Text(detailsExpanded ? "收起" : "明细")
                                 Image(systemName: detailsExpanded ? "chevron.up" : "chevron.down")
-                            }.font(.system(size: 11)).foregroundStyle(theme.current.textTertiary)
+                            }.dboardFont(size: 11).foregroundStyle(theme.current.textTertiary)
                         }
                         .demandButtonStyle(.plain).fixedSize().padding(.top, 2)
                         .accessibilityLabel((detailsExpanded ? "收起明细：" : "展开明细：") + record.summary)

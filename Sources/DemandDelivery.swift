@@ -463,11 +463,11 @@ struct DemandDeliveryAction: View {
                 .accessibilityIdentifier("demand-development-delivery-" + item.id).demandKeyboardID("demand-development-delivery-" + item.id)
                 Spacer()
                 if let url = state.documentURL, let target = URL(string: url) {
-                    Link("查看技术方案", destination: target).font(.system(size: 11))
+                    Link("查看技术方案", destination: target).dboardFont(size: 11)
                 }
             }
             if !state.running && !state.message.isEmpty {
-                Text(state.message).font(.system(size: 11)).foregroundStyle(state.failed ? Color.orange : Color.secondary)
+                Text(state.message).dboardFont(size: 11).foregroundStyle(state.failed ? Color.orange : Color.secondary)
                     .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -481,15 +481,15 @@ struct DemandDeliveryPreviewView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("确认开发交付").font(.system(size: 17, weight: .semibold))
+                Text("确认开发交付").dboardFont(size: 17, weight: .semibold)
                 Text(plan.link.no + " · " + plan.item.displayTitle)
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                    .dboardFont(size: 12).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("开发工程与分支").font(.system(size: 12, weight: .semibold))
-                    Text("\(plan.projects.count) 个工程").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("开发工程与分支").dboardFont(size: 12, weight: .semibold)
+                    Text("\(plan.projects.count) 个工程").dboardFont(size: 11).foregroundStyle(.secondary)
                 }
                 ScrollView(.vertical) {
                     Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 8) {
@@ -500,7 +500,7 @@ struct DemandDeliveryPreviewView: View {
                             }
                         }
                     }
-                    .font(.system(size: 12))
+                    .dboardFont(size: 12)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
@@ -511,7 +511,7 @@ struct DemandDeliveryPreviewView: View {
                 .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
             }
             VStack(alignment: .leading, spacing: 8) {
-                Text("技术方案").font(.system(size: 13, weight: .semibold))
+                Text("技术方案").dboardFont(size: 13, weight: .semibold)
                 ScrollView(.vertical) {
                     DemandTechnicalPlanBody(markdown: plan.document())
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -529,7 +529,7 @@ struct DemandDeliveryPreviewView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Divider()
                 Text("确认后保存／更新技术方案，并提交以上开发分支。")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .dboardFont(size: 11).foregroundStyle(.secondary)
                 HStack {
                     Spacer()
                     Button("返回核对", action: close).keyboardShortcut(.cancelAction)

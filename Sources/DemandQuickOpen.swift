@@ -173,6 +173,7 @@ final class DemandQuickOpenModel: ObservableObject {
 }
 
 struct DemandQuickOpenView: View {
+    @EnvironmentObject private var theme: ThemeManager
     @ObservedObject var model: DemandQuickOpenModel
     let open: (DemandQuickOpenEntry) -> Void
     let close: () -> Void
@@ -203,7 +204,7 @@ struct DemandQuickOpenView: View {
         .background { DemandCanvasBackground() }
         .clipShape(RoundedRectangle(cornerRadius: 23))
         .overlay(alignment: .top) {
-            Text(model.scope.rawValue).font(.system(size: 11, weight: .medium))
+            Text(model.scope.rawValue).dboardFont(size: 11, weight: .medium)
                 .foregroundStyle(.secondary).opacity(scopeNoticeVisible ? 0.65 : 0)
                 .padding(.top, 7).allowsHitTesting(false)
                 .animation(.easeInOut(duration: 0.25), value: scopeNoticeVisible)
@@ -211,13 +212,15 @@ struct DemandQuickOpenView: View {
         }
         .overlay(alignment: .bottom) {
             if let notice = model.copyNotice {
-                Text(notice).font(.system(size: 11, weight: .medium))
+                Text(notice).dboardFont(size: 11, weight: .medium)
                     .foregroundStyle(.secondary).padding(.horizontal, 10).padding(.vertical, 5)
                     .background(.regularMaterial, in: Capsule()).padding(.bottom, 10)
                     .allowsHitTesting(false)
             }
         }
-        .shadow(color: .black.opacity(colorScheme == .dark ? 0.2 : 0.1), radius: 14, y: 7)
+        .shadow(color: theme.current.shadow.opacity(colorScheme == .dark ? 0.2 : 0.1), radius: 14, y: 7)
+        .dboardFont(size: 13)
+        .dboardThemeAccent()
         .scaleEffect(appeared || reduceMotion ? 1 : 0.94)
         .opacity(appeared || reduceMotion ? 1 : 0)
         .animation(motion, value: appeared)
@@ -249,43 +252,43 @@ struct DemandQuickOpenView: View {
     }
 
     private func hero(_ entry: DemandQuickOpenEntry) -> some View {
-        let accent: Color = entry.item.isIncident ? .orange : .blue
+        let accent: Color = entry.item.isIncident ? .orange : theme.current.accentPrimary
         return Button { open(entry) } label: {
             VStack(alignment: .leading, spacing: 13) {
                 HStack {
                     Text(entry.id).font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Text(entry.item.status.label).font(.system(size: 10, weight: .medium))
+                    Text(entry.item.status.label).dboardFont(size: 10, weight: .medium)
                         .foregroundStyle(accent).padding(.horizontal, 8).padding(.vertical, 4)
                         .background(accent.opacity(0.075), in: Capsule())
                 }
-                Text(entry.item.displayTitle).font(.system(size: 25, weight: .semibold))
+                Text(entry.item.displayTitle).dboardFont(size: 25, weight: .semibold)
                     .tracking(-0.5).foregroundStyle(.primary).lineLimit(3)
                     .frame(maxWidth: .infinity, alignment: .leading).layoutPriority(2)
                 if !entry.item.reminder.trimmed.isEmpty {
-                    Text(entry.item.reminder).font(.system(size: 14, weight: .medium))
+                    Text(entry.item.reminder).dboardFont(size: 14, weight: .medium)
                         .foregroundStyle(accent).lineLimit(2).layoutPriority(1)
                 } else if let stage = entry.item.execution?.stage {
-                    Text(stage.label).font(.system(size: 12)).foregroundStyle(accent).lineLimit(2)
+                    Text(stage.label).dboardFont(size: 12).foregroundStyle(accent).lineLimit(2)
                 }
                 if let latest = entry.item.milestones.last, !latest.summary.trimmed.isEmpty {
                     VStack(alignment: .leading, spacing: 7) {
                         HStack(spacing: 7) {
                             Text("最近进展").fontWeight(.medium)
                             Text(latest.date)
-                        }.font(.system(size: 10)).foregroundStyle(.tertiary)
-                        Text(latest.summary).font(.system(size: 12)).foregroundStyle(.secondary)
+                        }.dboardFont(size: 10).foregroundStyle(.tertiary)
+                        Text(latest.summary).dboardFont(size: 12).foregroundStyle(.secondary)
                             .lineLimit(4).lineSpacing(3)
                     }.padding(.top, 2)
                 } else if let description = description(for: entry.item) {
-                    Text(description).font(.system(size: 12)).foregroundStyle(.secondary)
+                    Text(description).dboardFont(size: 12).foregroundStyle(.secondary)
                         .lineLimit(4).lineSpacing(3)
                 }
                 Spacer(minLength: 8)
                 HStack {
                     Text(entry.item.project.isEmpty ? entry.item.kind.rawValue : entry.item.project)
-                        .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                        .dboardFont(size: 11).foregroundStyle(.secondary).lineLimit(1)
                     Spacer()
                     Text("\(model.selectedIndex + 1) / \(model.entries.count)")
                         .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
@@ -315,7 +318,7 @@ struct DemandQuickOpenView: View {
                         Text("含已完成")
                     }.foregroundStyle(model.includesCompleted ? Color.accentColor : .secondary)
                 }.buttonStyle(.plain).accessibilityIdentifier("quick-open-completed")
-            }.font(.system(size: 10)).padding(.horizontal, 3).padding(.vertical, 4)
+            }.dboardFont(size: 10).padding(.horizontal, 3).padding(.vertical, 4)
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVGrid(columns: [
@@ -338,34 +341,34 @@ struct DemandQuickOpenView: View {
 
     private func gridCard(_ entry: DemandQuickOpenEntry) -> some View {
         let chosen = model.selectedID == entry.id
-        let accent: Color = entry.item.isIncident ? .orange : .blue
+        let accent: Color = entry.item.isIncident ? .orange : theme.current.accentPrimary
         return Button { open(entry) } label: {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
                     Text(entry.id).font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundStyle(.secondary).lineLimit(1)
                     Spacer(minLength: 2)
-                    Text(entry.item.status.label).font(.system(size: 9, weight: .medium))
+                    Text(entry.item.status.label).dboardFont(size: 9, weight: .medium)
                         .foregroundStyle(accent).lineLimit(1)
                 }
                 Text(entry.item.displayTitle)
-                    .font(.system(size: 13, weight: chosen ? .semibold : .medium))
+                    .dboardFont(size: 13, weight: chosen ? .semibold : .medium)
                     .foregroundStyle(.primary).lineLimit(2)
                     .frame(maxWidth: .infinity, minHeight: 32, alignment: .topLeading)
                 if !entry.item.reminder.trimmed.isEmpty {
-                    Text(entry.item.reminder).font(.system(size: 10, weight: .medium))
+                    Text(entry.item.reminder).dboardFont(size: 10, weight: .medium)
                         .foregroundStyle(accent).lineLimit(1)
                 } else if let latest = entry.item.milestones.last, !latest.summary.trimmed.isEmpty {
-                    Text(latest.summary).font(.system(size: 10))
+                    Text(latest.summary).dboardFont(size: 10)
                         .foregroundStyle(.secondary).lineLimit(1)
                 } else {
                     Text(entry.item.project.isEmpty ? entry.item.kind.rawValue : entry.item.project)
-                        .font(.system(size: 10)).foregroundStyle(.tertiary).lineLimit(1)
+                        .dboardFont(size: 10).foregroundStyle(.tertiary).lineLimit(1)
                 }
             }.padding(12).frame(maxWidth: .infinity, minHeight: 100, alignment: .topLeading)
                 .background {
                     RoundedRectangle(cornerRadius: 14)
-                        .fill(chosen ? Color.accentColor.opacity(0.10) : Color.primary.opacity(0.035))
+                        .fill(chosen ? theme.current.accentPrimary.opacity(0.10) : theme.current.cardFill.opacity(0.35))
                     if chosen {
                         RoundedRectangle(cornerRadius: 14).stroke(Color.accentColor.opacity(0.9), lineWidth: 1.25)
                             .matchedGeometryEffect(id: "grid-selection", in: gridSelection)
@@ -381,7 +384,7 @@ struct DemandQuickOpenView: View {
 
     private var emptyState: some View {
         VStack(spacing: 12) {
-            Text("这里还没有任务").font(.system(size: 16, weight: .medium))
+            Text("这里还没有任务").dboardFont(size: 16, weight: .medium)
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
@@ -400,13 +403,15 @@ final class DemandQuickOpenWindowController: NSObject, NSWindowDelegate {
     private let focusReturn = PanelFocusReturn()
     private let activates: Bool
     private let recents: DemandQuickOpenRecents
+    private let theme: ThemeManager
     private let copyCurrentState: ((String) -> Bool)?
     private var closing = false
 
     init(activates: Bool = true, recents: DemandQuickOpenRecents = .shared,
-         copyCurrentState: ((String) -> Bool)? = nil) {
+         theme: ThemeManager = .shared, copyCurrentState: ((String) -> Bool)? = nil) {
         self.activates = activates
         self.recents = recents
+        self.theme = theme
         self.copyCurrentState = copyCurrentState
     }
 
@@ -438,7 +443,8 @@ final class DemandQuickOpenWindowController: NSObject, NSWindowDelegate {
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         panel.delegate = self
         panel.contentView = NSHostingView(rootView: DemandQuickOpenView(model: model,
-            open: { [weak self] in self?.open($0) }, close: { [weak self] in self?.close() }))
+            open: { [weak self] in self?.open($0) }, close: { [weak self] in self?.close() })
+            .environmentObject(theme))
         window = panel
         vm.$items.receive(on: RunLoop.main).sink { [weak self, weak vm] items in
             guard let self, let vm else { return }

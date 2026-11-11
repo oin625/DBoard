@@ -250,24 +250,24 @@ struct OpsActionRow: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 Image(systemName: st.phase == .failed ? "exclamationmark.triangle.fill" : action.icon)
-                    .font(.system(size: 15))
+                    .dboardFont(size: 15)
                     .foregroundStyle(tint)
                     .frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(action.title).font(.system(size: 13, weight: .medium))
+                    Text(action.title).dboardFont(size: 13, weight: .medium)
                         .foregroundStyle(theme.current.textPrimary)
-                    Text(subtitle).font(.system(size: 11))
+                    Text(subtitle).dboardFont(size: 11)
                         .foregroundStyle(st.phase == .failed ? Color.red : theme.current.textTertiary)
                         .lineLimit(1).truncationMode(.middle)
                     if action.id == OpsAction.douyinCookie.id, let expiry = cookieReminder.expiry {
-                        Text(expiry.summary).font(.system(size: 11))
+                        Text(expiry.summary).dboardFont(size: 11)
                             .foregroundStyle(expiry.needsReminder ? Color.orange : theme.current.textTertiary)
                     }
                 }
                 Spacer(minLength: 6)
                 if !st.log.isEmpty {
                     Button { showLog.toggle() } label: {
-                        Image(systemName: "text.alignleft").font(.system(size: 11))
+                        Image(systemName: "text.alignleft").dboardFont(size: 11)
                     }
                     .buttonStyle(.borderless)
                     .foregroundStyle(theme.current.textTertiary)

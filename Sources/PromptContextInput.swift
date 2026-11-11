@@ -5,9 +5,13 @@ import AppKit
 struct PromptContextInput: NSViewRepresentable {
     @Binding var text: String
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.dboardFontOverride) private var fontOverride
+    @ObservedObject private var fonts = FontManager.shared
     let title: String
 
-    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+    private var editorFont: NSFont { (fontOverride ?? fonts.current).appKitFont(13) }
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text, font: editorFont) }
 
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = PromptContextScrollView()
@@ -22,7 +26,7 @@ struct PromptContextInput: NSViewRepresentable {
         editor.isRichText = false
         editor.importsGraphics = false
         editor.allowsUndo = true
-        editor.font = .systemFont(ofSize: 13)
+        editor.font = editorFont
         editor.textColor = .textColor
         editor.backgroundColor = .textBackgroundColor
         editor.textContainerInset = NSSize(width: 8, height: 4)
@@ -39,7 +43,7 @@ struct PromptContextInput: NSViewRepresentable {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byCharWrapping
         editor.defaultParagraphStyle = paragraph
-        editor.typingAttributes = [.font: NSFont.systemFont(ofSize: 13), .paragraphStyle: paragraph]
+        editor.typingAttributes = [.font: editorFont, .paragraphStyle: paragraph]
         if let container = editor.textContainer {
             container.widthTracksTextView = true
             container.heightTracksTextView = false
@@ -56,13 +60,15 @@ struct PromptContextInput: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.text = $text
-        if let editor = scroll.documentView as? NSTextView {
+        context.coordinator.font = editorFont
+        if let editor = scroll.documentView as? NSTextView, !editor.hasMarkedText() {
             if editor.string != text { editor.string = text }
             applyColors(to: editor)
         }
     }
 
     private func applyColors(to editor: NSTextView) {
+        DBoardEditorFont.apply(editorFont, to: editor)
         let appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
         var color = NSColor.labelColor
         appearance?.performAsCurrentDrawingAppearance {
@@ -126,9 +132,11 @@ struct PromptContextInput: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var text: Binding<String>
-        init(text: Binding<String>) { self.text = text }
+        var font: NSFont
+        init(text: Binding<String>, font: NSFont) { self.text = text; self.font = font }
         func textDidChange(_ notification: Notification) {
-            guard let editor = notification.object as? NSTextView else { return }
+            guard let editor = notification.object as? NSTextView, !editor.hasMarkedText() else { return }
+            DBoardEditorFont.apply(font, to: editor)
             text.wrappedValue = editor.string
         }
     }

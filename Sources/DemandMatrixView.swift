@@ -34,7 +34,7 @@ struct DemandLayoutPicker: View {
             ForEach(DemandLayout.allCases) { layout in
                 Button { selection = layout } label: {
                     Label(layout.title, systemImage: layout.symbol)
-                        .font(.system(size: 11, weight: selection == layout ? .semibold : .medium))
+                        .dboardFont(size: 11, weight: selection == layout ? .semibold : .medium)
                         .foregroundStyle(selection == layout ? Color.primary : .secondary)
                         .frame(width: layout == .matrix ? 76 : 66, height: 28)
                         .background {
@@ -72,10 +72,10 @@ struct DemandMatrixView: View {
                 Label("重要", systemImage: "arrow.up")
                 Spacer(minLength: 4)
                 Text(dragging.active == nil ? "拖动卡片调整象限" : "松开即可移动")
-                    .font(.system(size: 10)).foregroundStyle(.tertiary)
+                    .dboardFont(size: 10).foregroundStyle(.tertiary)
                 Spacer(minLength: 4)
                 Text("紧急 →")
-            }.font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+            }.dboardFont(size: 11, weight: .medium).foregroundStyle(.secondary)
             VStack(spacing: 16) {
                 matrixRow(DemandMatrix.rows[0])
                 matrixRow(DemandMatrix.rows[1])
@@ -100,7 +100,7 @@ struct DemandMatrixView: View {
                     let frame = proxy.frame(in: .global)
                     VStack(alignment: .leading, spacing: 5) {
                         Text(item.id).font(.system(size: 11, weight: .medium, design: .monospaced)).foregroundStyle(.secondary)
-                        Text(item.displayTitle).font(.system(size: 13, weight: .medium)).lineLimit(2)
+                        Text(item.displayTitle).dboardFont(size: 13, weight: .medium).lineLimit(2)
                     }
                     .padding(10).frame(width: min(220, frame.width - 24), alignment: .leading)
                     .workspaceSurface(radius: 11, highlighted: true)
@@ -157,21 +157,21 @@ private struct DemandQuadrant: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 6) {
-                Text(priority.title).font(.system(size: 11, weight: .semibold))
+                Text(priority.title).dboardFont(size: 11, weight: .semibold)
                     .lineLimit(1).minimumScaleFactor(0.85)
                     .foregroundStyle(priority.color)
                     .padding(.horizontal, 8).padding(.vertical, 5)
                     .background(priority.color.opacity(0.085), in: Capsule())
                 Spacer(minLength: 0)
-                Text("\(items.count)").font(.system(size: 11, weight: .medium, design: .rounded))
+                Text("\(items.count)").dboardFont(size: 11, weight: .medium, design: .rounded)
                     .monospacedDigit().foregroundStyle(.secondary).padding(.trailing, 3)
             }.padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 4)
             if items.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: isTargeted ? "arrow.down.to.line" : "square.dashed")
-                        .font(.system(size: 20, weight: .light)).foregroundStyle(.quaternary)
+                        .dboardFont(size: 20, weight: .light).foregroundStyle(.quaternary)
                     Text(isTargeted ? "移到这里" : "暂无需求")
-                        .font(.system(size: 11)).foregroundStyle(.tertiary)
+                        .dboardFont(size: 11).foregroundStyle(.tertiary)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
@@ -222,25 +222,25 @@ struct DemandMatrixCard: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 HStack(spacing: 6) {
-                    Image(systemName: "line.3.horizontal").font(.system(size: 9)).foregroundStyle(.tertiary)
+                    Image(systemName: "line.3.horizontal").dboardFont(size: 9).foregroundStyle(.tertiary)
                         .opacity(hovered ? 1 : 0.45)
                     Text(item.id).font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(.secondary)
                     DemandKindBadge(item: item)
-                    Text(item.status.label).font(.system(size: 10, weight: .medium))
+                    Text(item.status.label).dboardFont(size: 10, weight: .medium)
                         .foregroundStyle(item.status == .inProgress ? Color.accentColor : Color.secondary)
                         .lineLimit(1)
                     Spacer(minLength: 0)
                 }.frame(minHeight: 22).modifier(interaction)
                 Button { vm.copyCurrentState(item.id) } label: {
-                    Image(systemName: "doc.on.doc").font(.system(size: 11)).frame(width: 24, height: 24)
+                    Image(systemName: "doc.on.doc").dboardFont(size: 11).frame(width: 24, height: 24)
                 }.demandButtonStyle(.plain).foregroundStyle(.secondary)
                     .accessibilityLabel("复制现状：" + item.id)
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text(item.displayTitle).font(.system(size: 13, weight: .medium))
+                Text(item.displayTitle).dboardFont(size: 13, weight: .medium)
                     .foregroundStyle(.primary).lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                 if !item.project.isEmpty {
-                    Text(DemandReminder.singleLine(item.project)).font(.system(size: 11))
+                    Text(DemandReminder.singleLine(item.project)).dboardFont(size: 11)
                         .foregroundStyle(.secondary).lineLimit(1)
                 }
             }.frame(maxWidth: .infinity, alignment: .leading).modifier(interaction)
@@ -282,7 +282,7 @@ struct DemandMatrixDetailSheet: View {
         VStack(spacing: 0) {
             if !isolatedExpansion {
                 HStack {
-                    Text("需求详情").font(.system(size: 13, weight: .semibold))
+                    Text("需求详情").dboardFont(size: 13, weight: .semibold)
                     Spacer()
                     Button("关闭", action: close).controlSize(.small).keyboardShortcut(.cancelAction)
                 }.padding(16)

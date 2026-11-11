@@ -93,7 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
         }.store(in: &cancellables)
 
-        let rootView = DBoardRootView().environmentObject(viewModel).environmentObject(ThemeManager.shared).environmentObject(FontManager.shared)
+        let rootView = DBoardRootView().environmentObject(viewModel).environmentObject(ThemeManager.shared).dboardFont(size: 13).environmentObject(FontManager.shared)
         let hosting = NSHostingController(rootView: rootView)
 
         // 创建可拖拽/可缩放的浮动窗口
@@ -110,21 +110,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         win.level = .normal
         win.hidesOnDeactivate = false
         win.isReleasedWhenClosed = false
-        // 窗口透明度: 只在原生毛玻璃 (nativeBlur) 主题下才需要 clear 背景透出桌面壁纸
-        // 其它主题 (minimal / kraft / kraft-lite) 保持不透明, 否则 fullSizeContentView 下
-        // 顶部标题栏区域会因窗口 backing 透明而看穿桌面
+        // Glass needs a transparent backing; opaque skins also tint the titlebar.
         let needsTransparent = ThemeManager.shared.current.nativeBlur
         win.isOpaque = !needsTransparent
-        win.backgroundColor = needsTransparent ? .clear : NSColor(named: "WindowBg") ?? .windowBackgroundColor
+        win.backgroundColor = needsTransparent ? .clear : NSColor(ThemeManager.shared.current.background)
         win.contentViewController = hosting
 
-        // 主题切换时同步窗口透明度: 从毛玻璃切到 minimal, 或反过来
-        NotificationCenter.default.addObserver(forName: .init("DBoardThemeChanged"),
-                                                object: nil, queue: .main) { [weak win] _ in
+        // Update backing without recreating the hosting view or losing editor state.
+        NotificationCenter.default.addObserver(forName: .dboardThemeChanged,
+                                                object: ThemeManager.shared, queue: .main) { [weak win] _ in
             guard let w = win else { return }
             let needTrans = ThemeManager.shared.current.nativeBlur
             w.isOpaque = !needTrans
-            w.backgroundColor = needTrans ? .clear : .windowBackgroundColor
+            w.backgroundColor = needTrans ? .clear : NSColor(ThemeManager.shared.current.background)
         }
         win.minSize = NSSize(width: 760, height: 560)
         win.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -302,7 +300,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let rootView = DBoardRootView(popoverMode: true)
             .environmentObject(viewModel)
             .environmentObject(ThemeManager.shared)
-            .environmentObject(FontManager.shared)
+            .dboardFont(size: 13).environmentObject(FontManager.shared)
         let host = NSHostingController(rootView: rootView.frame(width: popW, height: popH))
         pop.contentSize = NSSize(width: popW, height: popH)
         pop.contentViewController = host

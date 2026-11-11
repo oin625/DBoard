@@ -761,7 +761,7 @@ struct McpBoardView: View {
                           : m.alive == true ? Color(hex: "#5aa86c")
                           : theme.current.textMuted.opacity(0.5))
                     .frame(width: 7, height: 7)
-                Text(m.name).font(.system(size: 13, weight: .semibold))
+                Text(m.name).dboardFont(size: 13, weight: .semibold)
                     .foregroundStyle(theme.current.textPrimary)
                 ForEach(m.sources, id: \.self) { source in
                     Text(source).font(fm.font(9))
@@ -776,7 +776,7 @@ struct McpBoardView: View {
                 Text("\(m.toolCount) 工具").font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(theme.current.textSecondary)
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .bold))
+                    .dboardFont(size: 8, weight: .bold)
                     .foregroundStyle(theme.current.textMuted.opacity(0.6))
                     .rotationEffect(.degrees(isOpen ? 180 : 0))
             }
@@ -895,7 +895,7 @@ struct HooksBoardView: View {
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 7) {
                 Image(systemName: h.scriptExists ? "circle.fill" : "exclamationmark.triangle.fill")
-                    .font(.system(size: h.scriptExists ? 5 : 9))
+                    .dboardFont(size: h.scriptExists ? 5 : 9)
                     .foregroundStyle(h.scriptExists ? Color(hex: "#5aa86c") : Color(hex: "#d94f4f"))
                 Text(h.source).font(fm.font(10))
                     .padding(.horizontal, 5).padding(.vertical, 1)
@@ -911,7 +911,7 @@ struct HooksBoardView: View {
                     .lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.down")
-                    .font(.system(size: 7, weight: .bold))
+                    .dboardFont(size: 7, weight: .bold)
                     .foregroundStyle(theme.current.textMuted.opacity(0.5))
                     .rotationEffect(.degrees(isOpen ? 180 : 0))
             }
@@ -964,7 +964,7 @@ struct AgentsBoardView: View {
 
     private var healthPanel: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("运行健康度").font(.system(size: 12, weight: .semibold))
+            Text("运行健康度").dboardFont(size: 12, weight: .semibold)
                 .foregroundStyle(theme.current.textPrimary)
             ForEach(env.runtimeHealth) { h in
                 HStack(spacing: 6) {
@@ -993,9 +993,9 @@ struct AgentsBoardView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Image(systemName: a.origin == "自建" ? "person.crop.rectangle.badge.plus" : "cpu")
-                    .font(.system(size: 10))
+                    .dboardFont(size: 10)
                     .foregroundStyle(a.origin == "自建" ? theme.current.accentPrimary : theme.current.textMuted)
-                Text(a.name).font(.system(size: 13, weight: .semibold))
+                Text(a.name).dboardFont(size: 13, weight: .semibold)
                     .foregroundStyle(theme.current.textPrimary)
                 Text(a.origin).font(fm.font(9))
                     .padding(.horizontal, 6).padding(.vertical, 2)
@@ -1004,7 +1004,7 @@ struct AgentsBoardView: View {
                 Spacer()
                 if !a.path.isEmpty {
                     Button(action: { NSWorkspace.shared.open(URL(fileURLWithPath: a.path)) }) {
-                        Image(systemName: "doc.text").font(.system(size: 10))
+                        Image(systemName: "doc.text").dboardFont(size: 10)
                             .foregroundStyle(theme.current.textSecondary)
                     }
                     .buttonStyle(.plain)
@@ -1026,7 +1026,7 @@ struct AgentsBoardView: View {
                         .buttonStyle(.plain)
                     } else {
                         Button(action: { confirmDelete = a.name }) {
-                            Image(systemName: "trash").font(.system(size: 10))
+                            Image(systemName: "trash").dboardFont(size: 10)
                                 .foregroundStyle(Color(hex: "#d94f4f").opacity(0.75))
                         }
                         .buttonStyle(.plain)
@@ -1102,7 +1102,7 @@ struct MemoryBoardView: View {
                         }) {
                             HStack(spacing: 3) {
                                 Image(systemName: "arrow.down.right.and.arrow.up.left")
-                                    .font(.system(size: 9, weight: .semibold))
+                                    .dboardFont(size: 9, weight: .semibold)
                                 Text("全部收起").font(fm.font(11))
                             }
                             .padding(.horizontal, 8).padding(.vertical, 4)
@@ -1116,7 +1116,7 @@ struct MemoryBoardView: View {
                                         by: { AgentEnvViewModel.sectionRank($0.name) })
                 ForEach(ranked.keys.sorted(), id: \.self) { r in
                     Text(AgentEnvViewModel.sectionName(r))
-                        .font(.system(size: 11, weight: .semibold))
+                        .dboardFont(size: 11, weight: .semibold)
                         .foregroundStyle(theme.current.textMuted)
                         .padding(.top, r == 0 ? 0 : 8)
                     ForEach(ranked[r] ?? []) { g in groupCard(g) }
@@ -1140,10 +1140,10 @@ struct MemoryBoardView: View {
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 8, weight: .bold))
+                    .dboardFont(size: 8, weight: .bold)
                     .foregroundStyle(theme.current.textMuted.opacity(0.6))
                     .rotationEffect(.degrees(legacyOpen ? 90 : 0))
-                Text("Qoder 遗留").font(.system(size: 12, weight: .semibold))
+                Text("Qoder 遗留").dboardFont(size: 12, weight: .semibold)
                     .foregroundStyle(theme.current.textPrimary)
                 Text("\(total) 条 · ~/.qoder 不再写入 · 仅作迁移对照")
                     .font(fm.font(9)).foregroundStyle(theme.current.textMuted)
@@ -1165,12 +1165,12 @@ struct MemoryBoardView: View {
     private var contextMapPanel: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label("各连接方式的上下文在哪", systemImage: "map")
-                .font(.system(size: 12, weight: .semibold))
+                .dboardFont(size: 12, weight: .semibold)
                 .foregroundStyle(theme.current.textPrimary)
             ForEach(env.ctxMap) { rt in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 6) {
-                        Text(rt.name).font(.system(size: 11, weight: .semibold))
+                        Text(rt.name).dboardFont(size: 11, weight: .semibold)
                             .foregroundStyle(theme.current.textPrimary)
                         Text(rt.note).font(fm.font(9))
                             .foregroundStyle(theme.current.textMuted)
@@ -1203,7 +1203,7 @@ struct MemoryBoardView: View {
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Label("Context 治理与优先级", systemImage: "list.number")
-                    .font(.system(size: 12, weight: .semibold))
+                    .dboardFont(size: 12, weight: .semibold)
                     .foregroundStyle(theme.current.textPrimary)
                 Spacer()
                 Text("\(env.memTotal) 条可审计上下文").font(fm.font(10)).foregroundStyle(theme.current.textMuted)
@@ -1244,20 +1244,20 @@ struct MemoryBoardView: View {
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 6, weight: .bold))
+                    .dboardFont(size: 6, weight: .bold)
                     .foregroundStyle(theme.current.textMuted.opacity(0.6))
                     .rotationEffect(.degrees(isOpen ? 90 : 0))
                 Text(e.title).font(fm.font(11))
                     .foregroundStyle(isOpen ? theme.current.textPrimary : theme.current.textSecondary)
                     .lineLimit(1).truncationMode(.middle)
                 if !e.source.isEmpty {
-                    Text(e.source).font(.system(size: 9))
+                    Text(e.source).dboardFont(size: 9)
                         .foregroundStyle(e.source.contains("遗留") ? theme.current.textMuted : theme.current.accentPrimary.opacity(0.8))
                 }
                 Spacer(minLength: 0)
                 Button(action: { NSWorkspace.shared.open(URL(fileURLWithPath: e.path)) }) {
                     Image(systemName: "arrow.up.forward.square")
-                        .font(.system(size: 9))
+                        .dboardFont(size: 9)
                         .foregroundStyle(theme.current.textMuted.opacity(0.7))
                 }
                 .buttonStyle(.plain)
@@ -1305,7 +1305,7 @@ struct MemoryBoardView: View {
         return VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 8, weight: .bold))
+                    .dboardFont(size: 8, weight: .bold)
                     .foregroundStyle(theme.current.textMuted.opacity(0.7))
                     .rotationEffect(.degrees(isOpen ? 90 : 0))
                 Text(g.name
@@ -1334,7 +1334,7 @@ struct MemoryBoardView: View {
                 ForEach(byCat, id: \.key) { cat, list in
                     HStack(spacing: 5) {
                         Text(Self.catZh[cat] ?? cat)
-                            .font(.system(size: 10, weight: .semibold))
+                            .dboardFont(size: 10, weight: .semibold)
                             .foregroundStyle(theme.current.textSecondary)
                         Text("\(list.count)")
                             .font(.system(size: 9, design: .monospaced))

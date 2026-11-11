@@ -32,15 +32,15 @@ struct DemandItemEditor: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Image(systemName: isNew ? "plus" : "pencil")
-                    .font(.system(size: 17, weight: .medium)).foregroundStyle(Color.accentColor)
+                    .dboardFont(size: 17, weight: .medium).foregroundStyle(Color.accentColor)
                     .frame(width: 40, height: 40)
                     .background(Color.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(isNew ? (draft.isIncident ? "新增线上排查" : "新增需求") : (draft.isIncident ? "编辑排查" : "编辑需求"))
-                        .font(.system(size: 20, weight: .semibold))
+                        .dboardFont(size: 20, weight: .semibold)
                     Text(isNew ? "先记下要做什么，其他信息可以稍后补充。" : "更新需求信息和关联资料。")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .dboardFont(size: 11).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Text(draft.id).font(.system(size: 12, weight: .medium, design: .monospaced))
@@ -59,13 +59,13 @@ struct DemandItemEditor: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             if let error = saveError ?? (isNew ? vm.newItemDraftError : nil) {
                 Label(error, systemImage: "exclamationmark.circle")
-                    .font(.system(size: 12)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                    .dboardFont(size: 12).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 24).padding(.vertical, 8)
             }
             HStack(spacing: 8) {
                 if isNew {
                     Label("草稿自动保存", systemImage: "checkmark.circle")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .dboardFont(size: 11).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button(isNew ? "关闭" : "取消", action: requestClose)
@@ -158,7 +158,7 @@ private struct DemandEditorPresentation: ViewModifier {
                     set: { if !vm.demandEditorInWindow { vm.demandEditor = $0 } }
                 )) { request in
                     DemandEditorContent(request: request, close: { vm.demandEditor = nil })
-                        .environmentObject(vm).environmentObject(theme).environmentObject(FontManager.shared)
+                        .environmentObject(vm).environmentObject(theme).dboardFont(size: 13).environmentObject(FontManager.shared)
                 }
                 .sheet(isPresented: $vm.showingKnowledge) {
                     DemandKnowledgeView(close: { vm.showingKnowledge = false }).environmentObject(vm)

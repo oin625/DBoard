@@ -98,7 +98,7 @@ final class DemandImageAttachment: NSTextAttachment {
 }
 
 enum DemandSpellText {
-    static func attributed(_ markdown: String) -> NSAttributedString {
+    static func attributed(_ markdown: String, font: NSFont = .systemFont(ofSize: 13)) -> NSAttributedString {
         let source = markdown as NSString
         let result = NSMutableAttributedString(string: "")
         var offset = 0
@@ -108,7 +108,7 @@ enum DemandSpellText {
             offset = NSMaxRange(reference.range)
         }
         result.append(NSAttributedString(string: source.substring(from: offset)))
-        result.addAttributes([.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.labelColor],
+        result.addAttributes([.font: font, .foregroundColor: NSColor.labelColor],
                              range: NSRange(location: 0, length: result.length))
         return result
     }

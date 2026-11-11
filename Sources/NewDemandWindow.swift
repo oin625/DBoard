@@ -28,8 +28,12 @@ final class NewDemandWindowController: NSObject, NSWindowDelegate {
     private var centering: DemandWindowCentering?
     private(set) var keyboardNavigation: DemandWindowKeyboardNavigation?
     private let activates: Bool
+    private let theme: ThemeManager
 
-    init(activates: Bool = true) { self.activates = activates }
+    init(activates: Bool = true, theme: ThemeManager = .shared) {
+        self.activates = activates
+        self.theme = theme
+    }
 
     func show(_ vm: DBoardViewModel) {
         guard vm.newItemFormOpen, vm.newItemFormInWindow, vm.newItemDraft != nil else { return }
@@ -39,7 +43,7 @@ final class NewDemandWindowController: NSObject, NSWindowDelegate {
         vm.newDemandWindowCenterRect = nil
         if window == nil {
             let host = NSHostingController(rootView: NewDemandWindowRoot(close: { [weak self] in self?.close() })
-                .environmentObject(vm).environmentObject(ThemeManager.shared).environmentObject(FontManager.shared))
+                .environmentObject(vm).environmentObject(theme).dboardFont(size: 13).environmentObject(FontManager.shared))
             let value = DemandWorkspaceWindow(contentRect:
                 NSRect(x: activates ? 0 : -10000, y: 0, width: 660, height: 740))
             value.isReleasedWhenClosed = false

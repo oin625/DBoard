@@ -848,7 +848,7 @@ struct ClipboardBoardView: View {
                 Button {
                     NotificationCenter.default.post(name: .clipDismiss, object: nil)
                 } label: {
-                    Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
+                    Image(systemName: "xmark").dboardFont(size: 9, weight: .semibold)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(theme.current.textSecondary)
@@ -859,7 +859,7 @@ struct ClipboardBoardView: View {
                 WorkspacePreferences.shared.settingsPage = .clipboard
                 openSettings()
             } label: {
-                Image(systemName: "gearshape").font(.system(size: 11))
+                Image(systemName: "gearshape").dboardFont(size: 11)
             }
             .buttonStyle(.plain)
             .foregroundStyle(theme.current.textSecondary)
@@ -875,7 +875,7 @@ struct ClipboardBoardView: View {
     private var searchBar: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 11))
+                .dboardFont(size: 11)
                 .foregroundStyle(theme.current.textTertiary)
             TextField("搜索：子串 / 拼音 / 首字母", text: $vm.query)
                 .textFieldStyle(.plain)
@@ -913,7 +913,7 @@ struct ClipboardBoardView: View {
                     vm.query = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 11))
+                        .dboardFont(size: 11)
                         .foregroundStyle(theme.current.textMuted)
                 }
                 .buttonStyle(.plain)
@@ -974,7 +974,7 @@ struct ClipboardBoardView: View {
     private func sectionHeader(_ title: String, count: Int) -> some View {
         HStack(spacing: 6) {
             Text(title)
-                .font(.system(size: 10, weight: .semibold))
+                .dboardFont(size: 10, weight: .semibold)
                 .foregroundStyle(theme.current.textMuted)
             Rectangle()
                 .fill(theme.current.separator.opacity(0.7))
@@ -995,14 +995,14 @@ struct ClipboardBoardView: View {
                     .fill(theme.current.cardFill.opacity(theme.current.cardFillOpacity * 0.7))
                     .frame(width: 54, height: 54)
                 Image(systemName: vm.query.isEmpty ? "clipboard" : "magnifyingglass")
-                    .font(.system(size: 22, weight: .light))
+                    .dboardFont(size: 22, weight: .light)
                     .foregroundStyle(theme.current.textMuted)
             }
             Text(vm.query.isEmpty ? "暂无历史" : "没有匹配的内容")
                 .font(fm.font(12.5))
                 .foregroundStyle(theme.current.textSecondary)
             Text(vm.query.isEmpty ? "复制任意内容（⌘C），会自动出现在这里" : "换个关键词试试，支持拼音和首字母")
-                .font(.system(size: 10))
+                .dboardFont(size: 10)
                 .foregroundStyle(theme.current.textMuted)
         }
         .frame(maxWidth: .infinity)
@@ -1018,7 +1018,7 @@ struct ClipboardBoardView: View {
                     vm.writeBackSelection()
                 } label: {
                     Text("合并复制 \(vm.multiSelection.count) 条")
-                        .font(.system(size: 11, weight: .medium))
+                        .dboardFont(size: 11, weight: .medium)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white)
@@ -1028,7 +1028,7 @@ struct ClipboardBoardView: View {
                 Text(vm.query.isEmpty
                      ? "双击 / Enter 写回 · ⌘点击多选"
                      : "\(vm.visibleClips.count) 条匹配")
-                    .font(.system(size: 10))
+                    .dboardFont(size: 10)
                     .foregroundStyle(theme.current.textMuted)
             }
             Spacer()
@@ -1132,12 +1132,12 @@ struct ClipRow: View, Equatable {
             Spacer(minLength: 0)
             if clip.sensitive {
                 Image(systemName: "lock.fill")
-                    .font(.system(size: 9))
+                    .dboardFont(size: 9)
                     .foregroundStyle(.orange.opacity(0.85))
             }
             if clip.pinned {
                 Image(systemName: "pin.fill")
-                    .font(.system(size: 9))
+                    .dboardFont(size: 9)
                     .foregroundStyle(theme.accentPrimary)
             }
         }
@@ -1165,7 +1165,7 @@ struct ClipRow: View, Equatable {
             Text("·")
             Text(clip.kind.label)
         }
-        .font(.system(size: 10))
+        .dboardFont(size: 10)
         .foregroundStyle(theme.textTertiary)
         .lineLimit(1)
     }
@@ -1206,7 +1206,7 @@ struct ClipRow: View, Equatable {
 
     private var typeIcon: some View {
         Image(systemName: clip.kind.icon)
-            .font(.system(size: 14, weight: .regular))
+            .dboardFont(size: 14, weight: .regular)
             .foregroundStyle(theme.textTertiary)
             .frame(width: 32, height: 32)
             .background(RoundedRectangle(cornerRadius: 7).fill(theme.cardFill.opacity(theme.cardFillOpacity * 0.55)))
@@ -1291,7 +1291,7 @@ struct ClipDetailOverlay: View {
                     .font(fm.font(13).weight(.semibold))
                     .foregroundStyle(theme.current.textPrimary)
                 Text(clip.kind.label)
-                    .font(.system(size: 9, weight: .medium))
+                    .dboardFont(size: 9, weight: .medium)
                     .foregroundStyle(theme.current.textSecondary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
@@ -1300,7 +1300,7 @@ struct ClipDetailOverlay: View {
                 Button {
                     vm.writeBack([clip])
                 } label: {
-                    Text("写回剪切板").font(.system(size: 11, weight: .medium))
+                    Text("写回剪切板").dboardFont(size: 11, weight: .medium)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white)
@@ -1309,7 +1309,7 @@ struct ClipDetailOverlay: View {
                 Button {
                     onClose()
                 } label: {
-                    Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
+                    Image(systemName: "xmark").dboardFont(size: 10, weight: .semibold)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(theme.current.textSecondary)
@@ -1329,7 +1329,7 @@ struct ClipDetailOverlay: View {
                     } else if clip.kind == .file {
                         ForEach(clip.fileURLs, id: \.absoluteString) { url in
                             HStack(spacing: 6) {
-                                Image(systemName: "doc").font(.system(size: 11))
+                                Image(systemName: "doc").dboardFont(size: 11)
                                 Text(url.path)
                                     .font(.system(size: 11, design: .monospaced))
                                     .textSelection(.enabled)
@@ -1338,7 +1338,7 @@ struct ClipDetailOverlay: View {
                         }
                     } else {
                         Text(displayText)
-                            .font(.system(size: 11.5, design: clip.isMonospaced ? .monospaced : .default))
+                            .dboardFont(size: 11.5, design: clip.isMonospaced ? .monospaced : .default)
                             .foregroundStyle(theme.current.textPrimary)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1371,7 +1371,7 @@ struct ClipDetailOverlay: View {
                     .foregroundStyle(.orange)
             }
         }
-        .font(.system(size: 10))
+        .dboardFont(size: 10)
         .foregroundStyle(theme.current.textTertiary)
     }
 
@@ -1402,7 +1402,7 @@ struct ClipSettingsOverlay: View {
                 Button {
                     onClose()
                 } label: {
-                    Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
+                    Image(systemName: "xmark").dboardFont(size: 10, weight: .semibold)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(theme.current.textSecondary)
@@ -1456,13 +1456,13 @@ struct ClipSettingsOverlay: View {
                 Button {
                     vm.applyCleanup()
                 } label: {
-                    Text("立即清理").font(.system(size: 11, weight: .medium))
+                    Text("立即清理").dboardFont(size: 11, weight: .medium)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(theme.current.accentPrimary)
                 Spacer()
                 Text("纯本地存储 · 无网络 · 无云同步")
-                    .font(.system(size: 10))
+                    .dboardFont(size: 10)
                     .foregroundStyle(theme.current.textMuted)
             }
         }
@@ -1520,7 +1520,7 @@ final class ClipboardBoardWindowController {
             ClipboardBoardView(popoverMode: true)
                 .environmentObject(vm)
                 .environmentObject(ThemeManager.shared)
-                .environmentObject(FontManager.shared)
+                .dboardFont(size: 13).environmentObject(FontManager.shared)
                 .frame(width: popW, height: popH))
         pop.contentSize = NSSize(width: popW, height: popH)
         pop.contentViewController = host
@@ -1579,7 +1579,7 @@ final class ClipboardBoardWindowController {
         let view = ClipboardBoardView(popoverMode: false)
             .environmentObject(vm)
             .environmentObject(ThemeManager.shared)
-            .environmentObject(FontManager.shared)
+            .dboardFont(size: 13).environmentObject(FontManager.shared)
         let host = NSHostingController(rootView: view)
         // macOS Tahoe: 后台 LSUIElement app 抢不到前台焦点(activate 被系统拒绝) →
         // 改用 .nonactivatingPanel 浮动面板: 不激活 D板、不抢前台 app, 直接浮到最上层收键盘

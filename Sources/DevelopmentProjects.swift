@@ -137,7 +137,7 @@ struct DevelopmentProjectsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Text("涉及工程").font(.system(size: 13, weight: .semibold))
+                Text("涉及工程").dboardFont(size: 13, weight: .semibold)
                 Spacer()
                 if loading { ProgressView().controlSize(.small) }
                 Button(action: refresh) { Image(systemName: "arrow.clockwise") }
@@ -145,7 +145,7 @@ struct DevelopmentProjectsView: View {
             }
             if let snapshot {
                 if snapshot.projects.isEmpty {
-                    Text("—").font(.system(size: 13)).foregroundStyle(.secondary)
+                    Text("—").dboardFont(size: 13).foregroundStyle(.secondary)
                 } else {
                     Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
                         GridRow {
@@ -161,13 +161,13 @@ struct DevelopmentProjectsView: View {
                     }.font(.system(size: 12, design: .monospaced))
                 }
                 Text("来源：开发交付 · 读取于 " + Self.dateFormat.string(from: snapshot.fetchedAt))
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .dboardFont(size: 11).foregroundStyle(.secondary)
             } else if !loading && error == nil {
-                Text("尚未读取开发交付").font(.system(size: 12)).foregroundStyle(.secondary)
+                Text("尚未读取开发交付").dboardFont(size: 12).foregroundStyle(.secondary)
             }
             if let error {
                 Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.system(size: 11)).foregroundStyle(.orange)
+                    .dboardFont(size: 11).foregroundStyle(.orange)
             }
         }
         .padding(12)

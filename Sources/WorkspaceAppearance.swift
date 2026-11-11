@@ -11,12 +11,8 @@ struct WorkspaceSurface: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background {
-                if floatingCanvas {
-                    Color(nsColor: .controlBackgroundColor).opacity(colorScheme == .dark ? 0.45 : 0.48)
-                } else {
-                    Color.clear.themeCardBackground()
-                        .overlay { if colorScheme == .dark { Color.white.opacity(0.035) } }
-                }
+                ThemeCardFill(palette: theme.current,
+                    opacity: floatingCanvas ? theme.current.floatingCardOpacity(for: colorScheme) : nil)
             }
             .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
             .overlay {
@@ -25,7 +21,7 @@ struct WorkspaceSurface: ViewModifier {
                                   lineWidth: highlighted ? 1 : 0.5)
                     .allowsHitTesting(false)
             }
-            .shadow(color: .black.opacity(colorScheme == .dark ? 0.12 : 0.035), radius: 5, x: 0, y: 2)
+            .shadow(color: theme.current.shadow.opacity(colorScheme == .dark ? 0.12 : 0.035), radius: 5, x: 0, y: 2)
     }
 }
 
@@ -37,17 +33,18 @@ extension View {
 
 struct WorkspaceActionStyle: ButtonStyle {
     var prominent = false
+    @EnvironmentObject private var theme: ThemeManager
     @Environment(\.isEnabled) private var enabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 12, weight: .medium))
+            .dboardFont(size: 12, weight: .medium)
             .padding(.horizontal, 10).frame(minHeight: 30)
             .foregroundStyle(prominent ? Color.white : Color.primary)
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(prominent ? Color.accentColor : Color.primary.opacity(configuration.isPressed ? 0.1 : 0.045))
+                    .fill(prominent ? theme.current.controlAccent : theme.current.accentPrimary.opacity(configuration.isPressed ? 0.12 : 0.065))
             }
             .opacity(enabled ? (configuration.isPressed ? 0.75 : 1) : 0.45)
             .contentShape(RoundedRectangle(cornerRadius: 8))

@@ -243,7 +243,7 @@ final class DemandKeyboardAccessibilityTests: XCTestCase {
                 Text("需求").tag(false)
                 Text("排查").tag(true)
             }.pickerStyle(.segmented)
-        }.padding(24).demandFloatingCanvas())
+        }.padding(24).demandFloatingCanvas().environmentObject(ThemeManager.shared))
         let navigation = DemandWindowKeyboardNavigation(window: window)
         window.orderBack(nil)
         defer { window.close() }
@@ -299,7 +299,7 @@ final class DemandKeyboardAccessibilityTests: XCTestCase {
                 .demandKeyboardID("section")
                 Button("禁用项") { state.clicks += 100 }.disabled(true).demandKeyboardID("disabled")
                 Button("最后一项") { state.clicks += 1 }.demandButtonStyle(.plain).demandKeyboardID("last")
-            }.padding(24).demandFloatingCanvas()
+            }.padding(24).demandFloatingCanvas().environmentObject(ThemeManager.shared)
         }
     }
 

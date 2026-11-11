@@ -44,9 +44,9 @@ struct DemandFilterBar: View {
     var body: some View {
         HStack(spacing: 10) {
             HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundStyle(.secondary)
+                Image(systemName: "magnifyingglass").dboardFont(size: 12).foregroundStyle(.secondary)
                 TextField("搜索需求、项目或进度", text: $vm.demandQuery)
-                    .font(.system(size: 12)).textFieldStyle(.plain).accessibilityLabel("搜索本地需求")
+                    .dboardFont(size: 12).textFieldStyle(.plain).accessibilityLabel("搜索本地需求")
                 if !vm.demandQuery.isEmpty {
                     Button { vm.demandQuery = "" } label: {
                         Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
@@ -61,7 +61,7 @@ struct DemandFilterBar: View {
             }.labelsHidden().frame(width: 104).controlSize(.regular)
             if vm.demandFilter != .all {
                 Button { vm.demandFilter = .all; vm.demandQuery = "" } label: {
-                    Image(systemName: "line.3.horizontal.decrease.circle").font(.system(size: 14))
+                    Image(systemName: "line.3.horizontal.decrease.circle").dboardFont(size: 14)
                 }.buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("清除筛选")
             }
         }.padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 12)
@@ -79,11 +79,11 @@ struct DemandContextView: View {
                 Button { expanded.toggle() } label: {
                     HStack(spacing: 8) {
                         Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
-                        Text("需求上下文").font(.system(size: 13, weight: .semibold))
+                            .dboardFont(size: 10, weight: .semibold).foregroundStyle(.secondary)
+                        Text("需求上下文").dboardFont(size: 13, weight: .semibold)
                         Spacer()
                         if expanded, let date = vm.reqFlow.cache?.prdGenerated {
-                            Text("ReqFlow 快照 \(date)").font(.system(size: 11)).foregroundStyle(.secondary)
+                            Text("ReqFlow 快照 \(date)").dboardFont(size: 11).foregroundStyle(.secondary)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -95,7 +95,7 @@ struct DemandContextView: View {
                 if expanded {
                     if !vm.reqFlow.prdItems.contains(where: { $0.id == link.id }) {
                         Text("当前快照没有该正式需求，个人状态不会被覆盖")
-                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                            .dboardFont(size: 11).foregroundStyle(.secondary)
                     }
                     DevelopmentProjectsView(snapshot: vm.reqFlow.developmentProjectSnapshots[link.id],
                         loading: vm.reqFlow.deliverableLoading.contains(link.id),
@@ -107,7 +107,7 @@ struct DemandContextView: View {
                         vm.reqFlow.loadDeliverableStatus(reqId: reqID, force: true)
                     })
                     Text("仅展示开发交付的工程声明；工程不等于发布应用")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .dboardFont(size: 11).foregroundStyle(.secondary)
                 }
             }
             .padding(12).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))

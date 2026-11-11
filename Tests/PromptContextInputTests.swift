@@ -20,7 +20,10 @@ final class PromptContextInputTests: XCTestCase {
         @State private var presented = false
         var body: some View {
             Color.clear.frame(width: 520, height: 500)
-                .sheet(isPresented: $presented) { DemandPromptEditor(item: item, draftStore: vm.promptDraftStore, cancel: {}).environmentObject(vm) }
+                .sheet(isPresented: $presented) {
+                    DemandPromptEditor(item: item, draftStore: vm.promptDraftStore, cancel: {})
+                        .environmentObject(vm).environmentObject(ThemeManager.shared).environmentObject(FontManager.shared)
+                }
                 .onAppear { presented = true }
         }
     }

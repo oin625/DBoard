@@ -162,9 +162,9 @@ final class WorkspaceSnapshots: XCTestCase {
             try render(SkillsBoardView(refreshOnAppear: false).environmentObject(skills)
                 .environmentObject(ThemeManager.shared).environmentObject(FontManager.shared),
                 width: 760, height: 540, name: "skills-" + name, appearance: appearance, directory: directory)
-            for page in [SettingsPage.general, .favorites, .shortcuts, .clipboard, .usage] {
+            for page in [SettingsPage.general, .appearance, .favorites, .shortcuts, .clipboard, .usage] {
                 WorkspacePreferences.shared.settingsPage = page
-                try render(DBoardSettingsView(), width: 580, height: 500,
+                try render(DBoardSettingsView(), width: 640, height: 600,
                            name: "settings-" + page.rawValue + "-" + name, appearance: appearance, directory: directory)
             }
         }

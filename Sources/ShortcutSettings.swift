@@ -258,7 +258,7 @@ struct ShortcutSettingsView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(ShortcutPreferences.names[id] ?? id)
                             Text(manager.statuses[id] ?? "等待应用注册")
-                                .font(.system(size: 11))
+                                .dboardFont(size: 11)
                                 .foregroundStyle(manager.statuses[id]?.contains("占用") == true ? Color.orange : Color.secondary)
                         }
                     }
@@ -267,10 +267,10 @@ struct ShortcutSettingsView: View {
             Section {
                 if let error = prefs.error {
                     Label(error, systemImage: "exclamationmark.triangle")
-                        .font(.system(size: 12)).foregroundStyle(.orange)
+                        .dboardFont(size: 12).foregroundStyle(.orange)
                 }
                 Text("点击快捷键后按下新组合，Esc 取消。修改立即生效；⌘K 打开命令面板，⌘, 打开设置。")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .dboardFont(size: 11).foregroundStyle(.secondary)
                 Button("恢复默认快捷键") { prefs.restoreDefaults() }
             }
         }

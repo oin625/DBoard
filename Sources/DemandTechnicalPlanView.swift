@@ -8,9 +8,9 @@ struct DemandTechnicalPlanBody: View {
             ForEach(Array(markdown.components(separatedBy: "\n\n").enumerated()), id: \.offset) { _, part in
                 if part.hasPrefix("#") && !part.contains("\n") {
                     Text(String(part.drop(while: { $0 == "#" || $0 == " " })))
-                        .font(.system(size: part.hasPrefix("# ") ? 17 : 14, weight: .semibold))
+                        .dboardFont(size: part.hasPrefix("# ") ? 17 : 14, weight: .semibold)
                 } else {
-                    Text(.init(part)).font(.system(size: 13)).lineSpacing(5).textSelection(.enabled)
+                    Text(.init(part)).dboardFont(size: 13).lineSpacing(5).textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -26,13 +26,13 @@ struct DemandTechnicalPlanSection: View {
     @State private var checking = true
     var body: some View {
         HStack(spacing: 10) {
-            Label("技术方案", systemImage: "doc.text").font(.system(size: 12, weight: .medium))
+            Label("技术方案", systemImage: "doc.text").dboardFont(size: 12, weight: .medium)
             if let document = item.technicalPlan {
                 Text(checking ? "核对中" : (document.scopeHash != item.executionScope || codeReviewReason != nil ? "待核对" : (document.updatedBy == "user" ? "已编辑" : "已准备")))
-                    .font(.system(size: 11)).foregroundStyle(document.scopeHash == item.executionScope ? Color.secondary : .orange)
+                    .dboardFont(size: 11).foregroundStyle(document.scopeHash == item.executionScope ? Color.secondary : .orange)
                 Button("查看／编辑") { vm.openDemandEditor(.technicalPlan, item: item) }.controlSize(.small)
             } else {
-                Text(item.technicalPlanReadError ?? "尚未准备").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text(item.technicalPlanReadError ?? "尚未准备").dboardFont(size: 11).foregroundStyle(.secondary)
             }
             Spacer()
             Button(item.technicalPlan == nil ? "复制方案指令" : "让 AI 核对更新") {
@@ -71,7 +71,7 @@ struct DemandTechnicalPlanEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text(original?.title ?? "技术方案").font(.system(size: 17, weight: .semibold))
+                Text(original?.title ?? "技术方案").dboardFont(size: 17, weight: .semibold)
                 Spacer()
                 Picker("展示方式", selection: $editing) {
                     Text("预览").tag(false)
@@ -79,17 +79,17 @@ struct DemandTechnicalPlanEditor: View {
                 }.pickerStyle(.segmented).frame(width: 140)
             }
             if let reason = reviewReason {
-                Label(reason, systemImage: "exclamationmark.circle").font(.system(size: 12)).foregroundStyle(.orange)
+                Label(reason, systemImage: "exclamationmark.circle").dboardFont(size: 12).foregroundStyle(.orange)
             }
             if editing {
-                TextEditor(text: $markdown).font(.system(size: 13)).scrollContentBackground(.hidden)
+                TextEditor(text: $markdown).dboardFont(size: 13).scrollContentBackground(.hidden)
                     .padding(10).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
             } else {
                 ScrollView { DemandTechnicalPlanBody(markdown: markdown).frame(maxWidth: .infinity, alignment: .leading) }
             }
-            if let message { Text(message).font(.system(size: 12)).foregroundStyle(.orange) }
+            if let message { Text(message).dboardFont(size: 12).foregroundStyle(.orange) }
             HStack {
-                Text("编辑草稿自动保存，关闭后可继续").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text("编辑草稿自动保存，关闭后可继续").dboardFont(size: 11).foregroundStyle(.secondary)
                 Spacer()
                 Button("关闭", action: close).keyboardShortcut(.cancelAction)
                 Button("保存修改") { save() }.demandButtonStyle(.borderedProminent)

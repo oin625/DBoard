@@ -74,10 +74,10 @@ struct ReqFlowLinkedRequirementView: View {
                 Label(requirement?.no ?? link.no, systemImage: "link")
                     .font(.system(size: 11, design: .monospaced))
                 Text("需求流：" + (requirement?.status ?? "本次列表未包含"))
-                    .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+                    .dboardFont(size: 11).foregroundStyle(.secondary).lineLimit(2)
                 Spacer(minLength: 6)
-                Text("打开").font(.system(size: 11)).foregroundStyle(Color.accentColor)
-                Image(systemName: "arrow.up.right.square").font(.system(size: 11)).foregroundStyle(Color.accentColor)
+                Text("打开").dboardFont(size: 11).foregroundStyle(Color.accentColor)
+                Image(systemName: "arrow.up.right.square").dboardFont(size: 11).foregroundStyle(Color.accentColor)
             }
             .padding(.horizontal, 6).frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
             .contentShape(Rectangle())
@@ -106,7 +106,7 @@ struct ReqFlowRequirementPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("关联需求流").font(.system(size: 15, weight: .semibold))
+                Text("关联需求流").dboardFont(size: 15, weight: .semibold)
                 Spacer()
                 if flow.regenerating { ProgressView().controlSize(.small) }
                 Button { flow.refreshRequirements() } label: {
@@ -115,7 +115,7 @@ struct ReqFlowRequirementPicker: View {
                 Button("取消", action: cancel).keyboardShortcut(.cancelAction)
             }
             Text("选择已有需求，标题会带入 D板，正式状态可在关联处查看。")
-                .font(.system(size: 12)).foregroundStyle(.secondary)
+                .dboardFont(size: 12).foregroundStyle(.secondary)
             TextField("搜索需求编号 / 标题 / 状态", text: $query)
                 .textFieldStyle(.roundedBorder).focused($searchFocused)
             Picker("范围", selection: $scope) {
@@ -127,17 +127,17 @@ struct ReqFlowRequirementPicker: View {
                         .foregroundStyle(.orange)
                     Spacer()
                     Button("浏览器登录") { flow.openURL("https://ai.tmallyc.com/prd/index.html") }
-                }.font(.system(size: 11))
+                }.dboardFont(size: 11)
             } else if let error = flow.genError ?? flow.loadError {
                 Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.system(size: 11)).foregroundStyle(.orange).lineLimit(3)
+                    .dboardFont(size: 11).foregroundStyle(.orange).lineLimit(3)
             }
             if candidates.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: query.trimmed.isEmpty ? "tray" : "magnifyingglass")
-                        .font(.system(size: 24)).foregroundStyle(.secondary)
+                        .dboardFont(size: 24).foregroundStyle(.secondary)
                     Text(query.trimmed.isEmpty ? "当前范围没有需求" : "没有匹配的需求")
-                        .font(.system(size: 13))
+                        .dboardFont(size: 13)
                     if query.trimmed.isEmpty {
                         Button("刷新需求流") { flow.refreshRequirements() }.disabled(flow.regenerating)
                     } else {
@@ -155,7 +155,7 @@ struct ReqFlowRequirementPicker: View {
             }
             if let generated = flow.cache?.prdGenerated {
                 Text("需求流快照：\(generated)")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .dboardFont(size: 11).foregroundStyle(.secondary)
             }
         }
         .padding(20)
@@ -175,18 +175,18 @@ struct ReqFlowRequirementPicker: View {
             else { select(requirement) }
         } label: {
             VStack(alignment: .leading, spacing: 8) {
-                Text(requirement.name).font(.system(size: 13, weight: .medium))
+                Text(requirement.name).dboardFont(size: 13, weight: .medium)
                     .foregroundStyle(.primary).multilineTextAlignment(.leading).lineLimit(3)
                 HStack(spacing: 8) {
                     Text(requirement.no).font(.system(size: 11, design: .monospaced))
-                    Text(requirement.status).font(.system(size: 11))
+                    Text(requirement.status).dboardFont(size: 11)
                     Spacer()
                     if let existing {
                         Text("已关联 \(existing.id) · 打开").foregroundStyle(Color.accentColor)
                     } else {
                         Image(systemName: "plus.circle").foregroundStyle(Color.accentColor)
                     }
-                }.foregroundStyle(.secondary).font(.system(size: 11))
+                }.foregroundStyle(.secondary).dboardFont(size: 11)
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)

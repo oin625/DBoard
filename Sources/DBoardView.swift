@@ -22,104 +22,30 @@ struct NativeBlurView: NSViewRepresentable {
     }
 }
 
-// MARK: - 通用皮肤背景(背景图 + 遮罩 + 毛玻璃 + orb 光球)
+/// Shared skin background for independent workspace modules.
 struct ThemeBackground: View {
     @EnvironmentObject var theme: ThemeManager
     var body: some View {
-        if theme.current.nativeBlur {
-            // 原生毛玻璃: 直接透出桌面壁纸, 不加任何自己的颜色
-            NativeBlurView()
-                .ignoresSafeArea()
-        } else {
-            // 用 Color 铺底(保证自身不撑大布局), 所有装饰层用 overlay 叠加
-            theme.current.background
-                .overlay(backgroundImageLayer)
-                .overlay(overlayLayer)
-                .overlay(orbLayer)
-                .ignoresSafeArea()
-        }
-    }
-
-    @ViewBuilder
-    private var backgroundImageLayer: some View {
-        if let imgName = theme.current.backgroundImage,
-           let nsImg = Self.loadImage(imgName) {
-            GeometryReader { geo in
-                Image(nsImage: nsImg)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: geo.size.width, height: geo.size.height)
-                    .clipped()
-                    .blur(radius: theme.current.backgroundBlur)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var overlayLayer: some View {
-        if theme.current.overlayOpacity > 0 {
-            theme.current.overlayColor
-                .opacity(theme.current.overlayOpacity)
-        }
-    }
-
-    @ViewBuilder
-    private var orbLayer: some View {
-        if theme.current.glowEnabled {
-            GeometryReader { g in
-                Circle()
-                    .fill(theme.current.orbA.opacity(0.25))
-                    .frame(width: g.size.width * 0.6)
-                    .blur(radius: 60)
-                    .offset(x: -g.size.width * 0.2, y: -g.size.height * 0.1)
-                Circle()
-                    .fill(theme.current.orbB.opacity(0.2))
-                    .frame(width: g.size.width * 0.5)
-                    .blur(radius: 50)
-                    .offset(x: g.size.width * 0.3, y: g.size.height * 0.4)
-                Circle()
-                    .fill(theme.current.orbC.opacity(0.15))
-                    .frame(width: g.size.width * 0.4)
-                    .blur(radius: 40)
-                    .offset(x: g.size.width * 0.1, y: g.size.height * 0.7)
-            }
-            .allowsHitTesting(false)
-        }
-    }
-
-    /// 从 App bundle Resources/ 加载图片
-    private static func loadImage(_ name: String) -> NSImage? {
-        // 先试 bundle named
-        if let img = NSImage(named: name) { return img }
-        // 再试 bundle path (Resources/ 目录)
-        let bundle = Bundle.main
-        for ext in ["png", "jpg", "jpeg"] {
-            if let path = bundle.path(forResource: name, ofType: ext) {
-                return NSImage(contentsOfFile: path)
-            }
-        }
-        // 最后试绝对路径(开发时)
-        let devPath = bundle.bundlePath + "/Contents/Resources/" + name
-        for ext in ["", ".png", ".jpg"] {
-            let p = devPath + ext
-            if let img = NSImage(contentsOfFile: p) { return img }
-        }
-        return nil
+        ThemeCanvasBackground(palette: theme.current).ignoresSafeArea()
     }
 }
 
-/// 卡片背景修饰器: 根据主题决定用纯色还是毛玻璃
+/// Card material and tint are shared by workspace cards and appearance previews.
+struct ThemeCardFill: View {
+    let palette: DBoardTheme
+    var opacity: Double? = nil
+    var body: some View {
+        ZStack {
+            if palette.cardMaterial { Rectangle().fill(.ultraThinMaterial) }
+            palette.cardFill.opacity(opacity ?? palette.cardFillOpacity)
+        }
+    }
+}
+
 struct ThemeCardBackground: ViewModifier {
     @EnvironmentObject var theme: ThemeManager
     func body(content: Content) -> some View {
-        if theme.current.cardMaterial {
-            content
-                .background(.ultraThinMaterial)
-                .background(theme.current.cardFill.opacity(0.25))
-        } else {
-            content
-                .background(theme.current.cardFill.opacity(theme.current.cardFillOpacity))
-        }
+        content.background { ThemeCardFill(palette: theme.current) }
     }
 }
 
@@ -635,7 +561,7 @@ struct DBoardRootView: View {
                         HStack {
                             Button { vm.workspacePage = .overview } label: { Label("概览", systemImage: "chevron.left") }
                             Spacer()
-                            Text((vm.workspacePage ?? .overview).title).font(.system(size: 13, weight: .semibold))
+                            Text((vm.workspacePage ?? .overview).title).dboardFont(size: 13, weight: .semibold)
                         }
                         .demandButtonStyle(.plain).padding(.horizontal, 20).padding(.vertical, 12)
                     }
@@ -703,7 +629,7 @@ struct DBoardRootView: View {
                 if let title = vm.undoTitle {
                     HStack(spacing: 12) {
                         Image(systemName: "arrow.uturn.backward.circle").foregroundStyle(.secondary)
-                        Text("已删除，可从本机恢复").font(.system(size: 12))
+                        Text("已删除，可从本机恢复").dboardFont(size: 12)
                         Button(title) { vm.undoLastDeletion() }.controlSize(.small)
                         Button { vm.undoTitle = nil } label: { Image(systemName: "xmark") }
                             .demandButtonStyle(.plain).foregroundStyle(.secondary)
@@ -722,6 +648,8 @@ struct DBoardRootView: View {
         .background(WindowNumberReader { windowNumber = $0 })
         .animation(reduceMotion ? nil : DBoardUI.spring, value: vm.paletteOpen)
         .demandEditorPresentation(enabled: !popoverMode)
+        .dboardFont(size: 13)
+        .dboardThemeAccent()
         .onReceive(NotificationCenter.default.publisher(for: .init("openDBoardSettings"))) { _ in openSettings() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             vm.refreshCodeReviews()
@@ -759,7 +687,7 @@ struct DBoardRootView: View {
                         DemandArchiveSection(store: vm.demandArchives)
                         if !vm.prevSecs.isEmpty {
                             Divider().padding(16)
-                            Text("零碎历史").font(.system(size: 14, weight: .semibold))
+                            Text("零碎历史").dboardFont(size: 14, weight: .semibold)
                                 .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16)
                             ForEach(vm.prevSecs, id: \.dateLabel) { HistoryBlockView(sec: $0) }
                         }
@@ -814,7 +742,7 @@ struct CommandPalette: View {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("搜索需求、模块或动作…", text: $vm.paletteQuery)
-                    .textFieldStyle(.plain).font(.system(size: 13)).focused($focused)
+                    .textFieldStyle(.plain).dboardFont(size: 13).focused($focused)
             }.padding(16)
             Divider()
             ScrollViewReader { proxy in
@@ -834,7 +762,7 @@ struct CommandPalette: View {
             }
             Divider()
             Text("↑↓ 选择 · Enter 打开 · Esc 收起")
-                .font(.system(size: 11)).foregroundStyle(.secondary).padding(12)
+                .dboardFont(size: 11).foregroundStyle(.secondary).padding(12)
         }
         .frame(width: 400, height: 440)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
@@ -854,10 +782,10 @@ struct PaletteRow: View {
         HStack(spacing: 9) {
             Image(systemName: entry.icon).font(fm.font(14))
                 .foregroundStyle(selected ? Color.accentColor : Color.secondary).frame(width: 14)
-            Text(entry.label).font(.system(size: 13))
+            Text(entry.label).dboardFont(size: 13)
                 .foregroundStyle(selected ? Color.accentColor : Color.primary)
             Spacer()
-            Text(entry.sub).font(.system(size: 11))
+            Text(entry.sub).dboardFont(size: 11)
                 .foregroundStyle(Color.gray.opacity(0.6))
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
@@ -886,26 +814,26 @@ struct HeaderView: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "square.grid.2x2.fill")
-                .font(.system(size: 14, weight: .medium)).foregroundStyle(Color.accentColor)
+                .dboardFont(size: 14, weight: .medium).foregroundStyle(Color.accentColor)
                 .frame(width: 32, height: 32)
                 .background(Color.accentColor.opacity(0.09), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                Text("D板").font(.system(size: 16, weight: .semibold))
+                Text("D板").dboardFont(size: 16, weight: .semibold)
                     .foregroundStyle(theme.current.textPrimary)
-                Text(Self.dateFmt.string(from: Date())).font(.system(size: 10))
+                Text(Self.dateFmt.string(from: Date())).dboardFont(size: 10)
                     .foregroundStyle(theme.current.textTertiary)
             }
             Spacer()
             if vm.workspacePage != .overview && vm.urgentCount > 0 {
-                Text("\(vm.urgentCount) 紧急").font(.system(size: 11, weight: .medium))
+                Text("\(vm.urgentCount) 紧急").dboardFont(size: 11, weight: .medium)
                     .foregroundStyle(.red)
                     .padding(.horizontal, 7).padding(.vertical, 2)
                     .background(Capsule().fill(Color.red.opacity(0.12)))
                     .contentTransition(.numericText())
             }
             if vm.workspacePage != .overview && vm.inProgressCount > 0 {
-                Text("\(vm.inProgressCount) 进行中").font(.system(size: 11))
+                Text("\(vm.inProgressCount) 进行中").dboardFont(size: 11)
                     .foregroundStyle(theme.current.textTertiary)
                     .contentTransition(.numericText())
             }
@@ -940,7 +868,7 @@ struct HeaderIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 13))
+                .dboardFont(size: 13)
                 .foregroundStyle(hovered ? theme.current.textPrimary : theme.current.textTertiary)
                 .frame(width: 24, height: 24)
                 .background(RoundedRectangle(cornerRadius: 6).fill(theme.current.textPrimary.opacity(hovered ? 0.07 : 0)))
@@ -982,7 +910,7 @@ struct NeedsSection: View {
         ForEach(Array(groups.enumerated()), id: \.element.0) { gi, grp in
             HStack(spacing: 6) {
                 Circle().fill(grp.1).frame(width: 6, height: 6)
-                Text(grp.0).font(.system(size: 13, weight: .semibold)).foregroundStyle(theme.current.textSecondary)
+                Text(grp.0).dboardFont(size: 13, weight: .semibold).foregroundStyle(theme.current.textSecondary)
                 Spacer()
                 Text("\(grp.2.count)").font(.system(size: 11, design: .monospaced)).foregroundStyle(theme.current.textMuted)
             }
@@ -1019,9 +947,9 @@ struct DemandProgressHistoryView: View {
                 Button { expanded.toggle() } label: {
                     HStack(spacing: 6) {
                         Image(systemName: expanded ? "chevron.up" : "ellipsis")
-                            .font(.system(size: 11, weight: .semibold)).frame(width: 16)
+                            .dboardFont(size: 11, weight: .semibold).frame(width: 16)
                         Text(expanded ? "收起历史记录" : "查看全部记录（\(milestones.count) 条）")
-                            .font(.system(size: 12))
+                            .dboardFont(size: 12)
                     }
                     .foregroundStyle(theme.current.textTertiary)
                     .padding(.vertical, 5)
@@ -1093,7 +1021,7 @@ struct ItemCardView: View {
                     DemandReminderView(item: item)
                     if let version = item.version {
                         Label("\(version.label) · 基于 \(version.parentID)「\(version.parentTitle)」", systemImage: "arrow.triangle.branch")
-                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                            .dboardFont(size: 11).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     if let link = item.reqFlow {
@@ -1103,7 +1031,7 @@ struct ItemCardView: View {
                     }
                 }
                 if vm.archivingIDs.contains(item.id) {
-                    HStack(spacing: 8) { ProgressView().controlSize(.small); Text("归档处理中…").font(.system(size: 11)) }
+                    HStack(spacing: 8) { ProgressView().controlSize(.small); Text("归档处理中…").dboardFont(size: 11) }
                 }
                 if expanded {
                     DemandContextView(item: item)
@@ -1142,14 +1070,14 @@ struct ItemCardView: View {
                 }
                 Divider()
                 Button("删除需求", systemImage: "trash", role: .destructive) { vm.deleteItem(item) }
-            } label: { Label("更多", systemImage: "ellipsis").font(.system(size: 12)) }
+            } label: { Label("更多", systemImage: "ellipsis").dboardFont(size: 12) }
             .demandMenuStyle(.borderlessButton).fixedSize()
         }.padding(.top, 4)
     }
 
     private func actionBtn(_ t: String, _ icon: String, tint: Color? = nil, _ a: @escaping () -> Void) -> some View {
         Button(action: a) {
-            Label(t, systemImage: icon).font(.system(size: 12))
+            Label(t, systemImage: icon).dboardFont(size: 12)
                 .padding(.horizontal, 6).frame(minHeight: 30).contentShape(Rectangle())
                 .foregroundStyle(tint ?? theme.current.textTertiary)
         }
@@ -1166,7 +1094,7 @@ struct ItemCardView: View {
                 .foregroundStyle(theme.current.textPrimary)
             Spacer()
             if let label = item.deadlineLabel {
-                Text(label).font(.system(size: 11)).monospacedDigit()
+                Text(label).dboardFont(size: 11).monospacedDigit()
                     .foregroundStyle(item.isUrgent ? Color.red : Color.secondary)
                     .fixedSize()
             }
@@ -1185,7 +1113,7 @@ struct ItemCardView: View {
                     .foregroundStyle(.secondary).fixedSize()
                 if !item.project.isEmpty {
                     Text("·").foregroundStyle(.tertiary)
-                    Text(DemandReminder.singleLine(item.project)).font(.system(size: 11))
+                    Text(DemandReminder.singleLine(item.project)).dboardFont(size: 11)
                         .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 }
                 StatusPill(status: item.status, onTap: {}, onSelect: { vm.cycleToStatus(item.id, target: $0) })
@@ -1198,12 +1126,12 @@ struct ItemCardView: View {
                 .demandButtonStyle(WorkspaceActionStyle())
                 .accessibilityLabel("复制现状").accessibilityIdentifier("demand-copy-" + item.id)
                 Button { vm.copyReviewTask(item.id) } label: {
-                    Image(systemName: "checkmark.bubble").font(.system(size: 12)).frame(width: 28, height: 28)
+                    Image(systemName: "checkmark.bubble").dboardFont(size: 12).frame(width: 28, height: 28)
                 }
                 .demandButtonStyle(.plain).foregroundStyle(.secondary)
                 .accessibilityLabel("复制代码审查").accessibilityIdentifier("demand-review-copy-" + item.id)
                 Button { vm.openDemandEditor(.prompt, item: item) } label: {
-                    Image(systemName: "wand.and.stars").font(.system(size: 12)).frame(width: 28, height: 28)
+                    Image(systemName: "wand.and.stars").dboardFont(size: 12).frame(width: 28, height: 28)
                 }
                 .demandButtonStyle(.plain).foregroundStyle(.secondary)
                 .accessibilityLabel("编辑咒言").accessibilityIdentifier("demand-prompt-" + item.id)
@@ -1219,28 +1147,28 @@ struct ItemCardView: View {
                     Image(systemName: "bubble.left.and.bubble.right")
                     Text(item.chatLinks?.summary ?? "关联群聊").lineLimit(2).multilineTextAlignment(.leading)
                     Spacer()
-                    Text(item.chatLinks == nil ? "添加" : "管理").font(.system(size: 11))
-                    Image(systemName: "chevron.right").font(.system(size: 10))
+                    Text(item.chatLinks == nil ? "添加" : "管理").dboardFont(size: 11)
+                    Image(systemName: "chevron.right").dboardFont(size: 10)
                 }
-                .font(.system(size: 12)).foregroundStyle(.secondary)
+                .dboardFont(size: 12).foregroundStyle(.secondary)
                 .padding(.horizontal, 8).frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
                 .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
                 .contentShape(Rectangle())
             }
             .demandButtonStyle(.plain).accessibilityIdentifier("demand-chats-" + item.id).demandKeyboardID("demand-chats-" + item.id)
             if let error = item.chatReadError {
-                Text(error).font(.system(size: 12)).foregroundStyle(.orange)
+                Text(error).dboardFont(size: 12).foregroundStyle(.orange)
             }
             if !item.changes.isEmpty {
                 HStack {
                     Label("追加变更 " + String(item.changes.count) + " 条", systemImage: "wand.and.stars")
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                        .dboardFont(size: 12).foregroundStyle(.secondary)
                     Spacer()
-                    Button("查看变更") { vm.openDemandEditor(.changes, item: item) }.font(.system(size: 12)).demandButtonStyle(.plain)
+                    Button("查看变更") { vm.openDemandEditor(.changes, item: item) }.dboardFont(size: 12).demandButtonStyle(.plain)
                 }
             }
             if let error = item.changeReadError {
-                Text(error).font(.system(size: 12)).foregroundStyle(.red)
+                Text(error).dboardFont(size: 12).foregroundStyle(.red)
             }
             if hasDetail {
                 if showDesc {
@@ -1357,11 +1285,12 @@ struct StatusPill: View {
                 }
             }
         } label: {
-            Text(status.label).font(.system(size: 11))
+            Text(status.label).dboardFont(size: 11)
                 .foregroundStyle(fg).padding(.horizontal, 8).padding(.vertical, 4)
                 .background(fg.opacity(0.08), in: Capsule())
         }
-        .demandMenuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+        .demandMenuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+        .dboardFont(size: 11)
     }
 }
 
@@ -1381,7 +1310,7 @@ struct PrevSection: View {
                         Text("\(prev.shortDate) 已完成").font(fm.font(14)).foregroundStyle(theme.current.textTertiary)
                         Spacer()
                         Text("\(prev.doneCount)/\(prev.totalCount)").font(.system(size: 10, design: .monospaced)).foregroundStyle(theme.current.chrome)
-                        Image(systemName: "chevron.right").font(.system(size: 9)).rotationEffect(.degrees(expanded ? 90 : 0)).foregroundStyle(theme.current.chrome)
+                        Image(systemName: "chevron.right").dboardFont(size: 9).rotationEffect(.degrees(expanded ? 90 : 0)).foregroundStyle(theme.current.chrome)
                     }
                     .padding(.horizontal, 16).padding(.vertical, 7)
                     .contentShape(Rectangle())
@@ -1399,7 +1328,7 @@ struct PrevSection: View {
                             Circle().fill(Color.green).frame(width: 7, height: 7)
                             Text("\(prev.shortDate) 已完成 \(done.count) 项").font(fm.font(14)).foregroundStyle(theme.current.textTertiary)
                             Spacer()
-                            Image(systemName: "chevron.right").font(.system(size: 9)).rotationEffect(.degrees(expanded ? 90 : 0)).foregroundStyle(theme.current.chrome)
+                            Image(systemName: "chevron.right").dboardFont(size: 9).rotationEffect(.degrees(expanded ? 90 : 0)).foregroundStyle(theme.current.chrome)
                         }
                         .padding(.horizontal, 16).padding(.vertical, 7)
                         .contentShape(Rectangle())
@@ -1412,14 +1341,14 @@ struct PrevSection: View {
                 }
             }
 
-            // 更早历史下拉框
+            // 更早历���下拉框
             if vm.prevSecs.count > 1 {
                 Button { withAnimation(.easeInOut(duration: 0.2)) { showHistory.toggle() } } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "clock.arrow.circlepath").font(fm.font(13)).foregroundStyle(theme.current.chrome)
                         Text("更早历史 · \(vm.prevSecs.count - 1) 天").font(fm.font(14)).foregroundStyle(theme.current.textTertiary)
                         Spacer()
-                        Image(systemName: "chevron.right").font(.system(size: 9)).rotationEffect(.degrees(showHistory ? 90 : 0)).foregroundStyle(theme.current.chrome)
+                        Image(systemName: "chevron.right").dboardFont(size: 9).rotationEffect(.degrees(showHistory ? 90 : 0)).foregroundStyle(theme.current.chrome)
                     }
                     .padding(.horizontal, 16).padding(.vertical, 7)
                     .contentShape(Rectangle())
@@ -1447,7 +1376,7 @@ struct HistoryBlockView: View {
                 Text(sec.shortDate).font(fm.font(14)).foregroundStyle(theme.current.textTertiary)
                 Spacer()
                 Text("\(sec.doneCount) 项已完成").font(.system(size: 10, design: .monospaced)).foregroundStyle(theme.current.chrome)
-                Image(systemName: "chevron.right").font(.system(size: 9)).rotationEffect(.degrees(expanded ? 90 : 0)).foregroundStyle(theme.current.chrome)
+                Image(systemName: "chevron.right").dboardFont(size: 9).rotationEffect(.degrees(expanded ? 90 : 0)).foregroundStyle(theme.current.chrome)
             }
             .padding(.horizontal, 16).padding(.vertical, 7)
             .contentShape(Rectangle())
@@ -1474,10 +1403,10 @@ struct TodaySection: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Text("今日零碎")
-                    .font(.system(size: compact ? 12 : 13, weight: compact ? .regular : .semibold))
+                    .dboardFont(size: compact ? 12 : 13, weight: compact ? .regular : .semibold)
                     .foregroundStyle(compact ? theme.current.textTertiary : theme.current.textSecondary)
                 if vm.todayTodos.isEmpty && !adding && !compact {
-                    Text("还没有添加").font(.system(size: 12)).foregroundStyle(.secondary)
+                    Text("还没有添加").dboardFont(size: 12).foregroundStyle(.secondary)
                 }
                 Spacer()
                 if vm.todayTodos.isEmpty && !adding {
@@ -1495,7 +1424,7 @@ struct TodaySection: View {
             if adding {
                 HStack(spacing: 10) {
                     Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 16)).foregroundStyle(theme.current.accentPrimary)
+                        .dboardFont(size: 16).foregroundStyle(theme.current.accentPrimary)
                     TextField("添加今日零碎…", text: $vm.newTodoText)
                         .font(fm.font(15)).textFieldStyle(.plain)
                         .foregroundStyle(theme.current.textPrimary)
@@ -1537,7 +1466,7 @@ struct TodaySection: View {
             adding = true
         } label: {
             Label(vm.newTodoText.isEmpty ? "添加" : "继续添加", systemImage: "plus")
-                .font(.system(size: 12))
+                .dboardFont(size: 12)
         }
         .demandButtonStyle(.plain).foregroundStyle(Color.accentColor)
         .accessibilityLabel("添加今日零碎")
@@ -1569,7 +1498,7 @@ struct TodoRow: View {
         HStack(alignment: .top, spacing: 12) {
             Button { vm.toggleTodo(todo) } label: {
                 Image(systemName: todo.isCompleted ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 18)).foregroundStyle(todo.isCompleted ? Color.green : Color.secondary)
+                    .dboardFont(size: 18).foregroundStyle(todo.isCompleted ? Color.green : Color.secondary)
                     .frame(width: 24, height: 24)
             }
             .demandButtonStyle(.plain).disabled(readOnly || isEditing)
@@ -1577,14 +1506,14 @@ struct TodoRow: View {
             VStack(alignment: .leading, spacing: 8) {
                 if todo.isCarriedOver, let origin = todo.origin {
                     Label("\(origin.date) 顺延，修改会写回原日期", systemImage: "arrow.turn.down.right")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .dboardFont(size: 11).foregroundStyle(.secondary)
                 }
                 if editingText {
                     TextField("事项内容", text: $textBuf).textFieldStyle(.roundedBorder)
                         .focused($textFocused).onSubmit(saveText)
                     editActions(save: saveText)
                 } else {
-                    Text(todo.text).font(.system(size: 13))
+                    Text(todo.text).dboardFont(size: 13)
                         .foregroundStyle(todo.isCompleted ? .secondary : .primary)
                         .strikethrough(todo.isCompleted).textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1595,7 +1524,7 @@ struct TodoRow: View {
                         .focused($noteFocused).onSubmit(saveNote)
                     editActions(save: saveNote)
                 } else if let note = todo.note {
-                    Label(note, systemImage: "message").font(.system(size: 12)).foregroundStyle(.secondary)
+                    Label(note, systemImage: "message").dboardFont(size: 12).foregroundStyle(.secondary)
                         .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 }
                 if let link = todo.linkedDItem {
@@ -1603,10 +1532,10 @@ struct TodoRow: View {
                         if vm.items.contains(where: { $0.id == link }) { vm.focusItem(link) }
                         else { vm.showFeedback("关联需求不在当前本地看板中，请核对历史记录", failed: true) }
                     } label: { Label("关联 \(link)", systemImage: "link") }
-                    .font(.system(size: 11)).demandButtonStyle(.plain).foregroundStyle(Color.accentColor)
+                    .dboardFont(size: 11).demandButtonStyle(.plain).foregroundStyle(Color.accentColor)
                 }
                 if let time = todo.completedAt {
-                    Text("完成于 \(time)").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("完成于 \(time)").dboardFont(size: 11).foregroundStyle(.secondary)
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
             if !readOnly {
@@ -1680,7 +1609,7 @@ struct FooterView: View {
             LocalAudiServiceMenu()
             Spacer(minLength: 4)
             Text(vm.syncText.isEmpty ? "本地看板" : vm.syncText)
-                .font(.system(size: 11)).foregroundStyle(vm.syncKind == .fail ? Color.orange : Color.secondary)
+                .dboardFont(size: 11).foregroundStyle(vm.syncKind == .fail ? Color.orange : Color.secondary)
                 .lineLimit(1)
             Menu {
                 Button("刷新看板") { vm.reload() }
@@ -1696,6 +1625,10 @@ struct FooterView: View {
                     }
                 }
                 Divider()
+                Button("外观…") {
+                    WorkspacePreferences.shared.settingsPage = .appearance
+                    openSettings()
+                }
                 Button("设置…") { openSettings() }
             } label: { Image(systemName: "ellipsis.circle") }
             .demandMenuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
@@ -1714,7 +1647,7 @@ struct FooterButton: View {
     init(_ title: String, action: @escaping () -> Void) { self.title = title; self.action = action }
     var body: some View {
         Button(action: action) {
-            Text(title).font(.system(size: 11)).foregroundStyle(hovered ? theme.current.accentPrimary : theme.current.textMuted)
+            Text(title).dboardFont(size: 11).foregroundStyle(hovered ? theme.current.accentPrimary : theme.current.textMuted)
                 .padding(.horizontal, 8).padding(.vertical, 4)
                 .background(RoundedRectangle(cornerRadius: 6).fill(hovered ? theme.current.accentPrimary.opacity(0.12) : Color.clear))
         }
@@ -1733,7 +1666,7 @@ struct FooterButtonIcon: View {
     init(_ icon: String, action: @escaping () -> Void) { self.icon = icon; self.action = action }
     var body: some View {
         Button(action: action) {
-            Image(systemName: icon).font(.system(size: 12)).foregroundStyle(hovered ? theme.current.accentPrimary : theme.current.textMuted)
+            Image(systemName: icon).dboardFont(size: 12).foregroundStyle(hovered ? theme.current.accentPrimary : theme.current.textMuted)
                 .padding(.horizontal, 6).padding(.vertical, 4)
                 .background(RoundedRectangle(cornerRadius: 6).fill(hovered ? theme.current.accentPrimary.opacity(0.12) : Color.clear))
         }

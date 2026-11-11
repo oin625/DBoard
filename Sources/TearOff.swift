@@ -40,9 +40,9 @@ struct TearOffGesture: ViewModifier {
                 if progress > 0.05 {
                     HStack(spacing: 4) {
                         Image(systemName: "arrow.down.left.and.arrow.up.right")
-                            .font(.system(size: 9, weight: .semibold))
+                            .dboardFont(size: 9, weight: .semibold)
                         Text(progress >= 1 ? "松手变为独立窗口" : "继续下拉…")
-                            .font(.system(size: 10))
+                            .dboardFont(size: 10)
                     }
                     .foregroundStyle(theme.current.accentPrimary)
                     .padding(.horizontal, 8).padding(.vertical, 3)
@@ -66,7 +66,7 @@ struct TearOffButton: View {
     @EnvironmentObject var theme: ThemeManager
     var body: some View {
         Button(action: { NotificationCenter.default.post(name: .tearOff(key), object: nil) }) {
-            Image(systemName: "rectangle.expand.diagonal").font(.system(size: 11))
+            Image(systemName: "rectangle.expand.diagonal").dboardFont(size: 11)
         }
         .buttonStyle(.plain)
         .foregroundStyle(theme.current.textSecondary)

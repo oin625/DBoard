@@ -307,7 +307,7 @@ final class ReplyInboxWindowController {
         let contentView = ReplyInboxView()
             .environmentObject(viewModel)
             .environmentObject(ThemeManager.shared)
-            .environmentObject(FontManager.shared)
+            .dboardFont(size: 13).environmentObject(FontManager.shared)
         let hosting = NSHostingController(rootView: contentView)
         let win = NSWindow(contentViewController: hosting)
         win.title = "钉钉待回复"
@@ -378,7 +378,7 @@ struct ReplyInboxView: View {
         }
         .safeAreaInset(edge: .bottom) {
             if let feedback = vm.actionFeedback {
-                Text(feedback).font(.system(size: 12)).foregroundStyle(.secondary)
+                Text(feedback).dboardFont(size: 12).foregroundStyle(.secondary)
                     .textSelection(.enabled).padding(12).frame(maxWidth: .infinity)
                     .background(.regularMaterial)
             }
@@ -389,7 +389,7 @@ struct ReplyInboxView: View {
         .sheet(isPresented: $showWhitelist) {
             WhitelistPanel(onClose: { showWhitelist = false })
                 .environmentObject(theme)
-                .environmentObject(fm)
+                .dboardFont(size: 13).environmentObject(fm)
         }
         .sheet(isPresented: $showNewRecipe) {
             RecipeTeachForm(
@@ -402,7 +402,7 @@ struct ReplyInboxView: View {
                 },
                 onCancel: { showNewRecipe = false })
             .environmentObject(theme)
-            .environmentObject(fm)
+            .dboardFont(size: 13).environmentObject(fm)
         }
         .confirmationDialog("清空全部待回复？",
                             isPresented: $showClearConfirm, titleVisibility: .visible) {
@@ -420,7 +420,7 @@ struct ReplyInboxView: View {
                 .foregroundStyle(theme.current.accentGradient)
             if !vm.items.isEmpty {
                 Text("\(vm.items.count)")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .dboardFont(size: 11, weight: .bold, design: .rounded)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 7).padding(.vertical, 2)
                     .background(Capsule().fill(theme.current.accentPrimary))
@@ -428,8 +428,8 @@ struct ReplyInboxView: View {
             Spacer()
             Button(action: { showWhitelist = true }) {
                 HStack(spacing: 3) {
-                    Image(systemName: "shield.lefthalf.filled").font(.system(size: 10, weight: .bold))
-                    Text("白名单").font(.system(size: 11, weight: .semibold))
+                    Image(systemName: "shield.lefthalf.filled").dboardFont(size: 10, weight: .bold)
+                    Text("白名单").dboardFont(size: 11, weight: .semibold)
                 }
                 .foregroundStyle(theme.current.accentPrimary)
                 .padding(.horizontal, 10).padding(.vertical, 5)
@@ -438,8 +438,8 @@ struct ReplyInboxView: View {
             .buttonStyle(SmoothButtonStyle())
             Button(action: { showNewRecipe = true }) {
                 HStack(spacing: 3) {
-                    Image(systemName: "plus").font(.system(size: 10, weight: .bold))
-                    Text("新配方").font(.system(size: 11, weight: .semibold))
+                    Image(systemName: "plus").dboardFont(size: 10, weight: .bold)
+                    Text("新配方").dboardFont(size: 11, weight: .semibold)
                 }
                 .foregroundStyle(theme.current.accentPrimary)
                 .padding(.horizontal, 10).padding(.vertical, 5)
@@ -449,8 +449,8 @@ struct ReplyInboxView: View {
             if !vm.items.isEmpty {
                 Button(action: { showClearConfirm = true }) {
                     HStack(spacing: 3) {
-                        Image(systemName: "trash").font(.system(size: 10, weight: .bold))
-                        Text("清空").font(.system(size: 11, weight: .semibold))
+                        Image(systemName: "trash").dboardFont(size: 10, weight: .bold)
+                        Text("清空").dboardFont(size: 11, weight: .semibold)
                     }
                     .foregroundStyle(Color(hex: "#ff6b6b"))
                     .padding(.horizontal, 10).padding(.vertical, 5)
@@ -471,7 +471,7 @@ struct ReplyInboxView: View {
         VStack(spacing: 14) {
             Spacer()
             Image(systemName: "checkmark.seal.fill")
-                .font(.system(size: 44))
+                .dboardFont(size: 44)
                 .foregroundStyle(theme.current.accentGradient)
             Text("都回完啦，喝杯茶 ☕")
                 .font(fm.font(17))
@@ -555,7 +555,7 @@ struct ReplyCard: View {
     private var header: some View {
         HStack(spacing: 8) {
             Text(item.isSingle ? "单聊" : "群")
-                .font(.system(size: 10, weight: .bold))
+                .dboardFont(size: 10, weight: .bold)
                 .foregroundStyle(.white)
                 .padding(.horizontal, 8).padding(.vertical, 3)
                 .background(Capsule().fill(tagColor))
@@ -565,7 +565,7 @@ struct ReplyCard: View {
             Spacer()
             Button(action: { onReplied() }) {
                 Text("已回复")
-                    .font(.system(size: 10, weight: .medium))
+                    .dboardFont(size: 10, weight: .medium)
                     .foregroundStyle(theme.current.accentPrimary)
                     .padding(.horizontal, 8).padding(.vertical, 3)
                     .background(Capsule().strokeBorder(theme.current.accentPrimary.opacity(0.5), lineWidth: 1))
@@ -573,7 +573,7 @@ struct ReplyCard: View {
             .buttonStyle(SmoothButtonStyle())
             Button(action: { onDismiss() }) {
                 Text("不用回")
-                    .font(.system(size: 10, weight: .medium))
+                    .dboardFont(size: 10, weight: .medium)
                     .foregroundStyle(theme.current.textTertiary)
                     .padding(.horizontal, 8).padding(.vertical, 3)
                     .background(Capsule().strokeBorder(theme.current.separator.opacity(0.7), lineWidth: 1))
@@ -589,7 +589,7 @@ struct ReplyCard: View {
         VStack(alignment: .leading, spacing: 4) {
             if !item.isSingle {
                 Text(item.convTitle)
-                    .font(.system(size: 10))
+                    .dboardFont(size: 10)
                     .foregroundStyle(theme.current.textMuted)
             }
             Text(item.incoming)
@@ -623,7 +623,7 @@ struct ReplyCard: View {
                 Image(systemName: "bolt.badge.clock.fill")
                     .foregroundStyle(Color(hex: "#7c5cff"))
                 Text("需要先操作")
-                    .font(.system(size: 11, weight: .semibold))
+                    .dboardFont(size: 11, weight: .semibold)
                     .foregroundStyle(theme.current.textTertiary)
             }
             if let s = item.actionSummary, !s.isEmpty {
@@ -635,10 +635,10 @@ struct ReplyCard: View {
 
             if item.hasRecipe {
                 HStack(spacing: 6) {
-                    Image(systemName: "wand.and.stars").font(.system(size: 11))
+                    Image(systemName: "wand.and.stars").dboardFont(size: 11)
                         .foregroundStyle(theme.current.accentPrimary)
                     Text("已匹配配方：\(item.recipeMatch ?? "")")
-                        .font(.system(size: 12, weight: .medium))
+                        .dboardFont(size: 12, weight: .medium)
                         .foregroundStyle(theme.current.textSecondary)
                 }
                 if let cmd = item.plannedCommand, !cmd.isEmpty {
@@ -651,9 +651,9 @@ struct ReplyCard: View {
                 }
                 Button(action: { executing = true; onExec() }) {
                     HStack(spacing: 5) {
-                        Image(systemName: executing ? "hourglass" : "play.fill").font(.system(size: 11))
+                        Image(systemName: executing ? "hourglass" : "play.fill").dboardFont(size: 11)
                         Text(item.readOnly == true ? "执行并回复" : "确认执行(写操作)")
-                            .font(.system(size: 13, weight: .semibold))
+                            .dboardFont(size: 13, weight: .semibold)
                     }
                     .foregroundStyle(.white)
                     .padding(.horizontal, 14).padding(.vertical, 8)
@@ -666,9 +666,9 @@ struct ReplyCard: View {
             } else {
                 Button(action: { withAnimation { showTeach.toggle() } }) {
                     HStack(spacing: 5) {
-                        Image(systemName: "graduationcap.fill").font(.system(size: 11))
+                        Image(systemName: "graduationcap.fill").dboardFont(size: 11)
                         Text(showTeach ? "收起" : "教我怎么做")
-                            .font(.system(size: 13, weight: .semibold))
+                            .dboardFont(size: 13, weight: .semibold)
                     }
                     .foregroundStyle(theme.current.accentPrimary)
                     .padding(.horizontal, 14).padding(.vertical, 8)
@@ -688,9 +688,9 @@ struct ReplyCard: View {
         if !(item.isAction && !item.hasRecipe) {
             Button(action: { withAnimation { showTeach.toggle() } }) {
                 HStack(spacing: 4) {
-                    Image(systemName: "graduationcap").font(.system(size: 10))
+                    Image(systemName: "graduationcap").dboardFont(size: 10)
                     Text(showTeach ? "收起" : "这条其实要操作? 教我")
-                        .font(.system(size: 11))
+                        .dboardFont(size: 11)
                 }
                 .foregroundStyle(theme.current.textTertiary)
             }
@@ -741,7 +741,7 @@ struct ReplyCard: View {
                     ForEach(Self.emojiAll, id: \.1) { pair in
                         Button(action: { onEmotion(pair.1, false) }) {
                             Text(pair.0)
-                                .font(.system(size: 17))
+                                .dboardFont(size: 17)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 5)
                                 .background(RoundedRectangle(cornerRadius: 7).fill(theme.current.separator.opacity(0.3)))
@@ -785,12 +785,12 @@ struct ReplyCard: View {
     private var draftsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("候选回复")
-                .font(.system(size: 11, weight: .semibold))
+                .dboardFont(size: 11, weight: .semibold)
                 .foregroundStyle(theme.current.textTertiary)
             ForEach(Array(item.drafts.enumerated()), id: \.offset) { idx, draft in
                 HStack(alignment: .center, spacing: 10) {
                     Text("\(idx + 1)")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .dboardFont(size: 11, weight: .bold, design: .rounded)
                         .foregroundStyle(.white)
                         .frame(width: 20, height: 20)
                         .background(Circle().fill(theme.current.accentGradient))
@@ -800,7 +800,7 @@ struct ReplyCard: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Button(action: { onCopy(draft); copiedIndex = idx }) {
                         Image(systemName: copiedIndex == idx ? "checkmark" : "doc.on.doc")
-                            .font(.system(size: 11))
+                            .dboardFont(size: 11)
                             .foregroundStyle(theme.current.textTertiary)
                             .frame(width: 26, height: 24)
                             .background(RoundedRectangle(cornerRadius: 7).fill(theme.current.separator.opacity(0.5)))
@@ -808,8 +808,8 @@ struct ReplyCard: View {
                     .buttonStyle(SmoothButtonStyle())
                     Button(action: { onSend(draft, "draft-\(idx + 1)") }) {
                         HStack(spacing: 3) {
-                            Image(systemName: "paperplane.fill").font(.system(size: 9))
-                            Text("发送").font(.system(size: 11, weight: .semibold))
+                            Image(systemName: "paperplane.fill").dboardFont(size: 9)
+                            Text("发送").dboardFont(size: 11, weight: .semibold)
                         }
                         .foregroundStyle(.white)
                         .padding(.horizontal, 11).padding(.vertical, 6)
@@ -844,8 +844,8 @@ struct ReplyCard: View {
                 .onSubmit { sendCustom() }
             Button(action: sendCustom) {
                 HStack(spacing: 3) {
-                    Image(systemName: "paperplane.fill").font(.system(size: 10))
-                    Text("发送").font(.system(size: 12, weight: .semibold))
+                    Image(systemName: "paperplane.fill").dboardFont(size: 10)
+                    Text("发送").dboardFont(size: 12, weight: .semibold)
                 }
                 .foregroundStyle(.white)
                 .padding(.horizontal, 12).padding(.vertical, 8)
@@ -904,7 +904,7 @@ struct RecipeTeachForm: View {
                 Spacer()
                 Button(action: onCancel) {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 16))
+                        .dboardFont(size: 16)
                         .foregroundStyle(theme.current.textTertiary)
                 }
                 .buttonStyle(SmoothButtonStyle())
@@ -927,21 +927,21 @@ struct RecipeTeachForm: View {
             }
             field("回复模板(可选)", text: $reply, placeholder: "查了下,{result}")
             Toggle(isOn: $readOnly) {
-                Text("只读(可自动执行, 写操作请关掉)").font(.system(size: 12))
+                Text("只读(可自动执行, 写操作请关掉)").dboardFont(size: 12)
                     .foregroundStyle(theme.current.textSecondary)
             }
             .toggleStyle(.switch)
             HStack {
                 Spacer()
                 Button(action: onCancel) {
-                    Text("取消").font(.system(size: 13))
+                    Text("取消").dboardFont(size: 13)
                         .foregroundStyle(theme.current.textSecondary)
                         .padding(.horizontal, 14).padding(.vertical, 8)
                 }
                 .buttonStyle(SmoothButtonStyle())
                 Button(action: save) {
                     Text("保存配方")
-                        .font(.system(size: 13, weight: .semibold))
+                        .dboardFont(size: 13, weight: .semibold)
                         .foregroundStyle(.white)
                         .padding(.horizontal, 16).padding(.vertical, 8)
                         .background(Capsule().fill(theme.current.accentGradient))
@@ -957,10 +957,10 @@ struct RecipeTeachForm: View {
 
     private func field(_ label: String, text: Binding<String>, placeholder: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(label).font(.system(size: 10)).foregroundStyle(theme.current.textTertiary)
+            Text(label).dboardFont(size: 10).foregroundStyle(theme.current.textTertiary)
             TextField(placeholder, text: text)
                 .textFieldStyle(.plain)
-                .font(.system(size: 13))
+                .dboardFont(size: 13)
                 .foregroundStyle(theme.current.textPrimary)
                 .padding(.horizontal, 9).padding(.vertical, 6)
                 .background(RoundedRectangle(cornerRadius: 7).fill(theme.current.cardFill.opacity(0.7)))

@@ -23,27 +23,27 @@ struct DemandKnowledgeView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Label("排查经验", systemImage: "books.vertical").font(.system(size: 16, weight: .semibold))
+                Label("排查经验", systemImage: "books.vertical").dboardFont(size: 16, weight: .semibold)
                 Spacer()
                 Button("刷新", action: reload).controlSize(.small)
                 Button("关闭", action: close).keyboardShortcut(.cancelAction)
             }
             TextField("搜索现象、机制、服务或查法", text: $query).textFieldStyle(.roundedBorder)
             HStack {
-                Text("\(visible.count) 条经验").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text("\(visible.count) 条经验").dboardFont(size: 11).foregroundStyle(.secondary)
                 Spacer()
-                Toggle("显示停用", isOn: $includeInactive).toggleStyle(DemandKeyboardToggleStyle()).font(.system(size: 11))
+                Toggle("显示停用", isOn: $includeInactive).toggleStyle(DemandKeyboardToggleStyle()).dboardFont(size: 11)
             }
-            if let error { Text(error).font(.system(size: 12)).foregroundStyle(.orange) }
+            if let error { Text(error).dboardFont(size: 12).foregroundStyle(.orange) }
             ScrollView {
                 if visible.isEmpty {
                     Text(error == nil ? "暂无匹配经验。线上排查时由 AI 提炼并维护，你可以在这里查看和修正。" : "读取失败，未按空库覆盖。")
-                        .font(.system(size: 13)).foregroundStyle(.secondary).padding(.vertical, 40)
+                        .dboardFont(size: 13).foregroundStyle(.secondary).padding(.vertical, 40)
                 }
                 let groups = Dictionary(grouping: visible, by: { $0.mechanism.isEmpty ? "原因未定" : $0.mechanism })
                 ForEach(groups.keys.sorted(), id: \.self) { mechanism in
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(mechanism).font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                        Text(mechanism).dboardFont(size: 12, weight: .semibold).foregroundStyle(.secondary)
                         ForEach(groups[mechanism] ?? []) { entry in row(entry) }
                     }.padding(.bottom, 12)
                 }
@@ -76,8 +76,8 @@ struct DemandKnowledgeView: View {
                 } label: {
                     HStack {
                         Image(systemName: expanded.contains(entry.id) ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 10))
-                        Text(entry.title).font(.system(size: 13, weight: .medium)).lineLimit(2)
+                            .dboardFont(size: 10)
+                        Text(entry.title).dboardFont(size: 13, weight: .medium).lineLimit(2)
                     }.frame(maxWidth: .infinity, minHeight: 30, alignment: .leading).contentShape(Rectangle())
                 }.demandButtonStyle(.plain)
                 Button("编辑") { editing = entry }.controlSize(.small)
@@ -89,10 +89,10 @@ struct DemandKnowledgeView: View {
             }
             HStack {
                 Text(entry.active ? (entry.confidence == "confirmed" ? "根因已确认" : "查法可复用 · 原因待确认") : "已停用")
-                    .font(.system(size: 11)).foregroundStyle(entry.active && entry.confidence == "confirmed" ? .green : .secondary)
-                if entry.updated_by == "user" { Text("你已修正").font(.system(size: 11)).foregroundStyle(.secondary) }
+                    .dboardFont(size: 11).foregroundStyle(entry.active && entry.confidence == "confirmed" ? .green : .secondary)
+                if entry.updated_by == "user" { Text("你已修正").dboardFont(size: 11).foregroundStyle(.secondary) }
             }
-            if !entry.scopes.isEmpty { Text(entry.scopes.joined(separator: " · ")).font(.system(size: 11)).foregroundStyle(.secondary) }
+            if !entry.scopes.isEmpty { Text(entry.scopes.joined(separator: " · ")).dboardFont(size: 11).foregroundStyle(.secondary) }
             if expanded.contains(entry.id) {
                 detail("适用现象", entry.symptoms.joined(separator: "\n"))
                 detail("排查路径", entry.procedure)
@@ -101,7 +101,7 @@ struct DemandKnowledgeView: View {
                 detail("证据入口", entry.evidence.joined(separator: "\n"))
                 HStack {
                     ForEach(entry.sources, id: \.id) { source in
-                        Button("查看 " + source.id) { close(); vm.focusItem(source.id) }.font(.system(size: 12))
+                        Button("查看 " + source.id) { close(); vm.focusItem(source.id) }.dboardFont(size: 12)
                     }
                 }
             }
@@ -110,8 +110,8 @@ struct DemandKnowledgeView: View {
 
     private func detail(_ title: String, _ text: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
-            Text(text).font(.system(size: 12)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            Text(title).dboardFont(size: 11, weight: .medium).foregroundStyle(.secondary)
+            Text(text).dboardFont(size: 12).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -131,7 +131,7 @@ struct DemandKnowledgeEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("修正排查经验").font(.system(size: 16, weight: .semibold))
+            Text("修正排查经验").dboardFont(size: 16, weight: .semibold)
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     field("名称", $draft.value.title)
@@ -148,9 +148,9 @@ struct DemandKnowledgeEditor: View {
                     lines("证据入口（每行一项）", $draft.value.evidence)
                 }.padding(.trailing, 3)
             }
-            if let error { Text(error).font(.system(size: 12)).foregroundStyle(.orange) }
+            if let error { Text(error).dboardFont(size: 12).foregroundStyle(.orange) }
             HStack {
-                Text("草稿保留；保存后 AI 会保护你的修正。").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text("草稿保留；保存后 AI 会保护你的修正。").dboardFont(size: 11).foregroundStyle(.secondary)
                 Spacer()
                 Button("关闭", action: close).keyboardShortcut(.cancelAction)
                 Button("保存") {
@@ -166,7 +166,7 @@ struct DemandKnowledgeEditor: View {
 
     private func field(_ title: String, _ text: Binding<String>, minimum: Int = 1) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.system(size: 12)).foregroundStyle(.secondary)
+            Text(title).dboardFont(size: 12).foregroundStyle(.secondary)
             TextField(title, text: text, axis: .vertical).lineLimit(minimum...12).textFieldStyle(.roundedBorder)
         }
     }
@@ -182,10 +182,10 @@ struct IncidentExperienceView: View {
         if item.isIncident {
             if let review = item.incidentExperienceReview {
                 Text("经验判断：\(review.decision == "skip" ? "暂不沉淀" : review.decision == "create" ? "已新增经验" : "已更新经验") · \(review.reason)")
-                    .font(.system(size: 11)).foregroundStyle(.secondary).textSelection(.enabled)
+                    .dboardFont(size: 11).foregroundStyle(.secondary).textSelection(.enabled)
             } else {
                 Text("AI 排查后会判断是否沉淀经验；没有有效结论时只记录进展。")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .dboardFont(size: 11).foregroundStyle(.secondary)
             }
         }
     }

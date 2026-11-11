@@ -58,7 +58,7 @@ private struct DemandDetailWindowRoot: View {
             VStack(spacing: 8) {
                 if let title = vm.undoTitle {
                     HStack(spacing: 8) {
-                        Text("已删除，可从本机恢复").font(.system(size: 12))
+                        Text("已删除，可从本机恢复").dboardFont(size: 12)
                         Button(title) { vm.undoLastDeletion() }.controlSize(.small)
                         Button { vm.undoTitle = nil } label: { Image(systemName: "xmark") }
                             .demandButtonStyle(.plain).foregroundStyle(.secondary)
@@ -102,8 +102,12 @@ final class DemandDetailWindowController: NSObject, NSWindowDelegate {
     private var centering: DemandWindowCentering?
     private(set) var keyboardNavigation: DemandWindowKeyboardNavigation?
     private let activates: Bool
+    private let theme: ThemeManager
 
-    init(activates: Bool = true) { self.activates = activates }
+    init(activates: Bool = true, theme: ThemeManager = .shared) {
+        self.activates = activates
+        self.theme = theme
+    }
 
     func show(_ vm: DBoardViewModel) {
         guard let request = vm.demandEditor, vm.demandEditorInWindow else { return }
@@ -113,7 +117,7 @@ final class DemandDetailWindowController: NSObject, NSWindowDelegate {
         vm.demandWindowCenterRect = nil
         if window == nil {
             let host = NSHostingController(rootView: DemandDetailWindowRoot(close: { [weak self] in self?.close() })
-                .environmentObject(vm).environmentObject(ThemeManager.shared).environmentObject(FontManager.shared))
+                .environmentObject(vm).environmentObject(theme).dboardFont(size: 13).environmentObject(FontManager.shared))
             let value = DemandWorkspaceWindow(contentRect:
                 NSRect(x: activates ? 0 : -10000, y: 0, width: 640, height: 680))
             value.isReleasedWhenClosed = false

@@ -86,11 +86,11 @@ struct AttentionRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: icon).font(.system(size: 14)).foregroundStyle(tint).frame(width: 20)
+            Image(systemName: icon).dboardFont(size: 14).foregroundStyle(tint).frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 13, weight: .medium)).foregroundStyle(theme.current.textPrimary)
+                Text(title).dboardFont(size: 13, weight: .medium).foregroundStyle(theme.current.textPrimary)
                 if !subtitle.isEmpty {
-                    Text(subtitle).font(.system(size: 11)).foregroundStyle(theme.current.textTertiary)
+                    Text(subtitle).dboardFont(size: 11).foregroundStyle(theme.current.textTertiary)
                         .lineLimit(1).truncationMode(.tail)
                 }
             }
@@ -111,11 +111,11 @@ struct SectionHeader: View {
 
     var body: some View {
         HStack {
-            Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(theme.current.textSecondary)
+            Text(title).dboardFont(size: 13, weight: .semibold).foregroundStyle(theme.current.textSecondary)
             Spacer()
             if let t = trailing {
                 Label(t, systemImage: "checkmark.circle")
-                    .font(.system(size: 11)).foregroundStyle(theme.current.textTertiary)
+                    .dboardFont(size: 11).foregroundStyle(theme.current.textTertiary)
             }
         }
         .padding(.horizontal, 4)

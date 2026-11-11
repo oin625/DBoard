@@ -206,7 +206,7 @@ struct WhitelistPanel: View {
                     Spacer()
                     Button(action: onClose) {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 18))
+                            .dboardFont(size: 18)
                             .foregroundStyle(theme.current.textTertiary)
                     }
                     .buttonStyle(SmoothButtonStyle(hoverScale: 1.12))
@@ -255,7 +255,7 @@ struct WhitelistPanel: View {
                     }
                 },
                 onCancel: { showGroupPicker = false })
-                .environmentObject(theme).environmentObject(fm)
+                .environmentObject(theme).dboardFont(size: 13).environmentObject(fm)
         }
         .sheet(isPresented: $showUserPicker) {
             MemberPicker(mode: .user, existingIds: Set(vm.userWhitelist.map(\.id)), vm: vm,
@@ -267,7 +267,7 @@ struct WhitelistPanel: View {
                     }
                 },
                 onCancel: { showUserPicker = false })
-                .environmentObject(theme).environmentObject(fm)
+                .environmentObject(theme).dboardFont(size: 13).environmentObject(fm)
         }
     }
 
@@ -281,7 +281,7 @@ struct WhitelistPanel: View {
             Spacer()
             Button(action: action) {
                 HStack(spacing: 3) {
-                    Image(systemName: "plus").font(.system(size: 9, weight: .bold))
+                    Image(systemName: "plus").dboardFont(size: 9, weight: .bold)
                     Text(add).font(fm.font(12))
                 }
                 .foregroundStyle(.white)
@@ -304,7 +304,7 @@ struct WhitelistPanel: View {
         MemberRowView(g: g, icon: icon,
                       confirming: confirmRemoveID == g.id,
                       onRemove: onRemove)
-            .environmentObject(theme).environmentObject(fm)
+            .environmentObject(theme).dboardFont(size: 13).environmentObject(fm)
     }
 
     private func requestRemove(_ g: WhitelistGroup, isUser: Bool) {
@@ -342,7 +342,7 @@ struct WhitelistPanel: View {
     private func toastView(_ text: String) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 13))
+                .dboardFont(size: 13)
                 .foregroundStyle(.white.opacity(0.9))
             Text(text)
                 .font(fm.font(12))
@@ -381,7 +381,7 @@ private struct MemberRowView: View {
     var body: some View {
         HStack(spacing: 9) {
             Image(systemName: icon)
-                .font(.system(size: 12))
+                .dboardFont(size: 12)
                 .foregroundStyle(theme.current.accentPrimary)
             Text(g.title)
                 .font(fm.font(14))
@@ -448,7 +448,7 @@ struct MemberPicker: View {
             // 即时过滤输入框: 没有搜索按钮
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 12))
+                    .dboardFont(size: 12)
                     .foregroundStyle(theme.current.textTertiary)
                 TextField(mode == .group ? "输入过滤群名…" : "输入姓名过滤, 通讯录同步搜索…", text: $query)
                     .textFieldStyle(.plain)
@@ -459,7 +459,7 @@ struct MemberPicker: View {
                 if !query.isEmpty {
                     Button(action: { query = "" }) {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 12))
+                            .dboardFont(size: 12)
                             .foregroundStyle(theme.current.textTertiary)
                     }
                     .buttonStyle(SmoothButtonStyle())
@@ -498,7 +498,7 @@ struct MemberPicker: View {
                                 else { selected[item.id] = item }
                             }
                         }
-                        .environmentObject(theme).environmentObject(fm)
+                        .environmentObject(theme).dboardFont(size: 13).environmentObject(fm)
                     }
                 }
             }
@@ -575,7 +575,7 @@ private struct PickerRowView: View {
         Button(action: onTap) {
             HStack(spacing: 10) {
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 15))
+                    .dboardFont(size: 15)
                     .foregroundStyle(selected ? theme.current.accentPrimary : theme.current.textTertiary.opacity(0.5))
                     .contentTransition(.symbolEffect(.replace))
                 Text(item.title)

@@ -1,22 +1,33 @@
 import SwiftUI
 import AppKit
 
-/// Shared by the quick-open card and demand pages so all use the same tint and mesh.
-struct DemandCanvasBackground: View {
+/// The same renderer powers live windows and appearance previews.
+struct ThemeCanvasBackground: View {
+    let palette: DBoardTheme
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ZStack {
-            Color(nsColor: .controlBackgroundColor)
+            if palette.nativeBlur {
+                NativeBlurView()
+                palette.background.opacity(colorScheme == .dark ? 0.50 : 0.42)
+            } else {
+                palette.background
+            }
             MeshGradient(width: 3, height: 3,
                 points: [.init(0, 0), .init(0.5, 0), .init(1, 0),
                          .init(0, 0.5), .init(0.5, 0.5), .init(1, 0.5),
                          .init(0, 1), .init(0.5, 1), .init(1, 1)],
-                colors: [.blue, .indigo, .blue, .clear, .blue, .indigo, .clear, .clear, .blue])
-                .opacity(colorScheme == .dark ? 0.22 : 0.13)
+                colors: palette.meshColors)
+                .opacity(palette.meshOpacity(for: colorScheme))
         }
         .allowsHitTesting(false)
     }
+}
+
+struct DemandCanvasBackground: View {
+    @EnvironmentObject private var theme: ThemeManager
+    var body: some View { ThemeCanvasBackground(palette: theme.current) }
 }
 
 private struct DemandFloatingCanvasKey: EnvironmentKey {
@@ -31,6 +42,7 @@ extension EnvironmentValues {
 }
 
 private struct DemandFloatingCanvas: ViewModifier {
+    @EnvironmentObject private var theme: ThemeManager
     func body(content: Content) -> some View {
         content
             .environment(\.demandFloatingCanvas, true)
@@ -40,13 +52,15 @@ private struct DemandFloatingCanvas: ViewModifier {
             .background { DemandCanvasBackground() }
             .overlay {
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(Color.blue.opacity(0.4), lineWidth: 1)
+                    .strokeBorder(theme.current.accentPrimary.opacity(0.4), lineWidth: 1)
                     .allowsHitTesting(false)
             }
             .overlay(alignment: .top) {
                 DemandWindowDragArea()
                     .frame(height: 18).padding(.horizontal, 24).padding(.top, 3)
             }
+            .dboardFont(size: 13)
+            .dboardThemeAccent()
     }
 }
 

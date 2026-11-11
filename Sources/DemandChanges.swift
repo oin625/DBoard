@@ -135,16 +135,16 @@ struct DemandChangesEditor: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Label("追加变更咒言", systemImage: "wand.and.stars")
-                    .font(.system(size: 15, weight: .semibold))
+                    .dboardFont(size: 15, weight: .semibold)
                 Spacer()
                 Button("关闭", action: requestClose).keyboardShortcut(.cancelAction)
             }
-            Text((latest ?? item).displayTitle).font(.system(size: 13))
+            Text((latest ?? item).displayTitle).dboardFont(size: 13)
             Text("写这次在已有实现上要改什么。代码入口和资料沿用原咒言，有变化直接补充在这里。")
-                .font(.system(size: 12)).foregroundStyle(.secondary)
+                .dboardFont(size: 12).foregroundStyle(.secondary)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("这次要改什么").font(.system(size: 13, weight: .medium))
+                    Text("这次要改什么").dboardFont(size: 13, weight: .medium)
                     DemandSpellField(text: intentBinding, title: "这次要改什么",
                                      placeholder: "例如：接口已经实现，但返回结果还要增加照片字段；未完成的联调和验收继续保留。", autofocus: true, imageStore: imageStore)
                         .id(session.generation)
@@ -156,33 +156,33 @@ struct DemandChangesEditor: View {
                                 }
                             }.padding(.top, 8)
                         }
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                        .dboardFont(size: 12).foregroundStyle(.secondary)
                     }
                 }
             }
             if let error = loadError {
                 HStack {
-                    Text(error).font(.system(size: 12)).foregroundStyle(.red)
+                    Text(error).dboardFont(size: 12).foregroundStyle(.red)
                     Spacer()
                     Button("重试", action: reload)
                 }
             }
             if let error = saveError ?? session.error {
                 Label(error, systemImage: "exclamationmark.circle")
-                    .font(.system(size: 12)).foregroundStyle(.orange)
+                    .dboardFont(size: 12).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Text(session.restored
                  ? "已恢复变更草稿。关闭会保留，点击「添加变更」后生效。"
                  : "草稿自动保存在本机。关闭会保留，点击「添加变更」后生效。")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .dboardFont(size: 11).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
                 if !session.intent.isEmpty {
                     Button("放弃草稿") { confirmingDiscard = true }.foregroundStyle(.secondary)
                 }
                 Text("复制短指令，让 AI 读取现状和本次变更。")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .dboardFont(size: 11).foregroundStyle(.secondary)
                 Spacer()
                 Button("添加变更") { save(copy: false) }
                     .keyboardShortcut("s", modifiers: .command)
@@ -226,12 +226,12 @@ private struct DemandChangeHistoryRow: View {
                 HStack(spacing: 8) {
                     Text(change.id).font(.system(size: 12, weight: .medium, design: .monospaced))
                     Text(change.createdAt, format: .dateTime.month().day().hour().minute())
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .dboardFont(size: 11).foregroundStyle(.secondary)
                     Spacer()
-                    Button("复制这次变更", action: copy).font(.system(size: 11)).demandButtonStyle(.borderless)
+                    Button("复制这次变更", action: copy).dboardFont(size: 11).demandButtonStyle(.borderless)
                 }
                 Text(change.intent.split(separator: "\n").first.map(String.init) ?? "查看变更内容")
-                    .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                    .dboardFont(size: 12).foregroundStyle(.secondary).lineLimit(1)
             }
         }
         .padding(10).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))

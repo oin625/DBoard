@@ -76,7 +76,7 @@ struct DemandReleaseChecklistView: View {
             if expanded {
                 if let error = item.releaseChecklistReadError {
                     Label(error, systemImage: "exclamationmark.circle")
-                        .font(.system(size: 12)).foregroundStyle(.orange).padding(.vertical, 6)
+                        .dboardFont(size: 12).foregroundStyle(.orange).padding(.vertical, 6)
                 } else {
                     if adding && addPlacement == nil { newItemEditor }
                     ForEach(categories) { category in
@@ -86,7 +86,7 @@ struct DemandReleaseChecklistView: View {
                         }
                     }
                     if checklist.items.isEmpty && !adding {
-                        Text("还没有上线事项").font(.system(size: 12)).foregroundStyle(.secondary)
+                        Text("还没有上线事项").dboardFont(size: 12).foregroundStyle(.secondary)
                             .padding(.vertical, 4)
                     }
                 }
@@ -102,17 +102,17 @@ struct DemandReleaseChecklistView: View {
         HStack(spacing: 8) {
             Button { withAnimation(.easeInOut(duration: 0.16)) { expanded.toggle() } } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: "checklist").font(.system(size: 14))
-                    Text("上线前事项").font(.system(size: 13, weight: .semibold))
+                    Image(systemName: "checklist").dboardFont(size: 14)
+                    Text("上线前事项").dboardFont(size: 13, weight: .semibold)
                     if !checklist.items.isEmpty {
                         Text("\(checklist.completedCount)/\(checklist.items.count)")
-                            .font(.system(size: 11, weight: .medium)).monospacedDigit()
+                            .dboardFont(size: 11, weight: .medium).monospacedDigit()
                             .foregroundStyle(checklist.completedCount == checklist.items.count ? Color.green : Color.secondary)
                             .padding(.horizontal, 7).padding(.vertical, 3)
                             .background(.quaternary.opacity(0.5), in: Capsule())
                     }
                     Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+                        .dboardFont(size: 9, weight: .semibold).foregroundStyle(.secondary)
                 }.frame(minHeight: 30).contentShape(Rectangle())
             }.demandButtonStyle(.plain)
                 .accessibilityIdentifier("release-section-" + item.id).demandKeyboardID("release-section-" + item.id)
@@ -139,17 +139,17 @@ struct DemandReleaseChecklistView: View {
                     }
                 } label: {
                     HStack(spacing: 7) {
-                        Image(systemName: category.symbol).font(.system(size: 12)).foregroundStyle(.secondary).frame(width: 16)
-                        Text(category.title).font(.system(size: 12, weight: .semibold))
-                        Text(groupCount(entries)).font(.system(size: 11)).foregroundStyle(.secondary)
+                        Image(systemName: category.symbol).dboardFont(size: 12).foregroundStyle(.secondary).frame(width: 16)
+                        Text(category.title).dboardFont(size: 12, weight: .semibold)
+                        Text(groupCount(entries)).dboardFont(size: 11).foregroundStyle(.secondary)
                         Spacer(minLength: 0)
                         Image(systemName: isOpen ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 9)).foregroundStyle(.secondary)
+                            .dboardFont(size: 9).foregroundStyle(.secondary)
                     }.frame(minHeight: 30).contentShape(Rectangle())
                 }.demandButtonStyle(.plain).accessibilityIdentifier("release-group-" + category.id + "-" + item.id).demandKeyboardID("release-group-" + category.id + "-" + item.id)
                 if !readOnly {
                     Button { startAdding(in: category) } label: {
-                        Image(systemName: "plus").font(.system(size: 12, weight: .medium)).frame(width: 28, height: 28)
+                        Image(systemName: "plus").dboardFont(size: 12, weight: .medium).frame(width: 28, height: 28)
                     }.demandButtonStyle(ReleaseIconButtonStyle())
                         .accessibilityLabel("添加" + category.title + "事项")
                         .accessibilityIdentifier("release-add-" + category.id + "-" + item.id).demandKeyboardID("release-add-" + category.id + "-" + item.id)
@@ -217,13 +217,13 @@ struct DemandReleaseChecklistRow: View {
                     if hasDetails { withAnimation(.easeInOut(duration: 0.16)) { showingDetails.toggle() } }
                 } label: {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(entry.text).font(.system(size: 13)).strikethrough(entry.done)
+                        Text(entry.text).dboardFont(size: 13).strikethrough(entry.done)
                             .foregroundStyle(entry.done ? Color.secondary : Color.primary)
                             .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                         if hasDetails {
                             HStack(spacing: 4) {
-                                Text("明细").font(.system(size: 11))
-                                Image(systemName: showingDetails ? "chevron.up" : "chevron.down").font(.system(size: 8))
+                                Text("明细").dboardFont(size: 11)
+                                Image(systemName: showingDetails ? "chevron.up" : "chevron.down").dboardFont(size: 8)
                             }.foregroundStyle(.secondary)
                         }
                     }
@@ -234,7 +234,7 @@ struct DemandReleaseChecklistRow: View {
                 if !readOnly || !entry.evidence.trimmed.isEmpty {
                     Button { showingEvidence = true } label: {
                         Label("证据", systemImage: entry.evidence.trimmed.isEmpty ? "photo.badge.plus" : "photo.on.rectangle")
-                            .font(.system(size: 11)).frame(minHeight: 28)
+                            .dboardFont(size: 11).frame(minHeight: 28)
                             .foregroundStyle(entry.evidence.trimmed.isEmpty ? Color.secondary : Color.accentColor)
                     }.demandButtonStyle(.plain).disabled(editing)
                         .accessibilityIdentifier("release-evidence-" + itemID + "-" + entry.id).demandKeyboardID("release-evidence-" + itemID + "-" + entry.id)
@@ -245,7 +245,7 @@ struct DemandReleaseChecklistRow: View {
                 }
                 if !readOnly {
                     Button { beginEditing() } label: {
-                        Image(systemName: "pencil").font(.system(size: 12)).frame(width: 28, height: 28)
+                        Image(systemName: "pencil").dboardFont(size: 12).frame(width: 28, height: 28)
                     }.demandButtonStyle(ReleaseIconButtonStyle())
                         .accessibilityLabel("编辑：" + entry.text)
                         .accessibilityIdentifier("release-edit-" + itemID + "-" + entry.id).demandKeyboardID("release-edit-" + itemID + "-" + entry.id)
@@ -260,7 +260,7 @@ struct DemandReleaseChecklistRow: View {
                     remove: { vm.removeReleaseItem(itemID, entry: entry) })
                     .padding(.horizontal, 8).padding(.bottom, 8)
             } else if showingDetails && hasDetails {
-                Text(detailsText).font(.system(size: 12)).foregroundStyle(.secondary)
+                Text(detailsText).dboardFont(size: 12).foregroundStyle(.secondary)
                     .lineSpacing(4).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 12)
                     .overlay(alignment: .leading) {
@@ -277,7 +277,7 @@ struct DemandReleaseChecklistRow: View {
             if !readOnly { vm.writeReleaseChecklist(itemID) { $0.toggle(entry) } }
         } label: {
             Image(systemName: entry.done ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 16)).foregroundStyle(entry.done ? Color.green : Color.secondary)
+                .dboardFont(size: 16).foregroundStyle(entry.done ? Color.green : Color.secondary)
                 .frame(width: 28, height: 28)
         }.demandButtonStyle(.plain).disabled(readOnly || editing)
             .accessibilityLabel((entry.done ? "取消完成：" : "完成：") + entry.text)
@@ -319,19 +319,19 @@ struct ReleaseChecklistEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(title).font(.system(size: 12, weight: .semibold))
+                Text(title).dboardFont(size: 12, weight: .semibold)
                 Spacer()
                 Button(action: cancel) {
-                    Image(systemName: "xmark").font(.system(size: 10, weight: .medium)).frame(width: 24, height: 24)
+                    Image(systemName: "xmark").dboardFont(size: 10, weight: .medium).frame(width: 24, height: 24)
                 }.demandButtonStyle(ReleaseIconButtonStyle())
                     .accessibilityIdentifier("release-cancel-" + draftKey).demandKeyboardID("release-cancel-" + draftKey)
             }
             VStack(alignment: .leading, spacing: 5) {
-                Text("事项").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text("事项").dboardFont(size: 11).foregroundStyle(.secondary)
                 TextField("例如：发布 Ultra 服务", text: Binding(
                     get: { vm.releaseDrafts[draftKey]?.text ?? "" },
                     set: { vm.releaseDrafts[draftKey]?.text = DemandReminder.singleLine($0) }))
-                    .textFieldStyle(.plain).font(.system(size: 13)).focused($focused, equals: .summary)
+                    .textFieldStyle(.plain).dboardFont(size: 13).focused($focused, equals: .summary)
                     .padding(8).background(ReleaseFieldBackground(focused: focused == .summary))
                     .onSubmit { focused = .details }
                     .accessibilityIdentifier("release-summary-" + draftKey).demandKeyboardID("release-summary-" + draftKey)
@@ -348,25 +348,25 @@ struct ReleaseChecklistEditor: View {
             }.accessibilityLabel("常用分类")
             customCategoryControls
             VStack(alignment: .leading, spacing: 5) {
-                Text("明细（可选）").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text("明细（可选）").dboardFont(size: 11).foregroundStyle(.secondary)
                 TextField("分支、文件路径、配置参数或执行顺序", text: Binding(
                     get: { vm.releaseDrafts[draftKey]?.details ?? "" },
                     set: { vm.releaseDrafts[draftKey]?.details = $0 }), axis: .vertical)
-                    .textFieldStyle(.plain).font(.system(size: 12)).lineLimit(2...7)
+                    .textFieldStyle(.plain).dboardFont(size: 12).lineLimit(2...7)
                     .focused($focused, equals: .details)
                     .padding(8).background(ReleaseFieldBackground(focused: focused == .details))
                     .accessibilityIdentifier("release-detail-input-" + draftKey).demandKeyboardID("release-detail-input-" + draftKey)
             }
             if let error {
-                Label(error, systemImage: "exclamationmark.circle").font(.system(size: 11)).foregroundStyle(.orange)
+                Label(error, systemImage: "exclamationmark.circle").dboardFont(size: 11).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 8) {
                 if let remove {
                     Button("删除事项", role: .destructive, action: remove)
-                        .demandButtonStyle(.plain).font(.system(size: 11)).foregroundStyle(.red).frame(minHeight: 26)
+                        .demandButtonStyle(.plain).dboardFont(size: 11).foregroundStyle(.red).frame(minHeight: 26)
                 } else {
-                    Text("⌘↩ 保存").font(.system(size: 11)).foregroundStyle(.tertiary)
+                    Text("⌘↩ 保存").dboardFont(size: 11).foregroundStyle(.tertiary)
                 }
                 Spacer()
                 Button("取消", action: cancel).demandButtonStyle(.bordered).controlSize(.small)
@@ -401,19 +401,19 @@ struct ReleaseChecklistEditor: View {
             if addingCategory {
                 HStack(spacing: 6) {
                     TextField("例如：数据迁移", text: $categoryName).textFieldStyle(.roundedBorder)
-                        .font(.system(size: 12)).focused($focused, equals: .category).onSubmit(useCustomCategory)
-                    Button("取消") { addingCategory = false; categoryError = nil }.demandButtonStyle(.plain).font(.system(size: 11))
+                        .dboardFont(size: 12).focused($focused, equals: .category).onSubmit(useCustomCategory)
+                    Button("取消") { addingCategory = false; categoryError = nil }.demandButtonStyle(.plain).dboardFont(size: 11)
                     Button("使用", action: useCustomCategory).controlSize(.small).disabled(categoryName.trimmed.isEmpty)
                 }.frame(minHeight: 26)
             } else {
                 Button {
                     addingCategory = true; categoryName = ""; focused = .category
                 } label: {
-                    Label("自定义分类", systemImage: "plus").font(.system(size: 11)).frame(minHeight: 24)
+                    Label("自定义分类", systemImage: "plus").dboardFont(size: 11).frame(minHeight: 24)
                 }.demandButtonStyle(.plain).foregroundStyle(.secondary)
                     .accessibilityIdentifier("release-custom-category-" + draftKey).demandKeyboardID("release-custom-category-" + draftKey)
             }
-            if let categoryError { Text(categoryError).font(.system(size: 11)).foregroundStyle(.orange) }
+            if let categoryError { Text(categoryError).dboardFont(size: 11).foregroundStyle(.orange) }
         }
     }
 
@@ -438,7 +438,7 @@ private struct ReleaseCategoryChoice: View {
     let selected: Bool
     private var border: Color { selected ? Color.accentColor.opacity(0.4) : Color(nsColor: .separatorColor).opacity(0.6) }
     var body: some View {
-        Text(category.title).font(.system(size: 12, weight: selected ? .medium : .regular))
+        Text(category.title).dboardFont(size: 12, weight: selected ? .medium : .regular)
             .frame(maxWidth: .infinity, minHeight: 28)
             .foregroundStyle(selected ? Color.accentColor : Color.secondary)
             .background(selected ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5))

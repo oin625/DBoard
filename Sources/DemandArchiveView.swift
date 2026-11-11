@@ -72,17 +72,17 @@ struct DemandArchiveSection: View {
                         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { sectionExpanded.toggle() }
                     } label: {
                         HStack(spacing: 8) {
-                            Label("已完成", systemImage: "checkmark.circle").font(.system(size: 15, weight: .semibold))
-                            Text("\(completedEntries.count)").font(.system(size: 12)).foregroundStyle(.secondary)
+                            Label("已完成", systemImage: "checkmark.circle").dboardFont(size: 15, weight: .semibold)
+                            Text("\(completedEntries.count)").dboardFont(size: 12).foregroundStyle(.secondary)
                             Image(systemName: sectionExpanded ? "chevron.down" : "chevron.right")
-                                .font(.system(size: 10)).foregroundStyle(.secondary)
+                                .dboardFont(size: 10).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity, alignment: .leading).frame(minHeight: 28).contentShape(Rectangle())
                     }.demandButtonStyle(.plain)
                         .accessibilityLabel("\(sectionExpanded ? "收起" : "展开")已完成，\(completedEntries.count)项")
                         .accessibilityIdentifier("completed-section-toggle").demandKeyboardID("completed-section-toggle")
                 } else {
-                    Label("已完成", systemImage: "checkmark.circle").font(.system(size: 15, weight: .semibold))
-                    Text("\(completedEntries.count)").font(.system(size: 12)).foregroundStyle(.secondary)
+                    Label("已完成", systemImage: "checkmark.circle").dboardFont(size: 15, weight: .semibold)
+                    Text("\(completedEntries.count)").dboardFont(size: 12).foregroundStyle(.secondary)
                 }
                 Spacer()
                 if store.loading { ProgressView().controlSize(.small) }
@@ -91,26 +91,26 @@ struct DemandArchiveSection: View {
                 if let node = DItemStore.archiveNodeID {
                     Button("打开已完成文档") {
                         if let url = URL(string: "https://alidocs.dingtalk.com/i/nodes/" + node) { NSWorkspace.shared.open(url) }
-                    }.font(.system(size: 12))
+                    }.dboardFont(size: 12)
                 }
             }
             if !embedded {
                 Text("开启新版本会保留旧版，自动带入背景；需要继续处理时可恢复原编号。")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                    .dboardFont(size: 12).foregroundStyle(.secondary)
                 TextField("搜索已完成需求编号 / 名称 / 项目", text: $query).textFieldStyle(.roundedBorder)
             }
             if let error = store.error {
                 Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.system(size: 12)).foregroundStyle(.orange)
+                    .dboardFont(size: 12).foregroundStyle(.orange)
             }
             if !embedded, let date = store.readAt {
                 Text("历史读取：\(date.formatted(date: .abbreviated, time: .shortened))")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .dboardFont(size: 11).foregroundStyle(.secondary)
             }
             if !collapsible || sectionExpanded {
                 if completedEntries.isEmpty {
                     Text(store.loading ? "正在读取已完成需求…" : (query.isEmpty ? "暂无可读取的已完成需求" : "没有匹配的已完成需求"))
-                        .font(.system(size: 13)).foregroundStyle(.secondary).padding(.vertical, 20)
+                        .dboardFont(size: 13).foregroundStyle(.secondary).padding(.vertical, 20)
                         .frame(maxWidth: .infinity)
                 } else {
                     ForEach(completedEntries) { entry in row(entry).id(entry.selectionID) }
@@ -170,33 +170,33 @@ struct DemandArchiveSection: View {
             } label: {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(item.id).font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
-                    Text(item.displayTitle).font(.system(size: 14, weight: .medium))
+                    Text(item.displayTitle).dboardFont(size: 14, weight: .medium)
                         .frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
-                    Text("已完成").font(.system(size: 11)).foregroundStyle(.green)
+                    Text("已完成").dboardFont(size: 11).foregroundStyle(.green)
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .dboardFont(size: 10).foregroundStyle(.secondary)
                 }.frame(minHeight: 26).contentShape(Rectangle())
             }.demandButtonStyle(.plain)
                 .accessibilityLabel("\(isExpanded ? "收起" : "展开") \(item.id) \(item.displayTitle)")
                 .accessibilityIdentifier("completed-toggle-" + item.id).demandKeyboardID("completed-toggle-" + item.id)
             HStack(spacing: 8) {
-                Text(item.kind.rawValue).font(.system(size: 11))
+                Text(item.kind.rawValue).dboardFont(size: 11)
                     .foregroundStyle(item.isIncident ? Color.orange : .secondary)
                 if !item.project.isEmpty {
                     Text("·").foregroundStyle(.tertiary)
-                    Text(item.project).font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text(item.project).dboardFont(size: 11).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 4)
                 if let day = entry.completionDay {
-                    Text(day).font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+                    Text(day).dboardFont(size: 11).foregroundStyle(.secondary).monospacedDigit()
                 }
             }
             if !item.reminder.isEmpty {
-                Text(item.reminder).font(.system(size: 12)).foregroundStyle(DemandReminder.color)
+                Text(item.reminder).dboardFont(size: 12).foregroundStyle(DemandReminder.color)
                     .lineLimit(1).textSelection(.enabled)
             }
             if item.isIncident, let closure = item.incidentClosure, !isExpanded {
-                Text(closure.summary).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
+                Text(closure.summary).dboardFont(size: 12).foregroundStyle(.secondary).lineLimit(2)
             }
             WorkspaceFlowLayout {
                 completedActions(item: item, record: record, active: active, next: next, cacheURL: cacheURL)
@@ -208,34 +208,34 @@ struct DemandArchiveSection: View {
                         else { reviewExpanded.insert(review.id) }
                     } label: {
                         Label(review.summary, systemImage: reviewExpanded.contains(review.id) ? "chevron.down" : "checkmark.bubble")
-                            .font(.system(size: 12)).multilineTextAlignment(.leading)
+                            .dboardFont(size: 12).multilineTextAlignment(.leading)
                     }.demandButtonStyle(.plain).foregroundStyle(.secondary)
                     if reviewExpanded.contains(review.id) {
-                        Text(review.details).font(.system(size: 12)).textSelection(.enabled)
+                        Text(review.details).dboardFont(size: 12).textSelection(.enabled)
                     }
                 }
             }
             if isExpanded {
                 if record == nil { DemandContextView(item: item) }
                 if let error = item.changeReadError ?? item.versionReadError ?? item.chatReadError {
-                    Text(error).font(.system(size: 12)).foregroundStyle(.orange)
+                    Text(error).dboardFont(size: 12).foregroundStyle(.orange)
                 }
                 IncidentResultView(item: item)
                 if !item.title.isEmpty && item.title != "（待补充）" && item.title != item.displayTitle {
                     if item.isIncident { DemandSpellContentView(text: item.title) }
-                    else { Text(item.title).font(.system(size: 13)).textSelection(.enabled) }
+                    else { Text(item.title).dboardFont(size: 13).textSelection(.enabled) }
                 }
                 if let branch = item.branch, !branch.isEmpty {
-                    Text("完成时分支：" + branch).font(.system(size: 12)).foregroundStyle(.secondary).textSelection(.enabled)
+                    Text("完成时分支：" + branch).dboardFont(size: 12).foregroundStyle(.secondary).textSelection(.enabled)
                 }
                 if let record {
                     ForEach(Array(DemandVersion.archiveNotes(record.block).enumerated()), id: \.offset) { _, note in
-                        Text(note).font(.system(size: 12)).foregroundStyle(.secondary).textSelection(.enabled)
+                        Text(note).dboardFont(size: 12).foregroundStyle(.secondary).textSelection(.enabled)
                     }
                 }
                 if let chats = item.chatLinks {
                     Label(chats.summary, systemImage: "bubble.left.and.bubble.right")
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                        .dboardFont(size: 12).foregroundStyle(.secondary)
                 }
                 let spell = DemandPromptSections(stored: item.prompt).assembled
                 if !spell.isEmpty {
@@ -256,7 +256,7 @@ struct DemandArchiveSection: View {
                     DemandHandoffView(item: item)
                     if !item.isIncident || item.execution != nil { DemandDebuggingView(item: item) }
                 } else if let page = item.execution?.debugPage {
-                    Text("调试页：audi · " + page).font(.system(size: 12)).foregroundStyle(.secondary).textSelection(.enabled)
+                    Text("调试页：audi · " + page).dboardFont(size: 12).foregroundStyle(.secondary).textSelection(.enabled)
                 }
                 if !item.releaseChecklist.items.isEmpty || item.releaseChecklistReadError != nil {
                     DemandReleaseChecklistView(item: item, readOnly: true)
@@ -276,31 +276,31 @@ struct DemandArchiveSection: View {
     private func completedActions(item: DItem, record: ArchivedDemand?, active: DItem?,
                                   next: DItem?, cacheURL: URL?) -> some View {
         Button("复制现状", systemImage: "doc.on.doc") { vm.copyCurrentState(item.id, at: cacheURL) }
-            .font(.system(size: 12)).accessibilityIdentifier("completed-copy-" + item.id)
+            .dboardFont(size: 12).accessibilityIdentifier("completed-copy-" + item.id)
         Button("代码审查", systemImage: "checkmark.bubble") { vm.copyReviewTask(item.id, at: cacheURL) }
-            .font(.system(size: 12))
+            .dboardFont(size: 12)
             .accessibilityIdentifier("archive-review-copy-" + item.id).demandKeyboardID("archive-review-copy-" + item.id)
         if record == nil, let active {
             if active.isIncident {
-                Button("恢复排查") { vm.reopenIncident(active) }.font(.system(size: 12))
+                Button("恢复排查") { vm.reopenIncident(active) }.dboardFont(size: 12)
                     .accessibilityIdentifier("completed-reopen-" + item.id).demandKeyboardID("completed-reopen-" + item.id)
             } else {
                 Button("恢复继续处理") { vm.cycleToStatus(active.id, target: .inProgress) }
-                    .font(.system(size: 12)).accessibilityIdentifier("completed-reopen-" + item.id)
+                    .dboardFont(size: 12).accessibilityIdentifier("completed-reopen-" + item.id)
             }
             Button(item.isIncident ? "编辑排查" : "编辑需求") { vm.openDemandEditor(.details, item: active) }
-                .font(.system(size: 12))
+                .dboardFont(size: 12)
         } else if let active {
             Button((active.status == .completed ? "已完成 · 打开 " : "正在处理 · 打开 ") + active.id) { vm.focusItem(active.id) }
-                .font(.system(size: 12))
+                .dboardFont(size: 12)
         } else if let record {
             if let next {
-                Button("已开启 " + next.id) { openSuccessor(next) }.font(.system(size: 12))
+                Button("已开启 " + next.id) { openSuccessor(next) }.dboardFont(size: 12)
             } else {
                 Button("开启 " + String((item.version?.number ?? 1) + 1) + ".0") { begin(record) }
-                    .font(.system(size: 12)).disabled(item.changeReadError != nil || item.versionReadError != nil)
+                    .dboardFont(size: 12).disabled(item.changeReadError != nil || item.versionReadError != nil)
             }
-            Button("恢复继续处理") { restoring = record }.font(.system(size: 12))
+            Button("恢复继续处理") { restoring = record }.dboardFont(size: 12)
                 .disabled(item.changeReadError != nil || item.versionReadError != nil)
                 .accessibilityIdentifier("completed-reopen-" + item.id).demandKeyboardID("completed-reopen-" + item.id)
         }
@@ -319,12 +319,12 @@ struct NewDemandVersionForm: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Label("开启 " + (draft.version?.label ?? "新版本"), systemImage: "arrow.triangle.branch")
-                .font(.system(size: 16, weight: .semibold))
+                .dboardFont(size: 16, weight: .semibold)
             Text("基于 " + record.item.id + "「" + record.item.displayTitle + "」，使用新编号 " + draft.id)
-                .font(.system(size: 12)).foregroundStyle(.secondary)
+                .dboardFont(size: 12).foregroundStyle(.secondary)
             TextField("新版本名称", text: $draft.name).textFieldStyle(.roundedBorder)
             Text("上一版咒言、仓库、分支和进度已作为背景保存。只写本次改动；代码入口和资料可直接修改。")
-                .font(.system(size: 12)).foregroundStyle(.secondary)
+                .dboardFont(size: 12).foregroundStyle(.secondary)
             ScrollView { DemandPromptFields(sections: $draft.promptSections) }
             HStack {
                 Spacer()

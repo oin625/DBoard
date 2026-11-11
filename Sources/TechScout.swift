@@ -218,7 +218,7 @@ final class TechScoutWindowController {
         let contentView = TechScoutView()
             .environmentObject(viewModel)
             .environmentObject(ThemeManager.shared)
-            .environmentObject(FontManager.shared)
+            .dboardFont(size: 13).environmentObject(FontManager.shared)
         let hostingController = NSHostingController(rootView: contentView)
 
         let win = NSWindow(contentViewController: hostingController)
@@ -264,7 +264,7 @@ struct TechScoutView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("前线科技资讯")
-                        .font(.system(size: 15, weight: .semibold))
+                        .dboardFont(size: 15, weight: .semibold)
                         .foregroundStyle(.primary)
                     HStack(spacing: 6) {
                         Text("自动聚合全网科技热点")
@@ -285,7 +285,7 @@ struct TechScoutView: View {
                 }) {
                     HStack(spacing: 3) {
                         Image(systemName: showHistory ? "antenna.radiowaves.left.and.right" : "clock.arrow.circlepath")
-                            .font(.system(size: 10, weight: .bold))
+                            .dboardFont(size: 10, weight: .bold)
                         Text(showHistory ? "回到最新" : "历史")
                     }
                     .font(fm.font(12))
@@ -300,7 +300,7 @@ struct TechScoutView: View {
                         Image(systemName: "clock")
                         Text(date, style: .time)
                     }
-                    .font(.system(size: 11))
+                    .dboardFont(size: 11)
                     .foregroundStyle(theme.current.textTertiary)
                     .padding(.top, 8)
                 }
@@ -317,7 +317,7 @@ struct TechScoutView: View {
                     } else if vm.items.isEmpty {
                         VStack(spacing: 12) {
                             Image(systemName: "antenna.radiowaves.left.and.right")
-                                .font(.system(size: 36))
+                                .dboardFont(size: 36)
                                 .foregroundStyle(.tertiary)
                             Text("暂无新闻，等一下再来 ☕")
                                 .font(fm.font(14))
@@ -350,7 +350,7 @@ struct TechScoutView: View {
         if vm.historyDays.isEmpty {
             VStack(spacing: 10) {
                 Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 32))
+                    .dboardFont(size: 32)
                     .foregroundStyle(.tertiary)
                 Text("暂无历史留存")
                     .font(fm.font(13))
@@ -681,16 +681,16 @@ struct TechScoutCard: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
                 Text("@\(c.author)")
-                    .font(.system(size: 10, weight: .semibold))
+                    .dboardFont(size: 10, weight: .semibold)
                     .foregroundStyle(theme.current.textSecondary)
                 if !c.time.isEmpty {
                     Text(c.time)
-                        .font(.system(size: 9))
+                        .dboardFont(size: 9)
                         .foregroundStyle(theme.current.textMuted)
                 }
             }
             Text(c.text)
-                .font(.system(size: 11.5))
+                .dboardFont(size: 11.5)
                 .foregroundStyle(theme.current.textPrimary.opacity(0.78))
                 .lineSpacing(2)
                 .lineLimit(8)
@@ -706,7 +706,7 @@ struct TechScoutCard: View {
             // 排名徽章 + 来源 + 热度
             HStack(spacing: 8) {
                 Text("\(rank)")
-                    .font(.system(size: 11, weight: .heavy, design: .rounded))
+                    .dboardFont(size: 11, weight: .heavy, design: .rounded)
                     .foregroundStyle(rank <= 3 ? Color.white : theme.current.textTertiary)
                     .frame(width: 20, height: 20)
                     .background(Circle().fill(rank <= 3
@@ -714,7 +714,7 @@ struct TechScoutCard: View {
                         : AnyShapeStyle(theme.current.textTertiary.opacity(0.12))))
 
                 Text(item.source)
-                    .font(.system(size: 9, weight: .heavy))
+                    .dboardFont(size: 9, weight: .heavy)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2)
@@ -724,11 +724,11 @@ struct TechScoutCard: View {
 
                 HStack(spacing: 10) {
                     Label("\(item.score)", systemImage: "flame.fill")
-                        .font(.system(size: 10, weight: .medium))
+                        .dboardFont(size: 10, weight: .medium)
                         .foregroundStyle(Color(hex: "#e8927c"))
                     if let c = item.comments, c > 0 {
                         Label("\(c)", systemImage: "bubble.right")
-                            .font(.system(size: 10))
+                            .dboardFont(size: 10)
                             .foregroundStyle(theme.current.textTertiary)
                     }
                 }
@@ -784,7 +784,7 @@ struct TechScoutCard: View {
                 .foregroundStyle(theme.current.textTertiary)
                 ScrollView {
                     Text(full)
-                        .font(.system(size: 12))
+                        .dboardFont(size: 12)
                         .foregroundStyle(theme.current.textPrimary.opacity(0.8))
                         .lineSpacing(3)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -835,7 +835,7 @@ struct TechScoutCard: View {
             // 英文原标题(弱化为脚注)
             if let cn = item.titleCn, !cn.isEmpty, cn != item.title {
                 Text(item.title)
-                    .font(.system(size: 10))
+                    .dboardFont(size: 10)
                     .foregroundStyle(theme.current.textMuted)
                     .lineLimit(1)
             }
@@ -849,7 +849,7 @@ struct TechScoutCard: View {
                 }
                 if let sub = item.subreddit, !sub.isEmpty {
                     Text("r/\(sub)")
-                        .font(.system(size: 10))
+                        .dboardFont(size: 10)
                         .foregroundStyle(theme.current.textMuted)
                 }
                 Spacer()

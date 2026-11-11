@@ -61,10 +61,10 @@ struct DemandListView: View {
         }.padding(.horizontal, 20).padding(.bottom, 10)
         HStack {
             Text("\(vm.demandFilter.rawValue) · \(vm.filteredDemandCount) 项")
-                .font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+                .dboardFont(size: 11).foregroundStyle(.secondary).monospacedDigit()
             Spacer()
             Button("排查经验", systemImage: "books.vertical") { vm.showingKnowledge = true }
-                .font(.system(size: 11)).buttonStyle(.plain).foregroundStyle(.secondary)
+                .dboardFont(size: 11).buttonStyle(.plain).foregroundStyle(.secondary)
         }.padding(.horizontal, 20).padding(.bottom, 8)
         if vm.filteredDemandCount == 0 {
             EmptyWorkspaceState(icon: "magnifyingglass",
@@ -85,7 +85,7 @@ struct DemandListView: View {
         }
         if vm.filteredArchiveRecords.isEmpty, let error = store.error, [.all, .completed].contains(vm.demandFilter) {
             Label(error, systemImage: "exclamationmark.triangle")
-                .font(.system(size: 11)).foregroundStyle(.orange).padding(.horizontal, 20)
+                .dboardFont(size: 11).foregroundStyle(.orange).padding(.horizontal, 20)
         }
     }
 }

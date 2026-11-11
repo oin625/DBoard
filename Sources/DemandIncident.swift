@@ -58,7 +58,7 @@ struct DemandKindBadge: View {
     var body: some View {
         if item.isIncident {
             Label("线上排查", systemImage: "magnifyingglass")
-                .font(.system(size: 10, weight: .medium)).foregroundStyle(.orange)
+                .dboardFont(size: 10, weight: .medium).foregroundStyle(.orange)
                 .padding(.horizontal, 5).padding(.vertical, 2)
                 .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
         }
@@ -161,11 +161,11 @@ struct IncidentResultView: View {
         if let closure = item.incidentClosure, item.status == .completed {
             VStack(alignment: .leading, spacing: 5) {
                 Label(closure.outcome.rawValue, systemImage: "checkmark.circle")
-                    .font(.system(size: 12, weight: .medium)).foregroundStyle(.green)
-                Text(closure.summary).font(.system(size: 12)).textSelection(.enabled)
+                    .dboardFont(size: 12, weight: .medium).foregroundStyle(.green)
+                Text(closure.summary).dboardFont(size: 12).textSelection(.enabled)
             }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
                 .background(.green.opacity(0.05), in: RoundedRectangle(cornerRadius: 7))
         }
-        if let error = item.incidentReadError { Text(error).font(.system(size: 12)).foregroundStyle(.orange) }
+        if let error = item.incidentReadError { Text(error).dboardFont(size: 12).foregroundStyle(.orange) }
     }
 }

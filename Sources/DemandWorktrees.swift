@@ -70,8 +70,8 @@ struct DemandWorktreesSection: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Label("工作树", systemImage: "arrow.triangle.branch").font(.system(size: 12, weight: .medium))
-            Text(summaryText).font(.system(size: 11)).foregroundStyle(summary?.error == nil ? Color.secondary : .orange)
+            Label("工作树", systemImage: "arrow.triangle.branch").dboardFont(size: 12, weight: .medium)
+            Text(summaryText).dboardFont(size: 11).foregroundStyle(summary?.error == nil ? Color.secondary : .orange)
             Spacer()
             Button(item.status == .completed ? "清理工作树" : "查看／登记") { showing = true }
                 .controlSize(.small).accessibilityIdentifier("worktrees-open-" + item.id)
@@ -116,7 +116,7 @@ struct DemandWorktreesManager: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Label("工作树 · " + item.id + " " + item.displayTitle, systemImage: "arrow.triangle.branch")
-                    .font(.system(size: 16, weight: .semibold)).lineLimit(2)
+                    .dboardFont(size: 16, weight: .semibold).lineLimit(2)
                 Spacer()
                 if busy { ProgressView().controlSize(.small) }
                 Button("刷新") { perform("preview") }.disabled(busy)
@@ -124,37 +124,37 @@ struct DemandWorktreesManager: View {
             Text(item.status == .completed
                  ? "只清理本需求创建且代码已保存、已推送的工作树。分支和提交保留，后续仍可恢复或审查。"
                  : "记录本需求使用的所有工作树，完结后可集中清理。复用其他需求的目录，只登记使用。")
-                .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .dboardFont(size: 12).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     if rows.isEmpty && !busy {
                         Text("尚无工作树记录。新建工作树的 AI 会按接手规则登记，已有目录可以在下方补登记。")
-                            .font(.system(size: 12)).foregroundStyle(.secondary).padding(.vertical, 20)
+                            .dboardFont(size: 12).foregroundStyle(.secondary).padding(.vertical, 20)
                     }
                     ForEach(rows) { row in
                         VStack(alignment: .leading, spacing: 7) {
                             HStack {
                                 Image(systemName: row.state == "removed" ? "checkmark.circle" : (row.eligible ? "checkmark.circle.fill" : "pause.circle"))
                                     .foregroundStyle(row.eligible ? Color.green : .secondary)
-                                Text(row.name).font(.system(size: 13, weight: .semibold))
-                                Text(row.branch).font(.system(size: 12)).lineLimit(1)
+                                Text(row.name).dboardFont(size: 13, weight: .semibold)
+                                Text(row.branch).dboardFont(size: 12).lineLimit(1)
                                 Spacer()
                                 Button(details.contains(row.id) ? "收起" : "详情") {
                                     if details.contains(row.id) { details.remove(row.id) } else { details.insert(row.id) }
                                 }.controlSize(.small)
                             }
-                            Text(row.reason).font(.system(size: 12)).foregroundStyle(row.eligible ? Color.green : .secondary)
+                            Text(row.reason).dboardFont(size: 12).foregroundStyle(row.eligible ? Color.green : .secondary)
                             if row.eligible, let failure = failures[row.id] {
-                                Text("本次未清理：" + failure).font(.system(size: 12)).foregroundStyle(.orange)
+                                Text("本次未清理：" + failure).dboardFont(size: 12).foregroundStyle(.orange)
                             }
                             if details.contains(row.id) {
-                                Text(row.path).font(.system(size: 11)).textSelection(.enabled)
+                                Text(row.path).dboardFont(size: 11).textSelection(.enabled)
                                     .fixedSize(horizontal: false, vertical: true)
                                 Text(row.created_by_task ? "归属：本需求创建" : "归属：仅使用，不能清理")
-                                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                                    .dboardFont(size: 11).foregroundStyle(.secondary)
                                 if row.ignored_files && row.eligible {
                                     Text("目录内的忽略文件（如编译产物、依赖和本地配置）也会随目录移除。")
-                                        .font(.system(size: 11)).foregroundStyle(.orange)
+                                        .dboardFont(size: 11).foregroundStyle(.orange)
                                 }
                             }
                         }.padding(12).background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
@@ -163,25 +163,25 @@ struct DemandWorktreesManager: View {
             }
             Divider()
             HStack(spacing: 10) {
-                Text("补登记").font(.system(size: 12, weight: .medium))
+                Text("补登记").dboardFont(size: 12, weight: .medium)
                 Text(directory.isEmpty ? "选择工作树根目录" : directory)
-                    .font(.system(size: 11)).lineLimit(1).truncationMode(.middle)
+                    .dboardFont(size: 11).lineLimit(1).truncationMode(.middle)
                 Spacer()
                 Button("选择目录") { chooseDirectory() }.disabled(busy)
             }
             HStack {
-                Toggle("确认此工作树由本需求创建", isOn: $created).font(.system(size: 12))
+                Toggle("确认此工作树由本需求创建", isOn: $created).dboardFont(size: 12)
                 Spacer()
                 Button("登记") { perform("register", extra: ["--path", directory, "--expect-title", item.displayTitle] + (created ? ["--created"] : [])) }
                     .disabled(directory.isEmpty || busy)
             }
             if let message {
-                Text(message).font(.system(size: 12)).foregroundStyle(failed ? Color.orange : .secondary)
+                Text(message).dboardFont(size: 12).foregroundStyle(failed ? Color.orange : .secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack {
                 Text(item.status == .completed ? "可清理 \(eligibleCount) 个，其余保留并说明原因" : "需求完结后开放清理")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .dboardFont(size: 11).foregroundStyle(.secondary)
                 Spacer()
                 Button("关闭") { dismiss() }.keyboardShortcut(.cancelAction).disabled(busy)
                 if item.status == .completed {

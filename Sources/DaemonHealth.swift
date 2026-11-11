@@ -224,7 +224,7 @@ struct EngineStrip: View {
                         .fill(e.id == "sync" ? (syncActionColor ?? stateColor(e.state)) : stateColor(e.state))
                         .frame(width: 5, height: 5)
                 }
-                Text(summaryText).font(.system(size: 11)).foregroundStyle(summaryColor).lineLimit(1)
+                Text(summaryText).dboardFont(size: 11).foregroundStyle(summaryColor).lineLimit(1)
             }
             .contentShape(Rectangle())
         }
@@ -243,13 +243,13 @@ struct EngineDetailPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("引擎心跳").font(.system(size: 11, weight: .bold))
+                Text("引擎心跳").dboardFont(size: 11, weight: .bold)
                 Spacer()
                 if let t = health.lastCheck {
-                    Text("巡检于 " + EngineHealthModel.rel(t)).font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("巡检于 " + EngineHealthModel.rel(t)).dboardFont(size: 11).foregroundStyle(.secondary)
                 }
                 Button { health.refresh() } label: {
-                    Image(systemName: "arrow.clockwise").font(.system(size: 10))
+                    Image(systemName: "arrow.clockwise").dboardFont(size: 10)
                 }
                 .buttonStyle(.plain)
             }
@@ -258,13 +258,13 @@ struct EngineDetailPanel: View {
             ForEach(health.engines) { e in
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
-                        Image(systemName: e.icon).font(.system(size: 10)).frame(width: 13)
+                        Image(systemName: e.icon).dboardFont(size: 10).frame(width: 13)
                             .foregroundStyle(.secondary)
-                        Text(e.name).font(.system(size: 11, weight: .semibold))
+                        Text(e.name).dboardFont(size: 11, weight: .semibold)
                         Spacer()
                         Circle().fill(stateColor(e.state)).frame(width: 6, height: 6)
                     }
-                    Text(e.detail).font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text(e.detail).dboardFont(size: 10).foregroundStyle(.secondary)
                         .padding(.leading, 19)
                     if let hint = e.hint {
                         Text(hint)
@@ -279,7 +279,7 @@ struct EngineDetailPanel: View {
             }
             Divider()
             Text("每 60 秒自动巡检 · 点状态点可随时重测")
-                .font(.system(size: 8.5)).foregroundStyle(.tertiary)
+                .dboardFont(size: 8.5).foregroundStyle(.tertiary)
                 .padding(.horizontal, 12).padding(.vertical, 7)
         }
         .frame(width: 260)

@@ -57,12 +57,12 @@ struct DemandHandoffView: View {
                 Button { expanded.toggle() } label: {
                     HStack(spacing: 7) {
                         Image(systemName: "text.alignleft")
-                        Text("交接摘要").font(.system(size: 13, weight: .semibold))
+                        Text("交接摘要").dboardFont(size: 13, weight: .semibold)
                         if let summary = item.handoff {
-                            Text("覆盖\(summary.covered_count)条").font(.system(size: 11)).foregroundStyle(.secondary)
+                            Text("覆盖\(summary.covered_count)条").dboardFont(size: 11).foregroundStyle(.secondary)
                         }
                         Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 9)).foregroundStyle(.secondary)
+                            .dboardFont(size: 9).foregroundStyle(.secondary)
                     }.frame(minHeight: 28).contentShape(Rectangle())
                 }.demandButtonStyle(.plain).accessibilityIdentifier("handoff-section-" + item.id).demandKeyboardID("handoff-section-" + item.id)
                 Spacer()
@@ -75,7 +75,7 @@ struct DemandHandoffView: View {
             }
             if expanded {
                 if let error = item.handoffReadError {
-                    Text(error).font(.system(size: 12)).foregroundStyle(.orange)
+                    Text(error).dboardFont(size: 12).foregroundStyle(.orange)
                 } else if let summary = item.handoff {
                     section("已完成", summary.sections.completed)
                     section("待做与阻塞", summary.sections.pending)
@@ -88,18 +88,18 @@ struct DemandHandoffView: View {
                     }
                     if !summary.references.isEmpty { section("其他资料入口", summary.references.joined(separator: "\n")) }
                     Text("最近判断：\(summary.last_decision.decision == "compact" ? "已整体整理" : "暂不整体整理") · \(summary.last_decision.reason)")
-                        .font(.system(size: 11)).foregroundStyle(.secondary).textSelection(.enabled)
+                        .dboardFont(size: 11).foregroundStyle(.secondary).textSelection(.enabled)
                     Text("更新：\(summary.updated_at) · 最新变更和代码核验优先")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .dboardFont(size: 10).foregroundStyle(.secondary)
                 } else {
                     Text("尚无摘要，AI 接手读取历史后会整理；完整记录仍保留。")
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                        .dboardFont(size: 12).foregroundStyle(.secondary)
                 }
                 if editing {
                     Text("仅补充或纠正交接事实；新增业务要求请使用追加变更。自动保存。")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .dboardFont(size: 11).foregroundStyle(.secondary)
                     TextEditor(text: Binding(get: { notes }, set: { vm.editHandoffNotes(item, text: $0) }))
-                        .font(.system(size: 12)).scrollContentBackground(.hidden)
+                        .dboardFont(size: 12).scrollContentBackground(.hidden)
                         .frame(minHeight: 70, maxHeight: 140).padding(6)
                         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
                         .accessibilityLabel(item.id + " 交接补充")
@@ -112,8 +112,8 @@ struct DemandHandoffView: View {
 
     private func section(_ title: String, _ text: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
-            Text(text.isEmpty ? "未记录" : text).font(.system(size: 12))
+            Text(title).dboardFont(size: 11, weight: .medium).foregroundStyle(.secondary)
+            Text(text.isEmpty ? "未记录" : text).dboardFont(size: 12)
                 .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
         }
     }

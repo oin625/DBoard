@@ -165,11 +165,11 @@ struct DemandPromptFields: View {
                                  placeholder: "资料名称、链接或路径（可选）")
                 }
             }
-            .font(.system(size: 13)).textFieldStyle(.roundedBorder)
+            .dboardFont(size: 13).textFieldStyle(.roundedBorder)
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 4) {
-                    Text("要做什么").font(.system(size: 13, weight: .semibold))
-                    Text("必填").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("要做什么").dboardFont(size: 13, weight: .semibold)
+                    Text("必填").dboardFont(size: 11).foregroundStyle(.secondary)
                 }
                 DemandSpellField(text: $sections.intent, title: "要做什么",
                                  placeholder: "把什么改成什么？改完后怎么用？", autofocus: !compact, imageStore: imageStore)
@@ -189,7 +189,7 @@ struct DemandPromptFields: View {
         PromptContextInput(text: text, title: title)
             .overlay(alignment: .topLeading) {
                 if text.wrappedValue.isEmpty {
-                    Text(placeholder).font(.system(size: 13)).foregroundStyle(.tertiary)
+                    Text(placeholder).dboardFont(size: 13).foregroundStyle(.tertiary)
                         .padding(.horizontal, 8).padding(.vertical, 4).allowsHitTesting(false)
                 }
             }
@@ -199,15 +199,15 @@ struct DemandPromptFields: View {
 
     private func optionalLabel(_ title: String) -> some View {
         HStack(spacing: 4) {
-            Text(title).font(.system(size: 12))
-            Text("选填").font(.system(size: 10))
+            Text(title).dboardFont(size: 12)
+            Text("选填").dboardFont(size: 10)
         }
         .foregroundStyle(.secondary)
         .frame(width: 80, alignment: .leading).padding(.top, 5)
     }
 
     private func label(_ title: String) -> some View {
-        Text(title).font(.system(size: 12)).foregroundStyle(.secondary)
+        Text(title).dboardFont(size: 12).foregroundStyle(.secondary)
             .frame(width: 88, alignment: .leading).padding(.top, 5)
     }
 }
@@ -235,9 +235,9 @@ struct DemandPromptEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Label("咒言", systemImage: "wand.and.stars").font(.system(size: 15, weight: .semibold))
+            Label("咒言", systemImage: "wand.and.stars").dboardFont(size: 15, weight: .semibold)
             Text("\(item.id) · \(item.displayTitle)")
-                .font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(2)
+                .dboardFont(size: 13).foregroundStyle(.secondary).lineLimit(2)
             ScrollView {
                 DemandPromptFields(sections: $session.sections, imageStore: imageStore)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -245,18 +245,18 @@ struct DemandPromptEditor: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             if let message = error ?? session.error {
                 Label(message, systemImage: "exclamationmark.circle")
-                    .font(.system(size: 12)).foregroundStyle(.orange)
+                    .dboardFont(size: 12).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             } else if externalChange {
                 Label("已保存的咒言在编辑期间发生变化；草稿已保留，请先核对，避免覆盖新内容。",
                       systemImage: "exclamationmark.circle")
-                    .font(.system(size: 12)).foregroundStyle(.orange)
+                    .dboardFont(size: 12).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Text(session.restored
                  ? "已恢复咒言草稿。关闭会保留草稿，点击「保存」后生效。"
                  : "草稿自动保存在本机。关闭会保留草稿，点击「保存」后生效。")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .dboardFont(size: 11).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
                 if session.changed {

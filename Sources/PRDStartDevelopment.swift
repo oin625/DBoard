@@ -111,17 +111,17 @@ struct PRDStartDevelopmentSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("开始开发").font(.system(size: 15, weight: .semibold))
-            Text(item.name).font(.system(size: 13)).fixedSize(horizontal: false, vertical: true)
+            Text("开始开发").dboardFont(size: 15, weight: .semibold)
+            Text(item.name).dboardFont(size: 13).fixedSize(horizontal: false, vertical: true)
             if vm.startDevelopmentLoading {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("读取需求信息…").font(.system(size: 12)).foregroundStyle(.secondary)
+                    Text("读取需求信息…").dboardFont(size: 12).foregroundStyle(.secondary)
                 }
             } else if let draft = vm.startDevelopmentDraft {
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
                     GridRow {
-                        Text("计划上线日期").font(.system(size: 13))
+                        Text("计划上线日期").dboardFont(size: 13)
                         HStack(spacing: 8) {
                             TextField("yyyy-MM-dd", text: launchBinding)
                                 .textFieldStyle(.roundedBorder)
@@ -142,19 +142,19 @@ struct PRDStartDevelopmentSheet: View {
                         }
                     }
                     GridRow {
-                        Text("业务验收人").font(.system(size: 13))
+                        Text("业务验收人").dboardFont(size: 13)
                         Text(draft.acceptorName.isEmpty ? "尚未设置" :
                             (draft.acceptorName.components(separatedBy: " - ").last ?? draft.acceptorName))
-                            .font(.system(size: 13)).foregroundStyle(.secondary)
+                            .dboardFont(size: 13).foregroundStyle(.secondary)
                     }
                 }.disabled(submitting)
                 Text(draft.requiresLaunchTime ? "请选择计划上线日期，需求系统会发起确认。" : "计划上线日期可选。")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                    .dboardFont(size: 12).foregroundStyle(.secondary)
             }
             if let error = vm.startDevelopmentError ??
                 (vm.startDevelopmentDraft?.launchTime.isEmpty == false ||
                  vm.startDevelopmentDraft?.acceptorID.isEmpty == true ? vm.startDevelopmentDraft?.validationError : nil) {
-                Text(error).font(.system(size: 12)).foregroundStyle(.red)
+                Text(error).dboardFont(size: 12).foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 8) {

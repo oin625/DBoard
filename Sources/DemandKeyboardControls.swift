@@ -34,10 +34,14 @@ struct DemandKeyboardButtonStyle<Base: ButtonStyle>: PrimitiveButtonStyle {
 
 struct DemandKeyboardPrimitiveButtonStyle<Base: PrimitiveButtonStyle>: PrimitiveButtonStyle {
     let base: Base
+    @EnvironmentObject private var theme: ThemeManager
     @Environment(\.demandFloatingCanvas) private var enabled
 
     func makeBody(configuration: Configuration) -> some View {
         Button(configuration).buttonStyle(base)
+            // Filled native buttons need a deeper tone for their white labels.
+            .tint(Base.self == BorderedProminentButtonStyle.self
+                  ? theme.current.controlAccent : theme.current.accentPrimary)
             .overlay {
                 if enabled {
                     DemandKeyboardActionTarget(action: configuration.trigger)
@@ -53,7 +57,7 @@ struct DemandKeyboardDisclosureStyle: DisclosureGroupStyle {
             Button { configuration.isExpanded.toggle() } label: {
                 HStack(spacing: 8) {
                     Image(systemName: configuration.isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary).frame(width: 10)
+                        .dboardFont(size: 9, weight: .semibold).foregroundStyle(.secondary).frame(width: 10)
                     configuration.label
                 }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }.demandButtonStyle(.plain)
@@ -110,6 +114,7 @@ private struct DemandKeyboardActionTarget: NSViewRepresentable {
     @Environment(\.isEnabled) private var enabled
     @Environment(\.demandKeyboardIdentifier) private var identifier
     @Environment(\.demandKeyboardSelected) private var selected
+    @Environment(\.dboardFocusColor) private var focusColor
 
     func makeNSView(context: Context) -> DemandKeyboardActionView { DemandKeyboardActionView() }
     func updateNSView(_ view: DemandKeyboardActionView, context: Context) {
@@ -117,6 +122,7 @@ private struct DemandKeyboardActionTarget: NSViewRepresentable {
         view.enabled = enabled
         view.keyboardIdentifier = identifier
         view.selected = selected
+        view.focusColor = focusColor
     }
 }
 
@@ -124,10 +130,12 @@ private struct DemandKeyboardMenuTarget: NSViewRepresentable {
     @Environment(\.demandFloatingCanvas) private var active
     @Environment(\.isEnabled) private var enabled
     @Environment(\.demandKeyboardIdentifier) private var identifier
+    @Environment(\.dboardFocusColor) private var focusColor
 
     func makeNSView(context: Context) -> DemandKeyboardActionView { DemandKeyboardActionView() }
     func updateNSView(_ view: DemandKeyboardActionView, context: Context) {
         view.enabled = active && enabled
+        view.focusColor = focusColor
         view.keyboardIdentifier = identifier
         view.action = { [weak view] in
             guard let view, let window = view.window else { return }
@@ -150,6 +158,9 @@ final class DemandKeyboardActionView: NSView {
     var enabled = true
     var keyboardIdentifier = ""
     var selected = false
+    var focusColor = NSColor.systemBlue {
+        didSet { updateRing() }
+    }
     private var hasFocus = false
     private var ringVisible = false
     private var ringHide: DispatchWorkItem?
@@ -229,7 +240,7 @@ final class DemandKeyboardActionView: NSView {
         layer.borderWidth = hasFocus ? 2 : 0
         layer.opacity = hasFocus && ringVisible ? 1 : 0
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer.borderColor = NSColor.systemBlue.withAlphaComponent(0.8).cgColor
+            layer.borderColor = focusColor.withAlphaComponent(0.8).cgColor
         }
         CATransaction.commit()
         if animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {

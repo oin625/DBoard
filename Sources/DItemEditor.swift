@@ -846,9 +846,9 @@ struct DItemEditForm: View {
         VStack(alignment: .leading, spacing: 14) {
             if isNew && showsActions {
                 HStack {
-                    Text("新建 \(draft.id)").font(.system(size: 17, weight: .semibold))
+                    Text("新建 \(draft.id)").dboardFont(size: 17, weight: .semibold)
                     Spacer()
-                    Text("自动保存草稿").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text("自动保存草稿").dboardFont(size: 11).foregroundStyle(.secondary)
                 }
             }
             kindSelector
@@ -871,7 +871,7 @@ struct DItemEditForm: View {
                     DemandChatLinksFields(links: Binding(get: { draft.chatLinks ?? DemandChatLinks() },
                         set: { draft.chatLinks = $0.optional })).padding(.top, 12)
                     if let error = vm.items.first(where: { $0.id == draft.id })?.chatReadError {
-                        Text(error).font(.system(size: 11)).foregroundStyle(.orange)
+                        Text(error).dboardFont(size: 11).foregroundStyle(.orange)
                     }
                 } label: {
                     sectionLabel("关联群聊", symbol: "bubble.left.and.bubble.right",
@@ -887,7 +887,7 @@ struct DItemEditForm: View {
 
             if let error = draft.validationError, !draft.name.trimmed.isEmpty {
                 Label(error, systemImage: "exclamationmark.circle")
-                    .font(.system(size: 11)).foregroundStyle(.orange)
+                    .dboardFont(size: 11).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if showsActions {
@@ -901,7 +901,7 @@ struct DItemEditForm: View {
                 }
             }
         }
-        .font(.system(size: 13)).controlSize(.regular)
+        .dboardFont(size: 13).controlSize(.regular)
         .sheet(isPresented: $choosingReqFlow) {
             ReqFlowRequirementPicker(flow: vm.reqFlow, localItems: vm.items, editingID: draft.id,
                 select: { requirement in
@@ -947,7 +947,7 @@ struct DItemEditForm: View {
                         if kind == .incident { draft.priority = .p0; draft.status = .inProgress }
                     }
                 } label: {
-                    Text(kind.rawValue).font(.system(size: 12, weight: draft.effectiveKind == kind ? .semibold : .medium))
+                    Text(kind.rawValue).dboardFont(size: 12, weight: draft.effectiveKind == kind ? .semibold : .medium)
                         .foregroundStyle(draft.effectiveKind == kind ? Color.primary : .secondary)
                         .frame(width: 112, height: 30)
                         .background {
@@ -996,9 +996,9 @@ struct DItemEditForm: View {
                     Button { draft.priority = priority } label: {
                         HStack(spacing: 7) {
                             Circle().fill(priority.color).frame(width: 6, height: 6)
-                            Text(priority.title).font(.system(size: 12, weight: .medium))
+                            Text(priority.title).dboardFont(size: 12, weight: .medium)
                             Spacer(minLength: 0)
-                            Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold))
+                            Image(systemName: "checkmark").dboardFont(size: 10, weight: .semibold)
                                 .opacity(draft.priority == priority ? 1 : 0)
                         }
                         .padding(.horizontal, 10).frame(height: 34)
@@ -1025,7 +1025,7 @@ struct DItemEditForm: View {
                     .overlay(alignment: .topLeading) {
                         if draft.project.isEmpty {
                             Text("每行一个仓库名或路径，支持多个")
-                                .font(.system(size: 12)).foregroundStyle(.tertiary)
+                                .dboardFont(size: 12).foregroundStyle(.tertiary)
                                 .padding(.horizontal, 8).padding(.vertical, 6).allowsHitTesting(false)
                         }
                     }
@@ -1057,7 +1057,7 @@ struct DItemEditForm: View {
                 }.labelsHidden().frame(width: 140)
                     .demandKeyboardMenu().demandKeyboardID("demand-status-picker")
             }
-            Text("开始日期到达后自动进入进行中。").font(.system(size: 11)).foregroundStyle(.secondary)
+            Text("开始日期到达后自动进入进行中。").dboardFont(size: 11).foregroundStyle(.secondary)
         }
     }
 
@@ -1070,7 +1070,7 @@ struct DItemEditForm: View {
                 HStack(spacing: 12) {
                     Button("更换关联") { choosingReqFlow = true }
                     Button("解除关联") { draft.reqFlow = nil }
-                }.font(.system(size: 11)).demandButtonStyle(.plain).foregroundStyle(.secondary)
+                }.dboardFont(size: 11).demandButtonStyle(.plain).foregroundStyle(.secondary)
             } else {
                 HStack(spacing: 8) {
                     sectionLabel("需求流", symbol: "link", detail: "可选")
@@ -1083,9 +1083,9 @@ struct DItemEditForm: View {
 
     private func sectionLabel(_ title: String, symbol: String, detail: String) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: symbol).font(.system(size: 12)).foregroundStyle(.secondary).frame(width: 16)
-            Text(title).font(.system(size: 13, weight: .medium)).foregroundStyle(.primary)
-            Text(detail).font(.system(size: 11)).foregroundStyle(.secondary)
+            Image(systemName: symbol).dboardFont(size: 12).foregroundStyle(.secondary).frame(width: 16)
+            Text(title).dboardFont(size: 13, weight: .medium).foregroundStyle(.primary)
+            Text(detail).dboardFont(size: 11).foregroundStyle(.secondary)
         }
     }
 
@@ -1095,11 +1095,11 @@ struct DItemEditForm: View {
     }
 
     private func fieldLabel(_ value: String) -> some View {
-        Text(value).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+        Text(value).dboardFont(size: 11, weight: .medium).foregroundStyle(.secondary)
     }
 
     private func box<V: View>(_ view: V) -> some View {
-        view.textFieldStyle(.plain).font(.system(size: 13))
+        view.textFieldStyle(.plain).dboardFont(size: 13)
             .padding(.horizontal, 10).padding(.vertical, 10)
             .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 9))
             .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5))
@@ -1125,9 +1125,9 @@ struct NewItemRow: View {
             .accessibilityIdentifier("demand-new-editor").demandKeyboardID("demand-new-editor")
             if hasDraft {
                 if !embedded, let name = vm.newItemDraft?.name, !name.trimmed.isEmpty {
-                    Text(name).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                    Text(name).dboardFont(size: 12).foregroundStyle(.secondary).lineLimit(1)
                 }
-                Button(action: confirmClearDraft) { Image(systemName: "xmark").font(.system(size: 10)) }
+                Button(action: confirmClearDraft) { Image(systemName: "xmark").dboardFont(size: 10) }
                     .demandButtonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("清空草稿")
             }
             if !embedded { Spacer(minLength: 0) }

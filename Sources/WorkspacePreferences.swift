@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-enum SettingsPage: String, Hashable { case general, favorites, shortcuts, clipboard, usage }
+enum SettingsPage: String, Hashable { case general, appearance, favorites, shortcuts, clipboard, usage }
 
 enum WorkspacePage: String, CaseIterable, Identifiable {
     case overview, demands, todos, history
@@ -103,9 +103,9 @@ struct EmptyWorkspaceState: View {
     var action: (() -> Void)? = nil
     var body: some View {
         VStack(spacing: 12) {
-            Image(systemName: icon).font(.system(size: 28, weight: .light)).foregroundStyle(.secondary)
-            Text(title).font(.system(size: 13, weight: .semibold))
-            Text(detail).font(.system(size: 12)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Image(systemName: icon).dboardFont(size: 28, weight: .light).foregroundStyle(.secondary)
+            Text(title).dboardFont(size: 13, weight: .semibold)
+            Text(detail).dboardFont(size: 12).foregroundStyle(.secondary).multilineTextAlignment(.center)
             if let actionTitle, let action { Button(actionTitle, action: action).controlSize(.small) }
         }
         .frame(maxWidth: .infinity)
@@ -116,31 +116,23 @@ struct EmptyWorkspaceState: View {
 struct DBoardSettingsView: View {
     @ObservedObject private var prefs = WorkspacePreferences.shared
     @ObservedObject private var theme = ThemeManager.shared
-    @ObservedObject private var font = FontManager.shared
     @ObservedObject private var flags = FeatureFlags.shared
 
     var body: some View {
         TabView(selection: $prefs.settingsPage) {
             Form {
-                Section("外观") {
-                    Picker("主题", selection: $theme.current) {
-                        ForEach(DBoardTheme.all) { Text($0.name).tag($0) }
-                    }
-                    Picker("字体", selection: $font.current) {
-                        ForEach(DBoardFont.all) { Text($0.name).tag($0) }
-                    }
-                    Text("正文与次要信息使用统一字号，界面跟随系统深浅色。")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
-                }
                 Section("自动化") {
                     Toggle("钉钉值守", isOn: Binding(get: { flags.replyEnabled },
                         set: { flags.setReplyEnabled($0) }))
                     Text("开启后运行值守服务，并显示待回复入口和通知。")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .dboardFont(size: 11).foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)
             .tabItem { Label("通用", systemImage: "gearshape") }.tag(SettingsPage.general)
+
+            AppearanceSettingsView(theme: theme)
+                .tabItem { Label("外观", systemImage: "paintpalette") }.tag(SettingsPage.appearance)
 
             Form {
                 Section("常用入口") {
@@ -151,7 +143,7 @@ struct DBoardSettingsView: View {
                         }
                     }
                     Text("固定到工作窗口侧栏；命令面板优先显示常用和最近使用的模块。")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .dboardFont(size: 11).foregroundStyle(.secondary)
                     Button("恢复默认常用入口") { prefs.favorites = WorkspacePreferences.defaultsFavorites }
                 }
             }
@@ -167,7 +159,10 @@ struct DBoardSettingsView: View {
             UsageSummaryView()
                 .tabItem { Label("使用记录", systemImage: "chart.bar") }.tag(SettingsPage.usage)
         }
-        .frame(width: 580, height: 500)
+        .frame(width: 640, height: 600)
+        .dboardFont(size: 13)
+        .dboardThemeAccent()
+        .environmentObject(theme)
     }
 }
 
@@ -195,7 +190,7 @@ struct ClipboardPreferencesView: View {
             Section {
                 Button("立即清理过期与超限记录") { ClipboardStore.shared.purge() }
                 Text("保存在本机，包含置顶内容的记录不会因历史上限被清理。")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .dboardFont(size: 11).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -213,12 +208,12 @@ struct UsageSummaryView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("最近 14 天").font(.system(size: 13, weight: .semibold))
+                Text("最近 14 天").dboardFont(size: 13, weight: .semibold)
                 Spacer()
                 Button("刷新") { rows = UsageStats.summary() }.controlSize(.small)
             }
             Text("记录入口触发次数，包含快捷键的呼出和收起。用于了解入口偏好。")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
+                .dboardFont(size: 11).foregroundStyle(.secondary)
             if rows.isEmpty {
                 EmptyWorkspaceState(icon: "chart.bar", title: "还没有使用记录",
                     detail: "使用模块后，可以在这里查看入口触发次数。")

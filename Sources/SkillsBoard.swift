@@ -1178,9 +1178,9 @@ struct SkillsBoardView: View {
         return VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
                 Image(systemName: "square.stack.3d.up")
-                    .font(.system(size: 10, weight: .semibold))
+                    .dboardFont(size: 10, weight: .semibold)
                     .foregroundStyle(theme.current.accentPrimary)
-                Text("Skill 治理").font(.system(size: 11, weight: .semibold))
+                Text("Skill 治理").dboardFont(size: 11, weight: .semibold)
                     .foregroundStyle(theme.current.textPrimary)
                 Spacer()
                 Text(vm.showAssetLibrary ? "资产库 \(vm.assetTotal) 项" : "当前 \(vm.currentItems.count) 个")
@@ -1256,7 +1256,7 @@ struct SkillsBoardView: View {
             HStack(spacing: 6) {
                 statusDot(item)
                 Text(item.dir)
-                    .font(.system(size: 13, weight: .semibold))
+                    .dboardFont(size: 13, weight: .semibold)
                     .foregroundStyle((item.enabled && !item.codexDisabled)
                                        ? theme.current.textPrimary : theme.current.textMuted)
                     .strikethrough(!item.enabled || item.codexDisabled,
@@ -1297,8 +1297,8 @@ struct SkillsBoardView: View {
             if let first = item.problems.first ?? item.hints.first {
                 HStack(spacing: 4) {
                     Image(systemName: item.problems.isEmpty ? "lightbulb" : "xmark.octagon.fill")
-                        .font(.system(size: 8))
-                    Text(first).font(.system(size: 10)).lineLimit(1)
+                        .dboardFont(size: 8)
+                    Text(first).dboardFont(size: 10).lineLimit(1)
                 }
                 .foregroundStyle(item.problems.isEmpty ? Color.orange : Color.red)
             } else {
@@ -1306,13 +1306,13 @@ struct SkillsBoardView: View {
                     if let m = item.modified {
                         Text(Self.dateStr(m)).font(.system(size: 9, design: .monospaced))
                     }
-                    Text("\(item.fileCount) 文件").font(.system(size: 9))
+                    Text("\(item.fileCount) 文件").dboardFont(size: 9)
                     if let source = item.sources.first {
                         Text(item.sources.count > 1 ? "\(source) +\(item.sources.count - 1)" : source)
-                            .font(.system(size: 9, weight: .medium))
+                            .dboardFont(size: 9, weight: .medium)
                     }
                     if !item.enabled {
-                        Text("已归档").font(.system(size: 9, weight: .medium))
+                        Text("已归档").dboardFont(size: 9, weight: .medium)
                             .foregroundStyle(theme.current.textMuted)
                     }
                     Spacer()
@@ -1412,7 +1412,7 @@ struct SkillsBoardView: View {
 
     private func miniBadge(_ text: String?, _ icon: String, _ c: Color) -> some View {
         HStack(spacing: 2) {
-            Image(systemName: icon).font(.system(size: 8, weight: .semibold))
+            Image(systemName: icon).dboardFont(size: 8, weight: .semibold)
             if let t = text { Text(t).font(.system(size: 9, weight: .medium, design: .monospaced)) }
         }
         .foregroundStyle(c)
@@ -1428,7 +1428,7 @@ struct SkillsBoardView: View {
                 HStack(spacing: 7) {
                     statusDot(item)
                     Text(item.dir)
-                        .font(.system(size: 15, weight: .semibold))
+                        .dboardFont(size: 15, weight: .semibold)
                         .foregroundStyle(theme.current.textPrimary)
                         .textSelection(.enabled)
                     Spacer()
@@ -1436,7 +1436,7 @@ struct SkillsBoardView: View {
                         withAnimation(.spring(response: 0.28, dampingFraction: 1.0)) { detailItem = nil }
                     }) {
                         Image(systemName: "xmark")
-                            .font(.system(size: 9, weight: .bold))
+                            .dboardFont(size: 9, weight: .bold)
                             .foregroundStyle(theme.current.textMuted)
                             .frame(width: 20, height: 20)
                             .background(Circle().fill(theme.current.textTertiary.opacity(0.1)))
@@ -1553,7 +1553,7 @@ struct SkillsBoardView: View {
     }
 
     private func tag(_ t: String, _ c: Color) -> some View {
-        Text(t).font(.system(size: 10))
+        Text(t).dboardFont(size: 10)
             .foregroundStyle(c)
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(Capsule().fill(c.opacity(0.11)))
@@ -1569,7 +1569,7 @@ struct SkillsBoardView: View {
             Spacer(minLength: 0)
             if boardTab == .hooks && envVM.brokenHooks > 0 {
                 Label("\(envVM.brokenHooks) 个脚本失效", systemImage: "exclamationmark.triangle")
-                    .font(.system(size: 11)).foregroundStyle(.orange)
+                    .dboardFont(size: 11).foregroundStyle(.orange)
             }
             if vm.loading { ProgressView().controlSize(.small) }
             else {
@@ -1584,7 +1584,7 @@ struct SkillsBoardView: View {
 
     private func statChip(_ n: String, _ label: String, _ c: Color) -> some View {
         HStack(spacing: 3) {
-            Text(n).font(.system(size: 12, weight: .semibold, design: .rounded))
+            Text(n).dboardFont(size: 12, weight: .semibold, design: .rounded)
             Text(label).font(fm.font(11))
         }
         .foregroundStyle(c)
@@ -1602,12 +1602,12 @@ struct SkillsBoardView: View {
             .background(RoundedRectangle(cornerRadius: 7).fill(theme.current.textTertiary.opacity(0.07)))
 
             HStack(spacing: 5) {
-                Image(systemName: "magnifyingglass").font(.system(size: 10, weight: .medium))
+                Image(systemName: "magnifyingglass").dboardFont(size: 10, weight: .medium)
                     .foregroundStyle(theme.current.textMuted)
                 TextField("搜索", text: $vm.search).textFieldStyle(.plain).font(fm.font(12))
                 if !vm.search.isEmpty {
                     Button(action: { vm.search = "" }) {
-                        Image(systemName: "xmark.circle.fill").font(.system(size: 10))
+                        Image(systemName: "xmark.circle.fill").dboardFont(size: 10)
                             .foregroundStyle(theme.current.textMuted)
                     }
                     .buttonStyle(.plain)
@@ -1671,7 +1671,7 @@ struct SkillsBoardView: View {
         return HStack(spacing: 6) {
             // 分组标题压在背景图上, 需要底衬 + 加重字重才读得出
             HStack(spacing: 5) {
-                Text(title).font(.system(size: 10, weight: .bold)).tracking(0.6)
+                Text(title).dboardFont(size: 10, weight: .bold).tracking(0.6)
                     .foregroundStyle(urgent ? Color.red : theme.current.textSecondary)
                 Text("\(n)").font(.system(size: 10, weight: .medium, design: .monospaced))
                     .foregroundStyle(theme.current.textTertiary)
@@ -1689,11 +1689,11 @@ struct SkillsBoardView: View {
     private func collapsibleHeader(_ title: String, _ n: Int) -> some View {
         HStack(spacing: 6) {
             Image(systemName: "chevron.right")
-                .font(.system(size: 8, weight: .bold))
+                .dboardFont(size: 8, weight: .bold)
                 .foregroundStyle(theme.current.textMuted.opacity(0.7))
                 .rotationEffect(.degrees(archiveExpanded ? 90 : 0))
             Text(title)
-                .font(.system(size: 10, weight: .semibold)).tracking(0.6)
+                .dboardFont(size: 10, weight: .semibold).tracking(0.6)
                 .foregroundStyle(theme.current.textMuted)
             Text("\(n)")
                 .font(.system(size: 10, design: .monospaced))
@@ -1716,11 +1716,11 @@ struct SkillsBoardView: View {
     private func legacyHeader(_ title: String, _ n: Int) -> some View {
         HStack(spacing: 6) {
             Image(systemName: "chevron.right")
-                .font(.system(size: 8, weight: .bold))
+                .dboardFont(size: 8, weight: .bold)
                 .foregroundStyle(theme.current.textMuted.opacity(0.7))
                 .rotationEffect(.degrees(legacyExpanded ? 90 : 0))
             Text(title)
-                .font(.system(size: 10, weight: .semibold)).tracking(0.6)
+                .dboardFont(size: 10, weight: .semibold).tracking(0.6)
                 .foregroundStyle(theme.current.textMuted)
             Text("\(n)")
                 .font(.system(size: 10, design: .monospaced))
@@ -1758,7 +1758,7 @@ struct SkillsBoardView: View {
 
     private func issueLine(_ t: String, _ icon: String, _ c: Color) -> some View {
         HStack(alignment: .top, spacing: 5) {
-            Image(systemName: icon).font(.system(size: 9)).padding(.top, 1.5)
+            Image(systemName: icon).dboardFont(size: 9).padding(.top, 1.5)
             Text(t).font(fm.font(11)).lineSpacing(2)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
@@ -1768,7 +1768,7 @@ struct SkillsBoardView: View {
 
     private func meta(_ k: String, _ v: String) -> some View {
         HStack(spacing: 3) {
-            Text(k).font(.system(size: 9)).foregroundStyle(theme.current.textMuted.opacity(0.7))
+            Text(k).dboardFont(size: 9).foregroundStyle(theme.current.textMuted.opacity(0.7))
             Text(v).font(.system(size: 10, design: .monospaced)).foregroundStyle(theme.current.textMuted)
         }
     }
@@ -1777,7 +1777,7 @@ struct SkillsBoardView: View {
                          tint: Color? = nil, _ act: @escaping () -> Void) -> some View {
         Button(action: act) {
             HStack(spacing: 3.5) {
-                Image(systemName: icon).font(.system(size: 9, weight: .medium))
+                Image(systemName: icon).dboardFont(size: 9, weight: .medium)
                 Text(t).font(fm.font(11))
             }
             .foregroundStyle(tint ?? theme.current.textSecondary)
@@ -1794,7 +1794,7 @@ struct SkillsBoardView: View {
             if pending && item.riskyToDisable {
                 HStack(alignment: .top, spacing: 4) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 9)).padding(.top, 1)
+                        .dboardFont(size: 9).padding(.top, 1)
                     Text(riskText(item)).font(fm.font(10)).lineSpacing(1.5)
                         .fixedSize(horizontal: false, vertical: true)
                         .multilineTextAlignment(.leading)
@@ -1860,9 +1860,9 @@ struct SkillsBoardView: View {
 
     private var emptyState: some View {
         VStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.system(size: 20, weight: .light))
+            Image(systemName: "magnifyingglass").dboardFont(size: 20, weight: .light)
                 .foregroundStyle(theme.current.textMuted.opacity(0.5))
-            Text("没有匹配的技能").font(.system(size: 13)).foregroundStyle(.secondary)
+            Text("没有匹配的技能").dboardFont(size: 13).foregroundStyle(.secondary)
             Button("清空筛选") { vm.search = ""; vm.categoryFilter = "全部"; vm.onlyProblems = false }.controlSize(.small)
         }
         .frame(maxWidth: .infinity).padding(.top, 50)
@@ -1903,7 +1903,7 @@ final class SkillsBoardWindowController {
             SkillsBoardView(popoverMode: true)
                 .environmentObject(vm)
                 .environmentObject(ThemeManager.shared)
-                .environmentObject(FontManager.shared)
+                .dboardFont(size: 13).environmentObject(FontManager.shared)
                 .frame(width: popW, height: popH))
         pop.contentSize = NSSize(width: popW, height: popH)
         pop.contentViewController = host
@@ -1961,7 +1961,7 @@ final class SkillsBoardWindowController {
         let view = SkillsBoardView()
             .environmentObject(vm)
             .environmentObject(ThemeManager.shared)
-            .environmentObject(FontManager.shared)
+            .dboardFont(size: 13).environmentObject(FontManager.shared)
         let host = NSHostingController(rootView: view)
         let win = NSWindow(contentViewController: host)
         win.title = "Skills 看板"

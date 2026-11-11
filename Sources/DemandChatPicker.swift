@@ -270,11 +270,11 @@ struct DemandChatLinksFields: View {
             HStack(spacing: 10) {
                 Image(systemName: role == .primary ? "bubble.left" : "bubble.left.and.bubble.right")
                     .foregroundStyle(.secondary).frame(width: 20)
-                Text(title).font(.system(size: 12)).foregroundStyle(.secondary).frame(width: 64, alignment: .leading)
-                Text(name).font(.system(size: 13)).foregroundStyle(associated ? .primary : .secondary)
+                Text(title).dboardFont(size: 12).foregroundStyle(.secondary).frame(width: 64, alignment: .leading)
+                Text(name).dboardFont(size: 13).foregroundStyle(associated ? .primary : .secondary)
                     .lineLimit(2).multilineTextAlignment(.leading)
                 Spacer(minLength: 8)
-                Image(systemName: "chevron.right").font(.system(size: 11)).foregroundStyle(.tertiary)
+                Image(systemName: "chevron.right").dboardFont(size: 11).foregroundStyle(.tertiary)
             }
             .padding(10).frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
             .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
@@ -355,7 +355,7 @@ struct DemandChatPicker: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Label("关联群聊", systemImage: "bubble.left.and.bubble.right")
-                    .font(.system(size: 16, weight: .semibold))
+                    .dboardFont(size: 16, weight: .semibold)
                 Spacer()
                 Button { Task {
                     await directory.load(force: true)
@@ -365,7 +365,7 @@ struct DemandChatPicker: View {
                 }.controlSize(.small).disabled(directory.isLoading || directory.isSearching)
             }
             Text("选一个主要群聊，再按需添加次要群聊；都可以留空。")
-                .font(.system(size: 12)).foregroundStyle(.secondary)
+                .dboardFont(size: 12).foregroundStyle(.secondary)
             selectedGroups
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -391,9 +391,9 @@ struct DemandChatPicker: View {
                         if shown.isEmpty {
                             VStack(spacing: 8) {
                                 Image(systemName: query.isEmpty ? "bubble.left" : "magnifyingglass")
-                                    .font(.system(size: 24)).foregroundStyle(.tertiary)
+                                    .dboardFont(size: 24).foregroundStyle(.tertiary)
                                 Text(directory.isSearching ? "正在搜索钉钉群聊…" : directory.isLoading && query.isEmpty ? "正在加载群聊…" : query.isEmpty ? "暂无可选群聊" : "钉钉未返回匹配的群聊")
-                                    .font(.system(size: 13)).foregroundStyle(.secondary)
+                                    .dboardFont(size: 13).foregroundStyle(.secondary)
                                 if !query.isEmpty { Button("清空搜索") { query = "" }.controlSize(.small) }
                             }.frame(maxWidth: .infinity).padding(.vertical, 40)
                         }
@@ -410,13 +410,13 @@ struct DemandChatPicker: View {
                 Text(directory.isSearching ? "正在钉钉搜索群聊…"
                      : directory.isLoading ? "正在更新，已加载 \(directory.groups.count) 个群；现在就可以选择"
                      : "可选 \(candidates.count) 个群 · 已选 \(selection.all.count) 个")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .dboardFont(size: 11).foregroundStyle(.secondary)
                 Spacer()
             }
             if let error = directory.searchError ?? directory.error {
                 HStack(spacing: 8) {
                     Label(error, systemImage: "exclamationmark.circle")
-                        .font(.system(size: 11)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                        .dboardFont(size: 11).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
                     Button("重试") { Task {
                         if query.trimmed.isEmpty { await directory.load(force: true) }
                         else { await directory.search(query) }
@@ -425,11 +425,11 @@ struct DemandChatPicker: View {
             }
             if let feedbackError {
                 Label(feedbackError, systemImage: "exclamationmark.circle")
-                    .font(.system(size: 12)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                    .dboardFont(size: 12).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
             Divider()
             HStack {
-                Text("↑↓ 浏览 · 回车选择 · ⌘↩ 保存").font(.system(size: 11)).foregroundStyle(.secondary)
+                Text("↑↓ 浏览 · 回车选择 · ⌘↩ 保存").dboardFont(size: 11).foregroundStyle(.secondary)
                 Spacer()
                 Button("取消", action: cancel).keyboardShortcut(.cancelAction)
                 Button("完成关联") { confirm(result) }
@@ -461,15 +461,15 @@ struct DemandChatPicker: View {
     private var selectedGroups: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Text("主要群").font(.system(size: 12)).foregroundStyle(.secondary).frame(width: 46, alignment: .leading)
+                Text("主要群").dboardFont(size: 12).foregroundStyle(.secondary).frame(width: 46, alignment: .leading)
                 if let chat = selection.primary {
                     selectedChip(chat) { selection.setPrimary(nil) }
-                } else { Text("未选择").font(.system(size: 12)).foregroundStyle(.tertiary) }
+                } else { Text("未选择").dboardFont(size: 12).foregroundStyle(.tertiary) }
                 Spacer(minLength: 0)
             }
             if !selection.secondary.isEmpty {
                 HStack(alignment: .top, spacing: 8) {
-                    Text("次要群").font(.system(size: 12)).foregroundStyle(.secondary).frame(width: 46, alignment: .leading).padding(.top, 5)
+                    Text("次要群").dboardFont(size: 12).foregroundStyle(.secondary).frame(width: 46, alignment: .leading).padding(.top, 5)
                     ScrollView(.horizontal) {
                         HStack(spacing: 6) {
                             ForEach(selection.secondary) { chat in
@@ -485,9 +485,9 @@ struct DemandChatPicker: View {
 
     private func selectedChip(_ chat: DemandChat, remove: @escaping () -> Void) -> some View {
         HStack(spacing: 6) {
-            Text(chat.name).font(.system(size: 12)).lineLimit(1)
+            Text(chat.name).dboardFont(size: 12).lineLimit(1)
             Button(action: remove) {
-                Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)).padding(4)
+                Image(systemName: "xmark").dboardFont(size: 10, weight: .semibold).padding(4)
             }.demandButtonStyle(.plain).accessibilityLabel("移除群聊：" + chat.name)
         }
         .padding(.leading, 8).padding(.trailing, 4).padding(.vertical, 4)
@@ -503,19 +503,19 @@ struct DemandChatPicker: View {
                 Image(systemName: primary || secondary ? "checkmark.circle.fill" : "circle")
                     .foregroundStyle(primary || secondary ? Color.accentColor : Color.secondary.opacity(0.5))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(chat.name).font(.system(size: 13)).foregroundStyle(.primary)
+                    Text(chat.name).dboardFont(size: 13).foregroundStyle(.primary)
                         .lineLimit(2).multilineTextAlignment(.leading)
                     if duplicateName {
                         Text("群 ID …" + chat.id.suffix(10)).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
                     }
                     if directory.restrictedGroupIDs.contains(chat.id) {
                         Text("跨组织内部群 · 读取聊天记录需钉钉授权")
-                            .font(.system(size: 11)).foregroundStyle(.orange)
+                            .dboardFont(size: 11).foregroundStyle(.orange)
                     }
                 }
                 Spacer()
                 if primary || secondary {
-                    Text(primary ? "主要群" : "次要群").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text(primary ? "主要群" : "次要群").dboardFont(size: 11).foregroundStyle(.secondary)
                 }
             }
             .padding(.horizontal, 10).padding(.vertical, 10)

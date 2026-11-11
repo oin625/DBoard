@@ -34,12 +34,12 @@ struct WorkspaceOverview: View {
                         action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: symbol).font(.system(size: 14, weight: .medium))
+                Image(systemName: symbol).dboardFont(size: 14, weight: .medium)
                     .foregroundStyle(color).frame(width: 18)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("\(max(value, 0))").font(.system(size: 21, weight: .semibold, design: .rounded))
+                    Text("\(max(value, 0))").dboardFont(size: 21, weight: .semibold, design: .rounded)
                         .monospacedDigit().foregroundStyle(.primary)
-                    Text(title).font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text(title).dboardFont(size: 11).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
             }
@@ -57,16 +57,16 @@ struct OverviewDemandSection: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 8) {
-                Text("需求").font(.system(size: 17, weight: .semibold))
+                Text("需求").dboardFont(size: 17, weight: .semibold)
                 Text("\(DemandMatrix.openItems(vm.items).count)")
-                    .font(.system(size: 12, weight: .medium, design: .rounded)).foregroundStyle(.secondary)
+                    .dboardFont(size: 12, weight: .medium, design: .rounded).foregroundStyle(.secondary)
                 Spacer()
                 Button("已完成") { vm.showDemands(.completed) }
-                    .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(.secondary)
+                    .buttonStyle(.plain).dboardFont(size: 12).foregroundStyle(.secondary)
                 Button { vm.showDemands() } label: {
                     HStack(spacing: 4) {
                         Text("查看全部")
-                        Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .semibold))
+                        Image(systemName: "arrow.up.right").dboardFont(size: 10, weight: .semibold)
                     }
                 }.buttonStyle(WorkspaceActionStyle())
             }.padding(.horizontal, 20).padding(.bottom, 12)

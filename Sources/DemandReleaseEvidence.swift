@@ -71,7 +71,7 @@ struct DemandReleaseEvidenceEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("完成证据").font(.system(size: 13, weight: .semibold))
+                Text("完成证据").dboardFont(size: 13, weight: .semibold)
                 Spacer()
                 if !images.isEmpty || !plainText.isEmpty {
                     Menu {
@@ -85,12 +85,12 @@ struct DemandReleaseEvidenceEditor: View {
                             }
                         }
                     } label: {
-                        Label("复制证据", systemImage: "doc.on.doc").font(.system(size: 11))
+                        Label("复制证据", systemImage: "doc.on.doc").dboardFont(size: 11)
                     }.demandMenuStyle(.borderlessButton).fixedSize()
                 }
                 Button("关闭") { if finish() { close() } }.controlSize(.small)
             }
-            Text(entry.text).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(2)
+            Text(entry.text).dboardFont(size: 12).foregroundStyle(.secondary).lineLimit(2)
             if readOnly {
                 ScrollView { DemandSpellContentView(text: text) }.frame(maxHeight: 240)
             } else {
@@ -106,10 +106,10 @@ struct DemandReleaseEvidenceEditor: View {
                 HStack {
                     Text(error).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
                     Button("重试") { _ = finish() }.demandButtonStyle(.borderless)
-                }.font(.system(size: 11))
+                }.dboardFont(size: 11)
             } else if !readOnly {
                 Text(vm.releaseEvidenceDrafts[key].map { $0.text != $0.expected } == true ? "草稿已保留；结束编辑或关闭时自动保存" : "已保存；不影响事项的勾选状态")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .dboardFont(size: 11).foregroundStyle(.secondary)
             }
         }
         .padding(14).frame(width: 440)
