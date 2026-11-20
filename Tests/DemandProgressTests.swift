@@ -34,6 +34,34 @@ final class DemandProgressTests: XCTestCase {
         XCTAssertTrue(try DemandVersion.baseline(item: item, block: Array(lines[block])).contains(detail))
     }
 
+    func testDescriptionEditPreservesMetadataAndRejectsAnOutdatedHeader() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("cache.md")
+        let version = DemandVersion(number: 2, parentID: "D013", rootID: "D013", parentTitle: "第一版",
+            sourceRevision: ContentRevision.hash("第一版"), background: "历史背景", repositories: [])
+        let metadata = "<!-- dboard-test-metadata: do-not-remove -->"
+        let source = ["## 🟡", "### D014【fixture】原名称 #进行中", "- **描述**：旧描述",
+                      "兼容旧的无缩进描述", try version.stored, metadata].joined(separator: "\n")
+        try source.write(to: file, atomically: true, encoding: .utf8)
+        let original = try DItemStore.currentRecord(id: "D014", at: file)
+        var draft = DItemDraft(from: original)
+        draft.desc = "新描述\n第二行"
+        XCTAssertTrue(DItemStore.save(draft, original: original, at: file))
+        let updated = try DItemStore.currentRecord(id: "D014", at: file)
+        XCTAssertEqual(updated.title, draft.desc)
+        XCTAssertEqual(updated.version, version)
+        let saved = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertTrue(saved.contains(metadata))
+        let changed = saved.replacingOccurrences(of: "#进行中", with: "#挂起")
+        try changed.write(to: file, atomically: true, encoding: .utf8)
+        draft = DItemDraft(from: updated)
+        draft.name = "试图改名"
+        XCTAssertFalse(DItemStore.save(draft, original: updated, at: file))
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), changed)
+    }
+
     func testLegacySummaryDoesNotLoseFullText() {
         let text = "功能已完成；" + String(repeating: "详细排查过程", count: 50)
         let record = Milestone(date: "11.2", content: text)
@@ -77,5 +105,25 @@ final class DemandProgressTests: XCTestCase {
         let merged = DemandArchive.merged(remote, journal: journal)
         XCTAssertEqual(merged.count, 1)
         XCTAssertEqual(merged.first?.item.milestones.first?.detailText, "完整验收记录")
+    }
+
+    func testRearchivingKeepsBothCompleteSnapshotsAndTheirPriorities() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let journalURL = directory.appendingPathComponent(ArchiveJournal.filename)
+        let journal = ArchiveJournal(url: journalURL)
+        let first = ["### D014【fixture】接口 #已完成 ✅2026-11-02", "- **描述**：第一份完整记录"]
+        let second = [first[0], "- **描述**：第二份完整记录"]
+        XCTAssertTrue(journal.save(.init(id: "D014", original: first, archived: first, state: .removed,
+                                         createdAt: Date(timeIntervalSince1970: 1), priority: .p0)))
+        XCTAssertTrue(journal.save(.init(id: "D014", original: second, archived: second, state: .removed,
+                                         createdAt: Date(timeIntervalSince1970: 2), priority: .p2)))
+        let records = DemandArchive.merged([], journal: ArchiveJournal(url: journalURL))
+        XCTAssertEqual(records.map(\.block), [second, first])
+        XCTAssertEqual(records.map(\.priority), [.p2, .p0])
+        XCTAssertEqual(records.map(\.item.title), ["第二份完整记录", "第一份完整记录"])
+        let visible = DemandArchiveCatalog.visible(records, active: [], filter: .completed, query: "D014")
+        XCTAssertEqual(DemandCompletedCatalog.entries(current: [], archived: visible).map(\.selectionID), records.map(\.id))
     }
 }

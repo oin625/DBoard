@@ -117,7 +117,7 @@ final class DemandChatLinksTests: XCTestCase {
         }
     }
 
-    func testArchiveAndNextVersionKeepGroupContext() throws {
+    func testArchiveKeepsAssociationButNextVersionBackgroundFollowsPrivacy() throws {
         try withDirectory { directory in
             let (cache, original) = try fixture(directory)
             let block = try String(contentsOf: cache, encoding: .utf8).components(separatedBy: "\n")
@@ -125,8 +125,8 @@ final class DemandChatLinksTests: XCTestCase {
             let archived = ArchivedDemand(block: block, original: nil, priority: .p1, item: original)
             let next = try archived.newDraft(id: "D015")
             XCTAssertEqual(next.chatLinks, original.chatLinks)
-            XCTAssertTrue(next.version?.background.contains(primary.id) == true)
-            XCTAssertTrue(next.version?.background.contains(first.name) == true)
+            XCTAssertEqual(next.version?.background.contains(primary.id), DemandChatPrivacy.isEnabled)
+            XCTAssertEqual(next.version?.background.contains(first.name), DemandChatPrivacy.isEnabled)
         }
     }
 

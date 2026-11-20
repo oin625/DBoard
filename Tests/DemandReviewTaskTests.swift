@@ -54,22 +54,38 @@ final class DemandReviewTaskTests: XCTestCase {
         let cache = root.appendingPathComponent("dboard-archive-cache.md")
         let source = "## ✅ 已完成\n### D014【ultra】锁券接口 #已完成 ✅2026-11-06\n- **描述**：锁券链路\n- **进度**：\n    - 11.6: 已完成开发和验收。\n"
         try source.write(to: cache, atomically: true, encoding: .utf8)
-        let record = try XCTUnwrap(try DemandArchive.parse(source).first)
+        let journalURL = root.appendingPathComponent(ArchiveJournal.filename)
+        let journal = ArchiveJournal(url: journalURL)
+        let original = try XCTUnwrap(try DemandArchive.parse(source).first)
+        let block = original.block + ["        明细：", "        完整归档独有的验收记录"]
+        XCTAssertTrue(journal.save(.init(id: "D014", original: block, archived: block,
+                                         state: .removed, createdAt: Date())))
+        let store = DemandArchiveStore(cache: cache, journalURL: journalURL, allowsRemote: false)
+        let record = try XCTUnwrap(store.records.first)
+        let vm = DBoardViewModel(loadCache: false, archiveStore: store)
+        let clipboard = NSPasteboard.withUniqueName()
+        defer { clipboard.releaseGlobally() }
+        XCTAssertTrue(vm.copyCurrentState("D014", at: cache, archiveRevision: record.id, pasteboard: clipboard))
+        XCTAssertTrue(try XCTUnwrap(clipboard.string(forType: .string)).contains("--archive-revision '\(record.id)'"))
+        XCTAssertTrue(vm.copyReviewTask("D014", at: cache, archiveRevision: record.id, pasteboard: clipboard))
+        XCTAssertTrue(try XCTUnwrap(clipboard.string(forType: .string)).contains("--archive-revision '\(record.id)'"))
         let cli = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Tools/dboard_ai.py").path
-        let show = HandoffCLIFixture.run("/usr/bin/env", arguments: ["python3", cli, "--cache", cache.path, "show", "D014", "--full"])
+        let arguments = ["python3", cli, "--cache", cache.path, "--archive-revision", record.id]
+        let show = HandoffCLIFixture.run("/usr/bin/env", arguments: arguments + ["show", "D014", "--full"])
         XCTAssertEqual(show.exitCode, 0)
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: show.stdout) as? [String: Any])
         let item = try XCTUnwrap(json["item"] as? [String: Any])
         let revision = try XCTUnwrap(item["revision"] as? String)
         XCTAssertEqual(revision, record.id)
+        XCTAssertTrue((item["progress"] as? String)?.contains("完整归档独有的验收记录") == true)
         let handoff = root.appendingPathComponent("handoff.json")
         try JSONSerialization.data(withJSONObject: ["based_on_records": 1, "sections": [
             "completed": "原开发和验收已完成；本轮审查未覆盖代码。",
             "pending": "缺少实际开发仓库，需要补充后审查。",
             "decisions": "保留已完成状态和原归档快照。",
             "verification": "本轮仅核对需求记录，未审代码。"], "references": []]).write(to: handoff)
-        let review = HandoffCLIFixture.run("/usr/bin/env", arguments: ["python3", cli, "--cache", cache.path,
+        let review = HandoffCLIFixture.run("/usr/bin/env", arguments: arguments + [
             "report", "D014", "--task", "code-review", "--review-result", "limited",
             "--expect-title", "锁券接口", "--expect-revision", revision,
             "--summary", "[CR] 缺少实际仓库，整体代码尚未覆盖。", "--details", "需补充开发仓库和分支，再核对完整提交范围。",
@@ -77,7 +93,7 @@ final class DemandReviewTaskTests: XCTestCase {
             "--event-id", "archive-cr-swift", "--no-sync"])
         XCTAssertEqual(review.exitCode, 0, String(data: review.stdout, encoding: .utf8) ?? "")
         XCTAssertEqual(try String(contentsOf: cache, encoding: .utf8), source)
-        let store = DemandArchiveStore(cache: cache, journalURL: root.appendingPathComponent("journal.json"), allowsRemote: false)
+        store.reloadLocal()
         XCTAssertEqual(store.records.first?.id, record.id)
         XCTAssertEqual(store.reviewNotes.count, 1)
         XCTAssertEqual(store.reviewNotes.first?.sourceRevision, record.id)

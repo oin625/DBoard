@@ -14,6 +14,17 @@ struct DBoardApp: App {
 
     var body: some Scene {
         Settings { DBoardSettingsView() }
+            .commands {
+                CommandGroup(replacing: .newItem) {
+                    Button("新建画布") { ExcalidrawWindowManager.shared.newDrawing() }
+                    Button("打开绘图…") { ExcalidrawWindowManager.shared.chooseFile() }
+                        .keyboardShortcut("o", modifiers: .command)
+                }
+                CommandGroup(replacing: .saveItem) {
+                    Button("保存绘图") { ExcalidrawWindowManager.shared.activeController?.save() }
+                        .keyboardShortcut("s", modifiers: .command)
+                }
+            }
     }
 }
 
@@ -25,8 +36,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var mainKeyMonitor: Any?
     private var viewModel: DBoardViewModel!
     private var focusObserver: NSObjectProtocol?
-    private var techScoutVM: TechScoutViewModel!
-    private var techScoutWindow: TechScoutWindowController!
     private var replyInboxVM: ReplyInboxViewModel!
     private var replyInboxWindow: ReplyInboxWindowController!
 
@@ -34,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private let demandDetailWindow = DemandDetailWindowController()
     private let newDemandWindow = NewDemandWindowController()
     private let demandQuickOpenWindow = DemandQuickOpenWindowController()
+    private let tryQuickOpenWindow = TryQuickOpenWindowController()
     private let mainFocusReturn = PanelFocusReturn()
     private var debugTriggerTimer: Timer?
 
@@ -41,8 +51,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private let panelTearOff = TearOffObserver()
     private var cancellables = Set<AnyCancellable>()
 
+    func application(_ sender: NSApplication, open urls: [URL]) {
+        MainActor.assumeIsolated {
+            urls.filter(ExcalidrawDocument.handles).forEach(ExcalidrawWindowManager.shared.open)
+        }
+    }
+
+    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
+        let url = URL(fileURLWithPath: filename)
+        guard ExcalidrawDocument.handles(url) else { return false }
+        MainActor.assumeIsolated { ExcalidrawWindowManager.shared.open(url) }
+        return true
+    }
+
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        let urls = filenames.map { URL(fileURLWithPath: $0) }.filter(ExcalidrawDocument.handles)
+        MainActor.assumeIsolated { urls.forEach(ExcalidrawWindowManager.shared.open) }
+        sender.reply(toOpenOrPrint: urls.isEmpty ? .failure : .success)
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        MainActor.assumeIsolated {
+            guard ExcalidrawWindowManager.shared.hasUnsavedChanges else { return .terminateNow }
+            ExcalidrawWindowManager.shared.prepareToQuit { sender.reply(toApplicationShouldTerminate: $0) }
+            return .terminateLater
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        if let editor = NSApp.keyWindow?.firstResponder as? TryNoteTextView {
+            if editor.hasMarkedText() { editor.unmarkText() }
+            editor.didChangeText()
+        }
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        NotificationCenter.default.post(name: .init("DBoardFlushPersonalDrafts"), object: nil)
         LocalAudiServer.shared.stop()
+        HealthDeskMonitor.shared.stop()
+        MainActor.assumeIsolated { GitHubTrendingDailyUpdater.shared.stop() }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -145,15 +190,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             self.detachPanel()
         }
 
-        // Tech Scout 初始化
-        techScoutVM = TechScoutViewModel()
-        techScoutWindow = TechScoutWindowController(viewModel: techScoutVM)
-
-        // 监听 D板窗口内的 Tech Scout 入口点击
-        NotificationCenter.default.addObserver(forName: .init("openTechScout"), object: nil, queue: .main) { [weak self] _ in
-            self?.closeMainPopover(restoreFocus: false)
-            self?.techScoutVM.reload()
-            self?.techScoutWindow.show()
+        // Prepare the daily/weekly/monthly lists once per day, independently of their window.
+        Task { @MainActor in GitHubTrendingDailyUpdater.shared.start() }
+        NotificationCenter.default.addObserver(forName: .init("openGitHubTrending"), object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.closeMainPopover(restoreFocus: false)
+                GitHubTrendingWindowController.shared.show()
+            }
         }
 
         // 钉钉待回复 初始化
@@ -184,16 +227,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         var shortcutActions: [String: () -> Void] = [
             "clipboard": { UsageStats.hit("clipboard"); WorkspacePreferences.shared.remember("clipboard"); ClipboardBoardWindowController.shared.show() },
-            "reqflow": { UsageStats.hit("reqflow"); WorkspacePreferences.shared.remember("reqflow"); BizMapBoardWindowController.shared.toggleWindow(requirements: true) },
+            "webworkspace": { WebWorkspaceQuickOpenWindowController.shared.toggle() },
             "logs": { UsageStats.hit("logs"); WorkspacePreferences.shared.remember("logs"); AppReleaseWindowController.shared.toggleLogs() },
-            "apprelease": { UsageStats.hit("apprelease"); WorkspacePreferences.shared.remember("apprelease"); AppReleaseWindowController.shared.toggle() },
-            "audihome": { UsageStats.hit("audihome"); WorkspacePreferences.shared.remember("audihome"); AppReleaseWindowController.shared.toggleHome() },
         ].mapValues { [weak self] action in
             return { self?.closeMainPopover(restoreFocus: false); action() }
         }
         // Home must toggle before any popover close; other module shortcuts retain their behavior.
         shortcutActions["dboard"] = { [weak self] in self?.toggleHome() }
         shortcutActions["quickopen"] = { [weak self] in self?.toggleQuickOpen() }
+        shortcutActions["tryquickopen"] = { [weak self] in self?.toggleTryQuickOpen() }
+        shortcutActions["drawingnew"] = { MainActor.assumeIsolated { ExcalidrawWindowManager.shared.newDrawing() } }
+        shortcutActions["awaylock"] = { _ = HealthDeskMonitor.shared.requestAwayLock() }
+        HealthDeskMonitor.shared.start()
         GlobalShortcutManager.shared.configure(actions: shortcutActions)
         // 快捷键状态与配置变化由管理器统一处理，默认保留原有组合。
 
@@ -209,16 +254,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             case "optv": ClipboardBoardWindowController.shared.show()
             case "ctrlr": BizMapBoardWindowController.shared.toggleWindow(requirements: true)
             case "apprelease": AppReleaseWindowController.shared.show()
+            case "githubtrending": Task { @MainActor in GitHubTrendingWindowController.shared.show() }
             case "panel": self?.detachPanel()
             case "home": self?.toggleHome()
             case "quickopen": self?.toggleQuickOpen()
+            case "tryquickopen": self?.toggleTryQuickOpen()
+            case "webworkspace": WebWorkspaceQuickOpenWindowController.shared.toggle()
             case "settings":
                 self?.detachPanel()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                     NotificationCenter.default.post(name: .init("openDBoardSettings"), object: nil)
                 }
+            case let cmd where c.hasPrefix("drawing="):
+                let url = URL(fileURLWithPath: String(cmd.dropFirst("drawing=".count)))
+                if ExcalidrawDocument.handles(url) { ExcalidrawWindowManager.shared.open(url) }
+            case "drawing-new": MainActor.assumeIsolated { ExcalidrawWindowManager.shared.newDrawing() }
+            case "drawing-fullscreen":
+                MainActor.assumeIsolated { ExcalidrawWindowManager.shared.activeController?.window.toggleFullScreen(nil) }
             case "uireport":
-                let report = NSApp.windows.map { "id=\($0.windowNumber) title=\($0.title) visible=\($0.isVisible) frame=\($0.frame) toolbar=\($0.toolbar != nil)" }.joined(separator: "\n")
+                let report = NSApp.windows.map { "id=\($0.windowNumber) title=\($0.title) visible=\($0.isVisible) frame=\($0.frame) toolbar=\($0.toolbar != nil) fullscreen=\($0.styleMask.contains(.fullScreen))" }.joined(separator: "\n")
                 try? report.write(toFile: "/tmp/dboard-ui-window-report.txt", atomically: true, encoding: .utf8)
             case let cmd where c.hasPrefix("expand="):
                 self?.viewModel.expandedIDs.insert(String(cmd.dropFirst("expand=".count)))
@@ -250,6 +304,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     // MARK: - 主面板交互 (popover 模式)
+
+    func toggleTryQuickOpen() {
+        closeMainPopover(restoreFocus: false)
+        demandQuickOpenWindow.close(restoreFocus: false)
+        tryQuickOpenWindow.toggle()
+    }
 
     func toggleQuickOpen() {
         closeMainPopover(restoreFocus: false)

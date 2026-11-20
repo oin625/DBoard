@@ -73,7 +73,7 @@ struct DemandVersion: Codable, Equatable {
         if !spell.isEmpty { text.append(spell) }
         if let branch = item.branch, !branch.isEmpty && branch != "待定" { text.append("归档时的分支：" + branch) }
         if let link = item.reqFlow { text.append("原需求流（背景）：" + link.markdown) }
-        if let chats = item.chatLinks { text.append("原关联群聊（背景）：\n" + chats.assembled) }
+        if DemandChatPrivacy.isEnabled, let chats = item.chatLinks { text.append("原关联群聊（背景）：\n" + chats.assembled) }
         text.append("历史进度：")
         text.append(item.milestones.isEmpty ? "未记录，需查看实际代码。" :
             item.milestones.map { $0.date + "：" + $0.fullContent }.joined(separator: "\n"))

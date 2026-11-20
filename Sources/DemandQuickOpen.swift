@@ -71,23 +71,9 @@ enum DemandQuickOpenCatalog {
     }
 
     private static func latestActivity(_ item: DItem) -> Date {
-        let parser = ISO8601DateFormatter()
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        var dates = [item.execution?.updatedAt, item.handoff?.updated_at].compactMap { text -> Date? in
-            guard let text else { return nil }
-            return parser.date(from: text) ?? fractional.date(from: text)
-        }
         let now = Date()
-        for text in item.milestones.map(\.date) + [item.startDate ?? ""] {
-            if var date = DemandDates.period(start: text, deadline: nil, on: now)?.start {
-                if text.contains("."), date > now.addingTimeInterval(86400) {
-                    date = Calendar.current.date(byAdding: .year, value: -1, to: date) ?? date
-                }
-                dates.append(date)
-            }
-        }
-        return dates.max() ?? .distantPast
+        return max(DemandDates.recordedActivity(item, on: now) ?? .distantPast,
+                   DemandDates.activityDay(item.startDate, on: now) ?? .distantPast)
     }
 }
 

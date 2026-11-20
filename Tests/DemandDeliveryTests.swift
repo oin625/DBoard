@@ -38,6 +38,12 @@ final class DemandDeliveryTests: XCTestCase {
             "deliverableDevProject": plan.projects.map(\.declaration).joined(separator: ",")]] : []
         return try DevelopmentDeliverables.decode(JSONSerialization.data(withJSONObject: ["success": true, "data": ["3": rows]]))
     }
+    private func writeLinkedCache(for plan: DemandDeliveryPlan, in directory: URL) throws -> URL {
+        let cache = directory.appendingPathComponent("cache.md")
+        let content = "## 🟡 重要\n### \(plan.item.id)【ultra】锁券改造 #进行中\n- **需求流**：\(plan.link.markdown)\n"
+        try content.write(to: cache, atomically: true, encoding: .utf8)
+        return cache
+    }
 
     func testMissingPlanAutomaticallyCopiesInstructionWithoutRemoteCalls() throws {
         try temporary { directory in
@@ -185,16 +191,82 @@ final class DemandDeliveryTests: XCTestCase {
     func testSuccessAndRepeatedClicksReuseDocumentAndDoNotAppendAgain() throws {
         try temporary { directory in
             let plan = try self.plan()
+            let cache = try writeLinkedCache(for: plan, in: directory)
             var created = 0, submitted = 0, generatedCount = 0, present = false
             let services = DemandDeliveryServices(generate: { _ in generatedCount += 1; return plan.document() },
                 validate: { _ in }, findDocument: { _ in nil },
                 createDocument: { _, _ in created += 1; return self.documentURL }, verifyDocument: { _, _ in },
                 listDeliverables: { _ in try self.response(plan, present: present) },
                 submit: { _, _ in submitted += 1; present = true })
-            let workflow = DemandDeliveryWorkflow(store: DemandDeliveryStore(url: directory.appendingPathComponent("receipts.json")), services: services)
-            XCTAssertTrue(try workflow.run(plan, stillCurrent: { true }).confirmed)
-            XCTAssertTrue(try workflow.run(plan, stillCurrent: { true }).confirmed)
+            let url = directory.appendingPathComponent("receipts.json")
+            let store = DemandDeliveryStore(url: url)
+            let workflow = DemandDeliveryWorkflow(store: store, services: services)
+            let receipt = try workflow.run(plan, cacheURL: cache, stillCurrent: { true })
+            XCTAssertTrue(receipt.confirmed)
+            XCTAssertTrue(receipt.progressRecorded)
+            let restarted = DemandDeliveryWorkflow(store: DemandDeliveryStore(url: url), services: services)
+            XCTAssertTrue(try restarted.run(plan, cacheURL: cache, stillCurrent: { true }).progressRecorded)
             XCTAssertEqual(created, 1); XCTAssertEqual(submitted, 1); XCTAssertEqual(generatedCount, 1)
+            let latest = try DItemStore.currentRecord(id: plan.item.id, at: cache)
+            XCTAssertEqual(latest.milestones.map(\.content), [DemandDeliveryPlan.feedbackSummary])
+            XCTAssertEqual(latest.milestones.first?.details,
+                "技术说明：\(documentURL)\n工程与分支：ultra:feature/cdd-lock\n仅提交开发交付物，需求状态未改变。")
+        }
+    }
+
+    func testConcurrentWorkflowUsingSameStoreFailsBusyBeforeServiceCalls() throws {
+        try temporary { directory in
+            let plan = try self.plan()
+            let otherPlan = try self.plan(item(branch: "feature/other"))
+            XCTAssertNotEqual(plan.key, otherPlan.key)
+            let cache = try writeLinkedCache(for: plan, in: directory)
+            let url = directory.appendingPathComponent("receipts.json")
+            var present = false, competingValidations = 0, submissions = 0
+            var services = DemandDeliveryServices(generate: { $0.document() },
+                validate: { _ in competingValidations += 1; throw DemandDeliveryError.message("意外进入远端校验") },
+                findDocument: { _ in nil }, createDocument: { _, _ in self.documentURL }, verifyDocument: { _, _ in },
+                listDeliverables: { _ in try self.response(plan, present: present) }, submit: { _, _ in })
+            let competing = DemandDeliveryWorkflow(store: DemandDeliveryStore(url: url), services: services)
+            services.validate = { _ in }
+            services.submit = { _, _ in
+                submissions += 1
+                // A separate workflow opens the same lock while this one is submitting.
+                XCTAssertThrowsError(try competing.run(otherPlan, cacheURL: cache, stillCurrent: { true })) { error in
+                    XCTAssertEqual(error.localizedDescription, "另一个开发交付正在处理，请稍后重试。")
+                }
+                present = true
+            }
+            let store = DemandDeliveryStore(url: url)
+            let workflow = DemandDeliveryWorkflow(store: store, services: services)
+            XCTAssertTrue(try workflow.run(plan, cacheURL: cache, stillCurrent: { true }).progressRecorded)
+            XCTAssertEqual(competingValidations, 0)
+            XCTAssertEqual(submissions, 1)
+            XCTAssertEqual(Set(try store.read().keys), [plan.key])
+        }
+    }
+
+    func testRecoversProgressCheckpointFromEitherHistoricalFormat() throws {
+        let plan = try self.plan(item(project: "ultra；tesla", branch: "ultra:feature/cdd；tesla:feature/saas"))
+        let projects = plan.projects.reversed().map(\.declaration).joined(separator: "；")
+        for details in ["技术说明：\(documentURL)\n工程与分支：\(projects)\n仅提交开发交付物，需求状态未改变。",
+                        "技术方案：\(documentURL)\n开发分支：\(projects)"] {
+            try temporary { directory in
+                let cache = try writeLinkedCache(for: plan, in: directory)
+                XCTAssertTrue(DItemStore.appendProgress(id: plan.item.id, text: DemandDeliveryPlan.feedbackSummary,
+                    details: details, at: cache))
+                let before = try Data(contentsOf: cache)
+                let store = DemandDeliveryStore(url: directory.appendingPathComponent("receipts.json"))
+                try store.save(DemandDeliveryReceipt(key: plan.key, itemID: plan.item.id, reqID: plan.link.id,
+                    title: "已有交付", markdown: plan.document(), documentURL: documentURL, confirmed: true))
+                let services = DemandDeliveryServices(generate: { _ in XCTFail("重复生成"); return plan.document() },
+                    validate: { _ in }, findDocument: { _ in nil }, createDocument: { _, _ in XCTFail("重复创建"); return self.documentURL },
+                    verifyDocument: { _, _ in }, listDeliverables: { _ in try self.response(plan, present: true) },
+                    submit: { _, _ in XCTFail("重复提交") })
+                let workflow = DemandDeliveryWorkflow(store: store, services: services)
+                XCTAssertTrue(try workflow.run(plan, cacheURL: cache, stillCurrent: { true }).progressRecorded)
+                XCTAssertEqual(try store.read()[plan.key]?.progressRecorded, true)
+                XCTAssertEqual(try Data(contentsOf: cache), before)
+            }
         }
     }
 

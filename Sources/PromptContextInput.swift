@@ -104,7 +104,7 @@ struct PromptContextInput: NSViewRepresentable {
 
     /// Sheet animations can leave the document sized for an earlier, wider viewport.
     /// Always wrap at the final visible width rather than relying on document autoresizing.
-    final class PromptContextScrollView: NSScrollView {
+    class PromptContextScrollView: NSScrollView {
         override func setFrameSize(_ newSize: NSSize) {
             super.setFrameSize(newSize)
             synchronizeTextWidth()

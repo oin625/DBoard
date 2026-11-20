@@ -61,6 +61,31 @@ enum DemandDates {
         let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd"
         return f.string(from: now)
     }
+
+    private static let timestampFormatters: [ISO8601DateFormatter] = {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return [ISO8601DateFormatter(), fractional]
+    }()
+
+    static func timestamp(_ text: String?) -> Date? {
+        guard let text else { return nil }
+        return timestampFormatters.lazy.compactMap { $0.date(from: text) }.first
+    }
+
+    static func activityDay(_ text: String?, on now: Date) -> Date? {
+        guard let text, let day = period(start: text, deadline: nil, on: now)?.start else { return nil }
+        if text.contains("."), day > now.addingTimeInterval(86_400) {
+            return Calendar.current.date(byAdding: .year, value: -1, to: day) ?? day
+        }
+        return day
+    }
+
+    static func recordedActivity(_ item: DItem, on now: Date) -> Date? {
+        let timestamps = [item.execution?.updatedAt, item.handoff?.updated_at].compactMap(timestamp)
+        let milestones = item.milestones.compactMap { activityDay($0.date, on: now) }
+        return (timestamps + milestones).max()
+    }
 }
 
 extension DItemDraft {

@@ -90,22 +90,25 @@ struct DBoardLogAIClient {
         }
     }
 
-    func text(_ prompt: String, timeout: TimeInterval = 18) -> Result<String, ClientError> {
+    func text(_ prompt: String, timeout: TimeInterval = 18, maxOutputTokens: Int = 700,
+              systemPrompt: String = "你是严谨、简洁的生产日志助手，只依据给出的日志作答，不强行把普通日志解释成故障。",
+              thinkingEnabled: Bool? = nil) -> Result<String, ClientError> {
         guard let token = loadToken() else { return .failure(.missingToken) }
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model,
             "temperature": 0.2,
-            "max_tokens": 700,
+            "max_tokens": maxOutputTokens,
             "messages": [
-                ["role": "system", "content": "你是严谨、简洁的生产日志助手，只依据给出的日志作答，不强行把普通日志解释成故障。"],
+                ["role": "system", "content": systemPrompt],
                 ["role": "user", "content": prompt]
             ]
         ]
+        if let thinkingEnabled { body["enable_thinking"] = thinkingEnabled }
         guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else {
             return .failure(.invalidResponse)
         }
@@ -144,7 +147,7 @@ struct DBoardLogAIClient {
         task.resume()
         if semaphore.wait(timeout: .now() + timeout) == .timedOut {
             task.cancel()
-            return .failure(.server("18 秒内没有返回，已停止等待"))
+            return .failure(.server("\(Int(timeout)) 秒内没有返回，已停止等待"))
         }
         return result
     }

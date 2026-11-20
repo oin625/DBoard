@@ -1,5 +1,6 @@
 import AppKit
 import WebKit
+import SwiftUI
 
 private final class AppReleaseWindowDragHandle: NSVisualEffectView {
     var title: String
@@ -39,10 +40,16 @@ private final class AppReleaseWebHost: NSViewController {
     private let webViewContainer = NSView()
     private let dragHandle: AppReleaseWindowDragHandle
     private let pinButton = NSButton()
+    private let location = WebWorkspaceLocation(page: .appRelease)
+    private var workspacePage: WebWorkspacePage?
+    private var navigationBar: NSHostingView<AnyView>?
+    private var navigationHeight: NSLayoutConstraint?
     var onTogglePin: (() -> Void)?
 
-    init(webView: WKWebView, title: String) {
+    init(webView: WKWebView, title: String, workspacePage: WebWorkspacePage?) {
         self.webView = webView
+        self.workspacePage = workspacePage
+        if let workspacePage { location.update(page: workspacePage, url: webView.url) }
         self.dragHandle = AppReleaseWindowDragHandle(title: title)
         super.init(nibName: nil, bundle: nil)
     }
@@ -54,6 +61,13 @@ private final class AppReleaseWebHost: NSViewController {
         pinButton.contentTintColor = pinned ? .controlAccentColor : .secondaryLabelColor
         pinButton.setAccessibilityLabel(pinned ? "取消置顶" : "置顶窗口")
         pinButton.setAccessibilityValue(pinned ? "已置顶" : "未置顶")
+    }
+
+    func setWorkspacePage(_ page: WebWorkspacePage?, url: URL?) {
+        workspacePage = page
+        navigationBar?.isHidden = page == nil
+        navigationHeight?.constant = page == nil ? 0 : 42
+        if let page { location.update(page: page, url: url) }
     }
 
     @objc private func togglePin() { onTogglePin?() }
@@ -79,6 +93,13 @@ private final class AppReleaseWebHost: NSViewController {
         webViewContainer.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(webViewContainer)
         view.addSubview(dragHandle)
+        let bar = NSHostingView(rootView: AnyView(WebWorkspaceNavigationBar(location: location)
+            .environmentObject(ThemeManager.shared).environmentObject(FontManager.shared)))
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        bar.isHidden = workspacePage == nil
+        view.addSubview(bar); navigationBar = bar
+        let navigationHeight = bar.heightAnchor.constraint(equalToConstant: workspacePage == nil ? 0 : 42)
+        self.navigationHeight = navigationHeight
         pinButton.translatesAutoresizingMaskIntoConstraints = false
         pinButton.isBordered = false
         pinButton.target = self
@@ -96,7 +117,11 @@ private final class AppReleaseWebHost: NSViewController {
             dragHandle.heightAnchor.constraint(equalToConstant: 32),
             webViewContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             webViewContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            webViewContainer.topAnchor.constraint(equalTo: dragHandle.bottomAnchor),
+            bar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            bar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            bar.topAnchor.constraint(equalTo: dragHandle.bottomAnchor),
+            navigationHeight,
+            webViewContainer.topAnchor.constraint(equalTo: bar.bottomAnchor),
             webViewContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
         self.view = view
@@ -118,6 +143,37 @@ private final class AppReleaseWebHost: NSViewController {
 
 final class AppReleaseWindowController: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
     static let shared = AppReleaseWindowController()
+
+    static let workspaceScript = #"""
+    (() => {
+      if (location.hostname !== 'audi.tmallyc.com') return;
+      const send = (data) => {
+        try { window.webkit.messageHandlers.dboardWorkspace.postMessage(data); } catch {}
+      };
+      document.addEventListener('keydown', (event) => {
+        if (!['ArrowLeft', 'ArrowRight'].includes(event.key) || event.repeat || event.isComposing ||
+            event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+        const target = event.target instanceof Element ? event.target : document.activeElement;
+        if (target?.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"],[role="slider"],[role="combobox"],.monaco-editor,.CodeMirror,.cm-editor,.ace_editor')) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        send({ kind: 'navigate', direction: event.key === 'ArrowLeft' ? -1 : 1 });
+      }, true);
+      if (window !== window.top) return;
+      const reportURL = () => send({ kind: 'url', url: location.href });
+      document.addEventListener('DOMContentLoaded', reportURL, { once: true });
+      window.addEventListener('hashchange', reportURL);
+      window.addEventListener('popstate', reportURL);
+      for (const name of ['pushState', 'replaceState']) {
+        const original = history[name];
+        history[name] = function(...args) {
+          const result = original.apply(this, args);
+          reportURL();
+          return result;
+        };
+      }
+    })();
+    """#
 
     private static let diagnosticScript = #"""
     (() => {
@@ -183,6 +239,10 @@ final class AppReleaseWindowController: NSObject, WKNavigationDelegate, WKUIDele
         case logs
         case home
 
+        var workspacePage: WebWorkspacePage? {
+            switch self { case .appRelease: return .appRelease; case .home: return .audi; case .logs: return .logs }
+        }
+
         var url: URL {
             switch self {
             case .appRelease: URL(string: "https://audi.tmallyc.com/app-release")!
@@ -203,6 +263,7 @@ final class AppReleaseWindowController: NSObject, WKNavigationDelegate, WKUIDele
     private var window: NSWindow?
     private var webView: WKWebView?
     private var webViews: [Page: WKWebView] = [:]
+    private var urlObservers: [Page: NSKeyValueObservation] = [:]
     private var webHost: AppReleaseWebHost?
     private var outsideClickMonitor: Any?
     private var localClickMonitor: Any?
@@ -249,8 +310,22 @@ final class AppReleaseWindowController: NSObject, WKNavigationDelegate, WKUIDele
 
     func showLogs() { show(.logs) }
 
-    private func show(_ target: Page) {
-        focusReturn.capture()
+    func showWorkspace(_ target: WebWorkspacePage) {
+        let destination: Page
+        switch target {
+        case .appRelease: destination = .appRelease
+        case .logs: destination = .logs
+        case .audi: destination = .home
+        }
+        show(destination, preservePlacement: true)
+    }
+
+    func hideForWorkspaceSwitch() {
+        window?.orderOut(nil); teardownDismissMonitors(); focusReturn.discard()
+    }
+
+    private func show(_ target: Page, preservePlacement: Bool = false) {
+        if window?.isKeyWindow != true { focusReturn.capture() }
         let pageChanged = page != target
         page = target
         if let window {
@@ -262,7 +337,7 @@ final class AppReleaseWindowController: NSObject, WKNavigationDelegate, WKUIDele
                     webView = retainedWebView
                     webHost?.setWebView(retainedWebView)
                 } else {
-                    let newWebView = makeWebView()
+                    let newWebView = makeWebView(for: target)
                     webViews[target] = newWebView
                     webView = newWebView
                     webHost?.setWebView(newWebView)
@@ -274,7 +349,8 @@ final class AppReleaseWindowController: NSObject, WKNavigationDelegate, WKUIDele
             }
             window.hidesOnDeactivate = !isPinned
             webHost?.setPinned(isPinned)
-            centerWindowOnMouseScreen(window)
+            webHost?.setWorkspacePage(target.workspacePage, url: webView?.url)
+            if !preservePlacement || !window.isVisible { centerWindowOnMouseScreen(window) }
             NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
             installDismissMonitors()
@@ -282,9 +358,9 @@ final class AppReleaseWindowController: NSObject, WKNavigationDelegate, WKUIDele
         }
 
         page = target
-        let webView = makeWebView()
+        let webView = makeWebView(for: target)
         webViews[target] = webView
-        let webHost = AppReleaseWebHost(webView: webView, title: target.title)
+        let webHost = AppReleaseWebHost(webView: webView, title: target.title, workspacePage: target.workspacePage)
         let window = NSWindow(contentViewController: webHost)
         window.title = target.title
         window.titleVisibility = .hidden
@@ -314,11 +390,16 @@ final class AppReleaseWindowController: NSObject, WKNavigationDelegate, WKUIDele
         else { loadPageOrWait() }
     }
 
-    private func makeWebView() -> WKWebView {
+    private func makeWebView(for target: Page) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         let contentController = WKUserContentController()
         contentController.add(self, name: "dboardDiag")
+        if target.workspacePage != nil {
+            contentController.add(self, name: "dboardWorkspace")
+            contentController.addUserScript(WKUserScript(source: Self.workspaceScript,
+                injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        }
         contentController.addUserScript(WKUserScript(
             source: Self.diagnosticScript, injectionTime: .atDocumentStart, forMainFrameOnly: true
         ))
@@ -326,6 +407,10 @@ final class AppReleaseWindowController: NSObject, WKNavigationDelegate, WKUIDele
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = self
         webView.uiDelegate = self
+        urlObservers[target] = webView.observe(\.url, options: [.new]) { [weak self] observed, _ in
+            guard let self, self.webView === observed, self.page == target else { return }
+            self.webHost?.setWorkspacePage(target.workspacePage, url: observed.url)
+        }
         webView.allowsBackForwardNavigationGestures = true
         if #available(macOS 13.3, *) { webView.isInspectable = true }
         return webView
@@ -342,7 +427,11 @@ final class AppReleaseWindowController: NSObject, WKNavigationDelegate, WKUIDele
                 ($0.expiresDate.map { $0 > Date() } ?? true)
             }
             DispatchQueue.main.async {
-                guard let self, self.chromeSession == nil else { return }
+                guard let self else { return }
+                if let currentSession = self.chromeSession {
+                    self.install(currentSession, into: webView)
+                    return
+                }
                 guard let session else {
                     self.showWaitingPage(in: webView)
                     return
@@ -372,7 +461,14 @@ final class AppReleaseWindowController: NSObject, WKNavigationDelegate, WKUIDele
         teardownDismissMonitors()
         escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, let window = self.window, window.isVisible, window.isKeyWindow,
-                  event.window === window, event.keyCode == 53, window.attachedSheet == nil else { return event }
+                  event.window === window, window.attachedSheet == nil else { return event }
+            // The local login/waiting page has no Audi script, but must still allow page switching.
+            if let current = self.page.workspacePage, self.webView?.url?.host != "audi.tmallyc.com",
+               WebWorkspaceRouter.canNavigate(window, event: event) {
+                WebWorkspaceRouter.navigate(from: current, direction: event.keyCode == 123 ? -1 : 1)
+                return nil
+            }
+            guard event.keyCode == 53 else { return event }
             self.dismissWindow()
             return nil
         }
@@ -446,7 +542,7 @@ final class AppReleaseWindowController: NSObject, WKNavigationDelegate, WKUIDele
         reloadAllPages: Bool = false
     ) {
         guard let webView else { return }
-        let targetPage = page
+        let targetPage = webViews.first { $0.value === webView }?.key ?? page
         let store = webView.configuration.websiteDataStore.httpCookieStore
         store.getAllCookies { [weak self] cookies in
             let existing = cookies.filter {
@@ -545,10 +641,26 @@ final class AppReleaseWindowController: NSObject, WKNavigationDelegate, WKUIDele
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard self.webView === webView else { return }
         loadFailed = webView.url?.host != "audi.tmallyc.com"
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == "dboardWorkspace" {
+            guard message.frameInfo.securityOrigin.host == "audi.tmallyc.com",
+                  message.webView === webView, let current = page.workspacePage,
+                  let data = message.body as? [String: Any] else { return }
+            if data["kind"] as? String == "navigate",
+               let direction = data["direction"] as? Int, [-1, 1].contains(direction),
+               window?.isKeyWindow == true, window?.attachedSheet == nil {
+                WebWorkspaceRouter.navigate(from: current, direction: direction)
+            } else if data["kind"] as? String == "url",
+                      let text = data["url"] as? String, let url = URL(string: text),
+                      url.host == "audi.tmallyc.com" {
+                webHost?.setWorkspacePage(current, url: url)
+            }
+            return
+        }
         guard message.frameInfo.securityOrigin.host == "audi.tmallyc.com",
               let data = message.body as? [String: Any],
               let kind = data["kind"] as? String else { return }
@@ -573,12 +685,13 @@ final class AppReleaseWindowController: NSObject, WKNavigationDelegate, WKUIDele
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        if (error as NSError).code == NSURLErrorCancelled { return }
+        if (error as NSError).code == NSURLErrorCancelled || self.webView !== webView { return }
         loadFailed = true
         NSLog("DBoard: AppRelease 页面加载失败 %@", error.localizedDescription)
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        guard self.webView === webView else { return }
         loadFailed = true
         NSLog("DBoard: AppRelease 页面加载失败 %@", error.localizedDescription)
     }

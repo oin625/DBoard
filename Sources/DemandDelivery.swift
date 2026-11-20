@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import AppKit
+import Darwin
 
 enum DemandDeliveryError: LocalizedError {
     case message(String)
@@ -211,6 +212,23 @@ final class DemandDeliveryStore {
         .appendingPathComponent(".claude/dboard-development-deliveries.json")
     let url: URL
     init(url: URL = defaultURL) { self.url = url }
+
+    fileprivate func withLock<T>(_ operation: () throws -> T) throws -> T {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let unavailable = DemandDeliveryError.message("本地交付记录暂时无法锁定，请重试。")
+        // The ledger is replaced atomically, so lock a separate file with a stable inode.
+        let fd = open(url.path + ".lock", O_CREAT | O_RDWR | O_CLOEXEC, S_IRUSR | S_IWUSR)
+        guard fd >= 0 else { throw unavailable }
+        defer { close(fd) }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+            if errno == EWOULDBLOCK {
+                throw DemandDeliveryError.message("另一个开发交付正在处理，请稍后重试。")
+            }
+            throw unavailable
+        }
+        return try operation()
+    }
+
     func read() throws -> [String: DemandDeliveryReceipt] {
         guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
         do { return try JSONDecoder().decode([String: DemandDeliveryReceipt].self, from: Data(contentsOf: url)) }
@@ -239,7 +257,7 @@ struct DemandDeliveryServices {
 
 /// Serialized durable checkpoints protect retries even across application restarts.
 final class DemandDeliveryWorkflow {
-    let store: DemandDeliveryStore
+    private let store: DemandDeliveryStore
     let services: DemandDeliveryServices
     init(store: DemandDeliveryStore = DemandDeliveryStore(), services: DemandDeliveryServices = .live) {
         self.store = store; self.services = services
@@ -250,8 +268,55 @@ final class DemandDeliveryWorkflow {
         return formatter.string(from: Date())
     }
 
-    func run(_ plan: DemandDeliveryPlan, stillCurrent: () throws -> Bool,
+    func run(_ plan: DemandDeliveryPlan, cacheURL: URL? = nil, stillCurrent: () throws -> Bool,
              phase: (String) -> Void = { _ in }) throws -> DemandDeliveryReceipt {
+        try store.withLock {
+            var receipt = try confirmDelivery(plan, stillCurrent: stillCurrent, phase: phase)
+            if let cacheURL, let url = receipt.documentURL, !receipt.progressRecorded,
+               recordProgress(plan, documentURL: url, at: cacheURL) {
+                receipt.progressRecorded = true
+                try store.save(receipt)
+            }
+            return receipt
+        }
+    }
+
+    func savedDocumentURL(for key: String) -> String? {
+        try? store.withLock { try store.read()[key]?.documentURL }
+    }
+
+    private func recordProgress(_ plan: DemandDeliveryPlan, documentURL: String, at cacheURL: URL) -> Bool {
+        let id = plan.item.id
+        guard let latest = try? DItemStore.currentRecord(id: id, at: cacheURL),
+              latest.reqFlow == plan.link else { return false }
+        let projects = plan.projects.map(\.declaration)
+        let projectSet = Set(projects)
+        let summary = DemandDeliveryPlan.feedbackSummary
+        let documentLine = "技术说明：" + documentURL
+        let projectPrefix = "工程与分支："
+        let statusLine = "仅提交开发交付物，需求状态未改变。"
+        let legacyProjectPrefix = "开发分支："
+        let found = latest.milestones.contains { milestone in
+            guard milestone.content == summary else { return false }
+            let lines = milestone.details.components(separatedBy: "\n")
+            let prefix: String
+            switch lines.count {
+            case 3 where lines[0] == documentLine && lines[1].hasPrefix(projectPrefix) && lines[2] == statusLine:
+                prefix = projectPrefix
+            case 2 where lines[0] == "技术方案：" + documentURL && lines[1].hasPrefix(legacyProjectPrefix):
+                prefix = legacyProjectPrefix
+            default:
+                return false
+            }
+            return Set(lines[1].dropFirst(prefix.count).split(separator: "；").map(String.init)) == projectSet
+        }
+        if found { return true }
+        let details = documentLine + "\n" + projectPrefix + projects.joined(separator: "；") + "\n" + statusLine
+        return DItemStore.appendProgress(id: id, text: summary, details: details, at: cacheURL, expectedLink: plan.link)
+    }
+
+    private func confirmDelivery(_ plan: DemandDeliveryPlan, stillCurrent: () throws -> Bool,
+                                 phase: (String) -> Void) throws -> DemandDeliveryReceipt {
         try services.validate(plan.link)
         let records = try store.read()
         let previous = records.values.filter { $0.itemID == plan.item.id && $0.reqID == plan.link.id && $0.confirmed && $0.documentURL != nil }
@@ -413,21 +478,9 @@ final class DemandDeliveryCoordinator: ObservableObject {
                     throw DemandDeliveryError.message("技术方案或开发分支已变化，请重新预览后提交。")
                 }
                 key = plan.key
-                var receipt = try self.workflow.run(plan, stillCurrent: {
+                let receipt = try self.workflow.run(plan, cacheURL: self.cacheURL, stillCurrent: {
                     try DemandDeliveryPlan.load(id: id, at: self.cacheURL).key == plan.key
                 }, phase: { message in DispatchQueue.main.async { self.states[id]?.message = message } })
-                if !receipt.progressRecorded {
-                    let latest = try DItemStore.currentItem(id: id, at: self.cacheURL)
-                    if latest.reqFlow == plan.link {
-                        let details = "技术说明：" + (receipt.documentURL ?? "") + "\n工程与分支：" +
-                            plan.projects.map(\.declaration).joined(separator: "；") + "\n仅提交开发交付物，需求状态未改变。"
-                        receipt.progressRecorded = latest.milestones.contains {
-                            $0.content == DemandDeliveryPlan.feedbackSummary && $0.details == details
-                        } || DItemStore.appendProgress(id: id, text: DemandDeliveryPlan.feedbackSummary,
-                            details: details, at: self.cacheURL)
-                        try self.workflow.store.save(receipt)
-                    }
-                }
                 let message = receipt.progressRecorded ? "开发交付物已提交" : "开发交付物已提交，本地进度未保存，请刷新核对"
                 DispatchQueue.main.async {
                     self.states[id] = DemandDeliveryState(message: message, failed: !receipt.progressRecorded,
@@ -435,9 +488,9 @@ final class DemandDeliveryCoordinator: ObservableObject {
                     refresh(plan.link.id)
                 }
             } catch {
-                let documentURL = key.flatMap { try? self.workflow.store.read()[$0]?.documentURL }
+                let documentURL = key.flatMap { self.workflow.savedDocumentURL(for: $0) }
                 DispatchQueue.main.async {
-                    self.states[id] = DemandDeliveryState(message: error.localizedDescription, failed: true, documentURL: documentURL ?? nil)
+                    self.states[id] = DemandDeliveryState(message: error.localizedDescription, failed: true, documentURL: documentURL)
                 }
             }
         }

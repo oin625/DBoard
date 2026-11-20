@@ -4,6 +4,17 @@ import AppKit
 @testable import DBoard
 
 final class DemandKeyboardAccessibilityTests: XCTestCase {
+    private var previousTabNavigation = false
+    override func setUp() {
+        super.setUp()
+        previousTabNavigation = WorkspacePreferences.shared.tabNavigationEnabled
+        WorkspacePreferences.shared.tabNavigationEnabled = true
+    }
+    override func tearDown() {
+        WorkspacePreferences.shared.tabNavigationEnabled = previousTabNavigation
+        super.tearDown()
+    }
+
     @MainActor
     func testNewWindowKindArrowsTabAndDraftRetention() throws {
         _ = NSApplication.shared

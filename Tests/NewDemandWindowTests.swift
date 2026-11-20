@@ -21,7 +21,14 @@ final class NewDemandWindowTests: XCTestCase {
             let controller = NewDemandWindowController(activates: false)
             vm.newDemandWindowPresenter = { controller.show($0) }
             defer { controller.close() }
-            vm.beginNewItemDraft()
+            let plus = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .shift,
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: home.windowNumber,
+                context: nil, characters: "+", charactersIgnoringModifiers: "+", isARepeat: false, keyCode: 24))
+            vm.workspacePage = .todos
+            XCTAssertNotNil(DBoardRootView.handleKey(plus, vm: vm))
+            XCTAssertNil(controller.window)
+            vm.workspacePage = .overview
+            XCTAssertNil(DBoardRootView.handleKey(plus, vm: vm))
             settle()
             let first = try XCTUnwrap(controller.window)
             let id = vm.newItemDraft?.id
@@ -76,6 +83,9 @@ final class NewDemandWindowTests: XCTestCase {
 
     @MainActor
     func testTabMovesBetweenInputsAndRevealsLowerFieldsWhileArrowsKeepTextEditing() throws {
+        let previousTabNavigation = WorkspacePreferences.shared.tabNavigationEnabled
+        WorkspacePreferences.shared.tabNavigationEnabled = true
+        defer { WorkspacePreferences.shared.tabNavigationEnabled = previousTabNavigation }
         try fixture { vm, _ in
             var draft = DItemDraft(newID: "D020", priority: .p1)
             draft.name = "键盘录入"

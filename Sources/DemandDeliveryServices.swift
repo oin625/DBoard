@@ -133,19 +133,44 @@ enum DemandDeliveryRemote {
         let result = ProcessRunner.run(NSHomeDirectory() + "/.qoderwork/bin/dws",
             arguments: arguments + ["--format", "json", "--timeout", "20"],
             environment: ProcessInfo.processInfo.environment, timeout: 35)
-        guard result.succeeded, BusinessResponse.succeeded(result.stdout),
-              let object = try? JSONSerialization.jsonObject(with: result.stdout) as? [String: Any] else {
-            let errorData = result.stderr.isEmpty ? result.stdout : result.stderr
-            let failure = (try? JSONSerialization.jsonObject(with: errorData)) as? [String: Any]
-            let detail = failure?["error"] as? [String: Any]
-            let category = detail?["category"] as? String ?? ""
-            if arguments.prefix(2) == ["doc", "create"], !result.timedOut, result.outputComplete,
-               ["auth", "validation"].contains(category) {
-                throw DemandDeliveryDocumentRejected(message: "钉钉未创建文档，请确认登录与目录权限后重试。")
-            }
-            throw DemandDeliveryError.message("钉钉文档操作失败，请确认 dws 登录与目录权限后重试；已有文档会保留。")
+        return try decodeDWS(result, arguments: arguments)
+    }
+
+    /// Long document writes print progress before their final JSON. Only accept known
+    /// diagnostic lines followed by one complete response, never a partial success.
+    static func replyObject(_ data: Data) -> [String: Any]? {
+        if let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { return value }
+        guard let text = String(data: data, encoding: .utf8),
+              let start = text.firstIndex(of: "{") else { return nil }
+        let prefix = text[..<start].components(separatedBy: .newlines).filter { !$0.trimmed.isEmpty }
+        guard !prefix.isEmpty,
+              prefix.allSatisfy({ $0.hasPrefix("[INFO] ") || $0.hasPrefix("[WARN] ") }),
+              let json = String(text[start...]).data(using: .utf8) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: json)) as? [String: Any]
+    }
+
+    static func decodeDWS(_ result: CommandResult, arguments: [String]) throws -> [String: Any] {
+        let object = replyObject(result.stdout)
+        if result.succeeded, let object,
+           let bytes = try? JSONSerialization.data(withJSONObject: object), BusinessResponse.succeeded(bytes) {
+            return object
         }
-        return object
+        let failure = replyObject(result.stderr) ?? object
+        let detail = failure?["error"] as? [String: Any]
+        let category = detail?["category"] as? String ?? ""
+        let action = arguments.prefix(2).joined(separator: " ")
+        let reason: String
+        if result.timedOut { reason = "请求超时，操作结果待核验" }
+        else if !result.outputComplete { reason = "返回内容不完整，操作结果待核验" }
+        else if let message = detail?["message"] as? String ?? failure?["message"] as? String {
+            reason = message
+        } else if result.exitCode == -1 { reason = "无法启动本机 dws 工具" }
+        else { reason = "返回内容无法解析或未确认成功" }
+        if arguments.prefix(2) == ["doc", "create"], !result.timedOut, result.outputComplete,
+           ["auth", "validation"].contains(category) {
+            throw DemandDeliveryDocumentRejected(message: "钉钉未创建文档（\(action)）：\(reason)")
+        }
+        throw DemandDeliveryError.message("钉钉文档操作失败（\(action)）：\(reason)；已有文档会保留。")
     }
 
     static func folderInfo() throws -> (workspace: String, node: String) {

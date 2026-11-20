@@ -127,6 +127,12 @@ enum DItemStore {
         lines.insert(contentsOf: chunk, at: after)
     }
 
+    static func isDescriptionContinuation(_ line: String) -> Bool {
+        if line.hasPrefix("    ") { return true }
+        return !line.hasPrefix("- **") && !line.hasPrefix("<!--") && !line.hasPrefix("- 📝 ")
+            && !isBoundary(line) && line.trimmed != "---"
+    }
+
     /// 设置顶层字段 `- **key**：value`（空值删除该行）
     private static func setField(_ block: inout [String], key: String, value: String) {
         let tag = "- **\(key)**"
@@ -136,7 +142,7 @@ enum DItemStore {
         if let i = block.firstIndex(where: { $0.hasPrefix(tag) }) {
             var end = i + 1
             if key == "描述" {
-                while end < block.count && !block[end].hasPrefix("- **") && !isBoundary(block[end]) { end += 1 }
+                while end < block.count && isDescriptionContinuation(block[end]) { end += 1 }
             }
             block.replaceSubrange(i..<end, with: replacement)
             return
@@ -212,28 +218,40 @@ enum DItemStore {
         guard d.validationError == nil else { return false }
         d.status = d.scheduledStatus
         return mutate(at: url) { lines in
+            let items = CacheParser.parse(content: lines.joined(separator: "\n")).items
+            let matches = items.filter { $0.id == d.id }
+            guard matches.count == 1, let latest = matches.first,
+                  let r = blockRange(lines, id: d.id) else { return false }
             if let link = d.reqFlow {
                 guard link.isValid,
-                      ReqFlowLinkQueries.linkedItem(for: link,
-                        in: CacheParser.parse(content: lines.joined(separator: "\n")).items,
-                        excludingID: d.id) == nil else { return false }
+                      ReqFlowLinkQueries.linkedItem(for: link, in: items, excludingID: d.id) == nil else { return false }
             }
-            guard let r = blockRange(lines, id: d.id) else { return false }
             var block = Array(lines[r])
             let o = DItemDraft(from: original)
+            let current = DItemDraft(from: latest)
             guard original.incidentReadError == nil else { return false }
             if d.effectiveKind != o.effectiveKind {
                 guard (try? DemandIncident.kind(block)) == o.effectiveKind else { return false }
                 setField(&block, key: "类型", value: d.isIncident ? DemandKind.incident.rawValue : "")
             }
-            if d.headerLine != o.headerLine { block[0] = d.headerLine }
+            if d.headerLine != o.headerLine {
+                guard current.headerLine == o.headerLine else { return false }
+                block[0] = d.headerLine
+            }
             if d.projectFieldValue != o.projectFieldValue { setField(&block, key: "项目", value: d.projectFieldValue) }
-            if d.branch != o.branch { setField(&block, key: "分支", value: d.branch) }
+            if d.branch != o.branch {
+                guard current.branch == o.branch else { return false }
+                setField(&block, key: "分支", value: d.branch)
+            }
             if d.desc != o.desc {
+                guard current.desc == o.desc else { return false }
                 setField(&block, key: "描述", value: d.desc)
                 setField(&block, key: "概括", value: "")
             }
-            if d.reqFlow != o.reqFlow { setField(&block, key: "需求流", value: d.reqFlow?.markdown ?? "") }
+            if d.reqFlow != o.reqFlow {
+                guard current.reqFlow == o.reqFlow else { return false }
+                setField(&block, key: "需求流", value: d.reqFlow?.markdown ?? "")
+            }
             if d.chatLinks != o.chatLinks {
                 do {
                     guard try DemandChatLinksCodec.read(block) == o.chatLinks else { return false }
@@ -245,6 +263,7 @@ enum DItemStore {
                 DemandPrompt.set(&block, value: d.prompt)
             }
             if d.priority != original.priority {
+                guard latest.priority == original.priority else { return false }
                 _ = cut(&lines, r)
                 insert(&lines, block: block, priority: d.priority)
             } else {
@@ -342,10 +361,16 @@ enum DItemStore {
         }
     }
 
-    static func appendProgress(id: String, text: String, details: String = "", at url: URL? = nil) -> Bool {
+    static func appendProgress(id: String, text: String, details: String = "", at url: URL? = nil,
+                               expectedLink: ReqFlowLink? = nil) -> Bool {
         guard let entry = DemandProgress.entry(date: today(), summary: text, details: details) else { return false }
         return mutate(at: url) { lines in
             guard let r = blockRange(lines, id: id) else { return false }
+            if let expectedLink {
+                let matches = CacheParser.parse(content: lines.joined(separator: "\n")).items.filter { $0.id == id }
+                guard matches.count == 1, let item = matches.first, item.reqFlow == expectedLink,
+                      item.status != .completed else { return false }
+            }
             var block = Array(lines[r])
             if let p = block.firstIndex(where: { $0.hasPrefix("- **进度**") }) {
                 var e = p + 1
@@ -550,10 +575,10 @@ extension DBoardViewModel {
     }
 
     @discardableResult
-    func copyCurrentState(_ id: String, at url: URL? = nil, pasteboard: NSPasteboard = .general) -> Bool {
+    func copyCurrentState(_ id: String, at url: URL? = nil, archiveRevision: String? = nil, pasteboard: NSPasteboard = .general) -> Bool {
         do {
-            let latest = try DItemStore.currentItem(id: id, at: url)
-            let snapshot = DboardAITaskContext.readInstruction(item: latest, cacheURL: url)
+            let latest = try DItemStore.currentItem(id: id, at: url, archiveRevision: archiveRevision)
+            let snapshot = DboardAITaskContext.readInstruction(item: latest, cacheURL: url, archiveRevision: archiveRevision)
             pasteboard.clearContents()
             guard pasteboard.setString(snapshot, forType: .string) else {
                 flash("复制现状失败，请重试")
@@ -586,10 +611,10 @@ extension DBoardViewModel {
     }
 
     @discardableResult
-    func copyReviewTask(_ id: String, at url: URL? = nil, pasteboard: NSPasteboard = .general) -> Bool {
+    func copyReviewTask(_ id: String, at url: URL? = nil, archiveRevision: String? = nil, pasteboard: NSPasteboard = .general) -> Bool {
         do {
-            let latest = try DItemStore.currentItem(id: id, at: url)
-            let instruction = DboardAITaskContext.reviewInstruction(item: latest, cacheURL: url)
+            let latest = try DItemStore.currentItem(id: id, at: url, archiveRevision: archiveRevision)
+            let instruction = DboardAITaskContext.reviewInstruction(item: latest, cacheURL: url, archiveRevision: archiveRevision)
             pasteboard.clearContents()
             guard pasteboard.setString(instruction, forType: .string) else {
                 flash("代码审查指令复制失败，请重试")
@@ -794,7 +819,9 @@ extension DBoardViewModel {
         }
         block[0] += " ✅" + DemandDates.today()
         block.append("- 📝 \(DemandDates.today()) 完成 ✅")
-        let entry = ArchiveJournal.Entry(id: item.id, original: original, archived: block, state: .submitted, createdAt: Date())
+        block.append("<!-- dboard-archive-id: \(UUID().uuidString) -->")
+        let entry = ArchiveJournal.Entry(id: item.id, original: original, archived: block,
+                                         state: .submitted, createdAt: Date(), priority: item.priority)
         guard archiveJournal.save(entry) else { flash("无法保存归档恢复快照，未执行远端操作"); return }
         archivingIDs.insert(item.id)
         showFeedback("正在完成 \(item.id)，请勿重复操作")
@@ -827,6 +854,7 @@ extension DBoardViewModel {
 
 // MARK: - 编辑表单（编辑 / 新建共用）
 struct DItemEditForm: View {
+    @ObservedObject private var chatPrivacy = DemandChatPrivacy.shared
     @EnvironmentObject var vm: DBoardViewModel
     @EnvironmentObject var theme: ThemeManager
     @State var draft: DItemDraft
@@ -866,17 +894,19 @@ struct DItemEditForm: View {
                     Divider().padding(.horizontal, 14)
                     requirementLink.padding(14)
                 }
-                Divider().padding(.horizontal, 14)
-                DisclosureGroup(isExpanded: $chatsExpanded) {
-                    DemandChatLinksFields(links: Binding(get: { draft.chatLinks ?? DemandChatLinks() },
-                        set: { draft.chatLinks = $0.optional })).padding(.top, 12)
-                    if let error = vm.items.first(where: { $0.id == draft.id })?.chatReadError {
-                        Text(error).dboardFont(size: 11).foregroundStyle(.orange)
-                    }
-                } label: {
-                    sectionLabel("关联群聊", symbol: "bubble.left.and.bubble.right",
-                                 detail: draft.chatLinks?.isEmpty == false ? "已关联" : "可选")
-                }.demandKeyboardID("demand-chats-section").padding(14)
+                if chatPrivacy.enabled {
+                    Divider().padding(.horizontal, 14)
+                    DisclosureGroup(isExpanded: $chatsExpanded) {
+                        DemandChatLinksFields(links: Binding(get: { draft.chatLinks ?? DemandChatLinks() },
+                            set: { draft.chatLinks = $0.optional })).padding(.top, 12)
+                        if let error = vm.items.first(where: { $0.id == draft.id })?.chatReadError {
+                            Text(error).dboardFont(size: 11).foregroundStyle(.orange)
+                        }
+                    } label: {
+                        sectionLabel("关联群聊", symbol: "bubble.left.and.bubble.right",
+                                     detail: draft.chatLinks?.isEmpty == false ? "已关联" : "可选")
+                    }.demandKeyboardID("demand-chats-section").padding(14)
+                }
                 Divider().padding(.horizontal, 14)
                 DisclosureGroup(isExpanded: $spellExpanded) {
                     DemandPromptFields(sections: $draft.promptSections, compact: true).padding(.top, 12)

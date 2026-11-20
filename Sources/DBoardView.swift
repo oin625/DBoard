@@ -92,7 +92,6 @@ final class DBoardViewModel: ObservableObject {
     @Published var syncTime: String? = nil
     /// 昨天（最近一个历史块），兼容旧引用
     var prevSec: TodoSection? { prevSecs.first }
-    @Published var viewMode: ViewMode = .priority
     @Published var syncText: String = ""
     @Published var syncKind: SyncKind = .idle
     @Published var expandedIDs: Set<String> = []
@@ -119,6 +118,8 @@ final class DBoardViewModel: ObservableObject {
     lazy var deliveryCoordinator = DemandDeliveryCoordinator()
     @Published var feedback: WorkspaceFeedback?
     private var feedbackDismiss: DispatchWorkItem?
+    let spaces = WorkspaceSpaces()
+    var space: DBoardSpace { get { spaces.selection } set { spaces.select(newValue) } }
     @Published var workspacePage: WorkspacePage? = .overview
     @Published var demandFilter: DemandFilter = .all
     @Published var demandQuery = ""
@@ -151,7 +152,6 @@ final class DBoardViewModel: ObservableObject {
     let completionRequest: ((DItem) -> Void)?
     private let configuredArchiveStore: DemandArchiveStore?
     private var archiveObservation: AnyCancellable?
-    var attentionItems: [DItem] { items.filter { $0.isUrgent || $0.status == .inProgress }.sorted { $0.priority < $1.priority } }
 
     enum SyncKind { case idle, pending, syncing, done, fail }
 
@@ -189,6 +189,7 @@ final class DBoardViewModel: ObservableObject {
     }
 
     func openDemandEditor(_ kind: DemandCardEditor.Kind, item: DItem, deliveryPlan: DemandDeliveryPlan? = nil, centerIn: NSRect? = nil) {
+        guard kind != .chats || DemandChatPrivacy.isEnabled else { return }
         if demandEditorInWindow, let dismissal = demandEditorDismissal,
            demandEditor?.id != item.id + ":" + kind.rawValue {
             dismissal { [weak self] in
@@ -211,8 +212,12 @@ final class DBoardViewModel: ObservableObject {
     }
 
     func focusItem(_ id: String) {
-        if items.contains(where: { $0.id == id }) {
-            showDemands()
+        if let item = items.first(where: { $0.id == id }) {
+            switch item.status {
+            case .pending: showDemands(.pending)
+            case .suspended: showDemands(.suspended)
+            case .inProgress, .completed: showDemands()
+            }
             selectedID = id
             expandedIDs.insert(id)
         } else {
@@ -324,7 +329,6 @@ final class DBoardViewModel: ObservableObject {
     }
     func expandAll() { expandedIDs = Set(items.map { $0.id }) }
     func collapseAll() { expandedIDs = [] }
-    func setViewMode(_ m: ViewMode) { viewMode = m }
     func markSelfWrite() { lastSelfWrite = Date() }
 
     func toggleTodo(_ item: TodoItem) {
@@ -381,7 +385,6 @@ final class DBoardViewModel: ObservableObject {
         var es: [PaletteEntry] = []
         let q = paletteQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let acts: [(String, String, () -> Void)] = [
-            ("切换视图", "command", { self.setViewMode(self.viewMode == .priority ? .project : .priority); self.paletteOpen = false }),
             ("展开全部需求", "arrow.up.left.and.arrow.down.right", { self.expandAll(); self.paletteOpen = false }),
             ("折叠全部需求", "arrow.down.right.and.arrow.up.left", { self.collapseAll(); self.paletteOpen = false }),
             ("同步钉钉", "bolt", { self.doSyncNow(); self.paletteOpen = false }),
@@ -449,7 +452,7 @@ final class DBoardViewModel: ObservableObject {
 
     // MARK: 键盘选中导航
     func moveSel(_ d: Int) {
-        let ids = filteredItems.map { $0.id }
+        let ids = (demandFilter == .completed ? filteredItems : visibleOpenDemands).map(\.id)
         guard !ids.isEmpty else { return }
         let cur = selectedID.flatMap { ids.firstIndex(of: $0) } ?? -1
         selectedID = ids[(cur + d + ids.count) % ids.count]
@@ -542,6 +545,7 @@ final class DBoardViewModel: ObservableObject {
 
 // MARK: - 根视图
 struct DBoardRootView: View {
+    @ObservedObject var personalStore: TryStore = .shared
     @EnvironmentObject var vm: DBoardViewModel
     @EnvironmentObject var theme: ThemeManager
     @ObservedObject private var prefs = WorkspacePreferences.shared
@@ -554,69 +558,11 @@ struct DBoardRootView: View {
 
     var body: some View {
         ZStack {
-            if popoverMode {
-                VStack(spacing: 0) {
-                    HeaderView(popoverMode: true)
-                    if vm.workspacePage != .overview {
-                        HStack {
-                            Button { vm.workspacePage = .overview } label: { Label("概览", systemImage: "chevron.left") }
-                            Spacer()
-                            Text((vm.workspacePage ?? .overview).title).dboardFont(size: 13, weight: .semibold)
-                        }
-                        .demandButtonStyle(.plain).padding(.horizontal, 20).padding(.vertical, 12)
-                    }
-                    workspaceContent
-                    FooterView()
-                }
-            } else {
-                NavigationSplitView {
-                    List(selection: $vm.workspacePage) {
-                        Section("工作台") {
-                            ForEach(WorkspacePage.allCases) { page in
-                                NavigationLink(value: page) { Label(page.title, systemImage: page.icon) }
-                            }
-                        }
-                        Section("常用入口") {
-                            ForEach(prefs.favorites.compactMap { id in DBoardModule.visible.first { $0.id == id } }) { module in
-                                Button { module.launch() } label: { Label(module.title, systemImage: module.icon) }
-                                    .demandButtonStyle(.plain)
-                            }
-                        }
-                        Section {
-                            Button { openSettings() } label: { Label("设置", systemImage: "gearshape") }
-                                .demandButtonStyle(.plain)
-                        }
-                    }
-                    .listStyle(.sidebar)
-                    .scrollContentBackground(.hidden)
-                    .background { DemandCanvasBackground() }
-                    .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
-                } detail: {
-                    VStack(spacing: 0) {
-                        workspaceContent
-                        FooterView()
-                    }
-                    .frame(minWidth: 480)
-                    .background { DemandCanvasBackground() }
-                    .navigationTitle((vm.workspacePage ?? .overview).title)
-                    .toolbar {
-                        ToolbarItemGroup(placement: .automatic) {
-                            if vm.workspacePage == .demands {
-                                Picker("排序", selection: $vm.viewMode) {
-                                    Text("按优先级").tag(ViewMode.priority)
-                                    Text("按项目").tag(ViewMode.project)
-                                }.pickerStyle(.menu)
-                            }
-                            Button { vm.paletteQuery = ""; vm.paletteSel = 0; vm.paletteOpen = true } label: {
-                                Image(systemName: "magnifyingglass")
-                            }
-                            DBoardModuleMenu()
-                            WorkspacePinButton(id: "dboard")
-                            DBoardSettingsButton()
-                        }
-                    }
-                }
-                .navigationSplitViewStyle(.balanced)
+            WorkspaceSpacePager(spaces: vm.spaces) {
+                mainWorkspace
+            } personal: {
+                TryWorkspaceView(store: personalStore, keyboardEnabled: false)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             if vm.paletteOpen {
                 Color.black.opacity(0.2).ignoresSafeArea().onTapGesture { vm.paletteOpen = false }
@@ -661,7 +607,7 @@ struct DBoardRootView: View {
             vm.refreshCodeReviews()
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak vm] event in
                 guard event.window?.windowNumber == windowNumber else { return event }
-                return Self.handleKey(event, vm: vm) {
+                return Self.handleKey(event, vm: vm, personalStore: personalStore) {
                     guard let app = NSApp.delegate as? AppDelegate else { return }
                     if popoverMode { app.closeMainPopover() } else { app.hidePanelWindow() }
                 }
@@ -670,6 +616,69 @@ struct DBoardRootView: View {
         .onDisappear {
             if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
         }
+    }
+
+    @ViewBuilder
+    private var mainWorkspace: some View {
+        if popoverMode {
+            VStack(spacing: 0) {
+                HeaderView(popoverMode: true)
+                if vm.workspacePage != .overview {
+                    HStack {
+                        Button { vm.workspacePage = .overview } label: { Label("概览", systemImage: "chevron.left") }
+                        Spacer()
+                        Text((vm.workspacePage ?? .overview).title).dboardFont(size: 13, weight: .semibold)
+                    }
+                    .demandButtonStyle(.plain).padding(.horizontal, 20).padding(.vertical, 12)
+                }
+                workspaceContent
+                FooterView()
+            }
+        } else {
+            NavigationSplitView {
+                List(selection: $vm.workspacePage) {
+                    Section("工作台") {
+                        ForEach(WorkspacePage.allCases) { page in
+                            NavigationLink(value: page) { Label(page.title, systemImage: page.icon) }
+                        }
+                    }
+                    Section("常用入口") {
+                        ForEach(prefs.favorites.compactMap { id in DBoardModule.visible.first { $0.id == id } }) { module in
+                            Button { module.launch() } label: { Label(module.title, systemImage: module.icon) }
+                                .demandButtonStyle(.plain)
+                        }
+                    }
+                    Section {
+                        Button { openSettings() } label: { Label("设置", systemImage: "gearshape") }
+                            .demandButtonStyle(.plain)
+                    }
+                }
+                .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
+                .background { DemandCanvasBackground() }
+                .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
+            } detail: {
+                VStack(spacing: 0) {
+                    workspaceContent
+                    FooterView()
+                }
+                .frame(minWidth: 480)
+                .background { DemandCanvasBackground() }
+                .navigationTitle((vm.workspacePage ?? .overview).title)
+                .toolbar {
+                    ToolbarItemGroup(placement: .automatic) {
+                        Button { vm.paletteQuery = ""; vm.paletteSel = 0; vm.paletteOpen = true } label: {
+                            Image(systemName: "magnifyingglass")
+                        }
+                        DBoardModuleMenu()
+                        WorkspacePinButton(id: "dboard")
+                        DBoardSettingsButton()
+                    }
+                }
+            }
+            .navigationSplitViewStyle(.balanced)
+        }
+
     }
 
     private var workspaceContent: some View {
@@ -701,9 +710,29 @@ struct DBoardRootView: View {
         }
     }
 
-    static func handleKey(_ event: NSEvent, vm: DBoardViewModel?, dismiss: (() -> Void)? = nil) -> NSEvent? {
+    static func handleKey(_ event: NSEvent, vm: DBoardViewModel?, personalStore: TryStore? = nil, dismiss: (() -> Void)? = nil) -> NSEvent? {
         guard let vm, event.window?.attachedSheet == nil else { return event }
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if let editor = event.window?.firstResponder as? NSTextView, editor.hasMarkedText() { return event }
+        // Home is a mouse workspace; no Tab navigation or focus-ring hierarchy is installed here.
+        if event.keyCode == 48 { return nil }
+        if [UInt16(123), 124].contains(event.keyCode), mods.isEmpty, !vm.paletteOpen,
+           !(event.window?.firstResponder is NSTextView), !(event.window?.firstResponder is NSControl) {
+            vm.spaces.move(event.keyCode == 124 ? 1 : -1)
+            return nil
+        }
+        if vm.space == .personal {
+            if event.keyCode == 53 {
+                if let editor = event.window?.firstResponder as? TryNoteTextView, editor.isEditable { return event }
+                event.window?.makeFirstResponder(nil)
+                guard personalStore?.flush() != false else { return nil }
+                if personalStore?.selectedID != nil { personalStore?.selectedID = nil }
+                else if let dismiss { dismiss() }
+                else { event.window?.orderOut(nil) }
+                return nil
+            }
+            return event
+        }
         let c = (event.charactersIgnoringModifiers ?? "").lowercased()
         if mods.contains(.command) && c == "k" {
             vm.paletteOpen.toggle(); vm.paletteQuery = ""; vm.paletteSel = 0; return nil
@@ -719,6 +748,11 @@ struct DBoardRootView: View {
         }
         if event.keyCode == 53 && vm.editingFormCount > 0 { return event }
         if event.window?.firstResponder is NSTextView { return event }
+        if (vm.workspacePage ?? .overview) == .overview, vm.editingFormCount == 0,
+           event.characters == "+", mods.intersection([.command, .control, .option]).isEmpty {
+            if !event.isARepeat { vm.beginNewItemDraft() }
+            return nil
+        }
         if mods.isEmpty && (c == "j" || c == "k") {
             vm.workspacePage = .demands; vm.moveSel(c == "j" ? 1 : -1); return nil
         }
@@ -880,53 +914,6 @@ struct HeaderIconButton: View {
     }
 }
 
-// MARK: - 需求分组
-struct NeedsSection: View {
-    @EnvironmentObject var vm: DBoardViewModel
-    @EnvironmentObject var theme: ThemeManager
-    @EnvironmentObject var fm: FontManager
-    var focused = false
-    var items: [DItem]? = nil
-    private var displayedItems: [DItem] { items ?? (focused ? Array(vm.attentionItems.prefix(6)) : vm.filteredItems) }
-
-    var groups: [(String, Color, [DItem])] {
-        if vm.viewMode == .project {
-            var order: [String] = []
-            var g: [String: [DItem]] = [:]
-            for it in displayedItems {
-                if g[it.project] == nil { order.append(it.project) }
-                g[it.project, default: []].append(it)
-            }
-            return order.map { ($0, Color.secondary, g[$0]!) }
-        } else {
-            return ItemPriority.allCases.compactMap { p in
-                let arr = displayedItems.filter { $0.priority == p }
-                return arr.isEmpty ? nil : (p.title, p.color, arr)
-            }
-        }
-    }
-
-    var body: some View {
-        ForEach(Array(groups.enumerated()), id: \.element.0) { gi, grp in
-            HStack(spacing: 6) {
-                Circle().fill(grp.1).frame(width: 6, height: 6)
-                Text(grp.0).dboardFont(size: 13, weight: .semibold).foregroundStyle(theme.current.textSecondary)
-                Spacer()
-                Text("\(grp.2.count)").font(.system(size: 11, design: .monospaced)).foregroundStyle(theme.current.textMuted)
-            }
-            .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 8)
-            .transition(.move(edge: .top).combined(with: .opacity))
-            VStack(spacing: 10) {
-                ForEach(Array(grp.2.enumerated()), id: \.element.id) { i, item in
-                    ItemCardView(item: item, appearDelay: 0).id(item.id)
-                }
-            }
-            .padding(.horizontal, 4)
-        }
-        .animation(.spring(response: 0.5, dampingFraction: 0.8), value: vm.items.count)
-    }
-}
-
 /// Display the most recently appended record first; dates can repeat within the same day.
 struct DemandProgressHistoryView: View {
     @EnvironmentObject var theme: ThemeManager
@@ -964,6 +951,7 @@ struct DemandProgressHistoryView: View {
 
 // MARK: - 需求卡片
 struct ItemCardView: View {
+    @ObservedObject private var chatPrivacy = DemandChatPrivacy.shared
     @EnvironmentObject var vm: DBoardViewModel
     @EnvironmentObject var theme: ThemeManager
     @EnvironmentObject var fm: FontManager
@@ -1017,6 +1005,7 @@ struct ItemCardView: View {
                             .contentShape(Rectangle())
                     }
                         .demandButtonStyle(.plain).accessibilityLabel("\(expanded ? "收起" : "展开") \(item.id) \(item.displayTitle)")
+                        .demandKeyboardID("demand-list-toggle-" + item.id)
                     cardMeta
                     DemandReminderView(item: item)
                     if let version = item.version {
@@ -1142,22 +1131,24 @@ struct ItemCardView: View {
     @ViewBuilder
     private var cardDetails: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Button { vm.openDemandEditor(.chats, item: item) } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "bubble.left.and.bubble.right")
-                    Text(item.chatLinks?.summary ?? "关联群聊").lineLimit(2).multilineTextAlignment(.leading)
-                    Spacer()
-                    Text(item.chatLinks == nil ? "添加" : "管理").dboardFont(size: 11)
-                    Image(systemName: "chevron.right").dboardFont(size: 10)
+            if chatPrivacy.enabled {
+                Button { vm.openDemandEditor(.chats, item: item) } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "bubble.left.and.bubble.right")
+                        Text(item.chatLinks?.summary ?? "关联群聊").lineLimit(2).multilineTextAlignment(.leading)
+                        Spacer()
+                        Text(item.chatLinks == nil ? "添加" : "管理").dboardFont(size: 11)
+                        Image(systemName: "chevron.right").dboardFont(size: 10)
+                    }
+                    .dboardFont(size: 12).foregroundStyle(.secondary)
+                    .padding(.horizontal, 8).frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+                    .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
+                    .contentShape(Rectangle())
                 }
-                .dboardFont(size: 12).foregroundStyle(.secondary)
-                .padding(.horizontal, 8).frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
-                .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
-                .contentShape(Rectangle())
-            }
-            .demandButtonStyle(.plain).accessibilityIdentifier("demand-chats-" + item.id).demandKeyboardID("demand-chats-" + item.id)
-            if let error = item.chatReadError {
-                Text(error).dboardFont(size: 12).foregroundStyle(.orange)
+                .demandButtonStyle(.plain).accessibilityIdentifier("demand-chats-" + item.id).demandKeyboardID("demand-chats-" + item.id)
+                if let error = item.chatReadError {
+                    Text(error).dboardFont(size: 12).foregroundStyle(.orange)
+                }
             }
             if !item.changes.isEmpty {
                 HStack {

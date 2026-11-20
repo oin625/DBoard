@@ -31,7 +31,7 @@ final class DemandChangeDraftTests: XCTestCase {
             window.isReleasedWhenClosed = false
             let controller = NSHostingController(rootView: AnyView(
                 DemandChangesEditor(item: item, draftStore: vm.changeDraftStore, cancel: {}, refreshOnAppear: false)
-                    .environmentObject(vm)))
+                    .environmentObject(vm).environmentObject(ThemeManager.shared).environmentObject(FontManager.shared)))
             window.contentViewController = controller
             window.orderBack(nil)
             defer { window.close() }
@@ -47,7 +47,7 @@ final class DemandChangeDraftTests: XCTestCase {
             let relaunched = DBoardViewModel(loadCache: false, changeDraftStore: DemandChangeDraftStore(url: file))
             controller.rootView = AnyView(
                 DemandChangesEditor(item: item, draftStore: relaunched.changeDraftStore, cancel: {}, refreshOnAppear: false)
-                    .environmentObject(relaunched))
+                    .environmentObject(relaunched).environmentObject(ThemeManager.shared).environmentObject(FontManager.shared))
             settle(window)
             XCTAssertEqual(try XCTUnwrap(findTextEditor(try XCTUnwrap(window.contentView))).string, text)
             XCTAssertTrue(item.changes.isEmpty)

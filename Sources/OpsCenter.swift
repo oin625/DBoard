@@ -321,8 +321,9 @@ struct DBoardModule: Identifiable {
     let icon: String
     private let defaultShortcut: String
     var shortcut: String {
-        guard ShortcutPreferences.defaultsBindings[id] != nil else { return defaultShortcut }
-        return ShortcutPreferences.shared.binding(for: id)?.title ?? ""
+        let shortcutID = id != "logs" && WebWorkspacePage.allCases.contains { $0.moduleID == id } ? "webworkspace" : id
+        guard ShortcutPreferences.defaultsBindings[shortcutID] != nil else { return defaultShortcut }
+        return ShortcutPreferences.shared.binding(for: shortcutID)?.title ?? ""
     }
     var searchText: String { ([title, id] + aliases).joined(separator: " ").lowercased() }
     private var aliases: [String] {
@@ -335,7 +336,7 @@ struct DBoardModule: Identifiable {
         case "clipboard": return ["剪贴板", "复制", "粘贴", "clip"]
         case "skills": return ["技能", "MCP", "Hook", "Agent", "上下文", "Context"]
         case "activitymonitor": return ["活动监视器", "Activity Monitor", "卡顿", "CPU", "内存", "进程"]
-        case "techscout": return ["资讯", "新闻", "科技"]
+        case "githubtrending": return ["GitHub", "热门", "开源", "项目", "趋势", "排名", "trending"]
         case "reply": return ["钉钉", "回复", "值守", "白名单", "配方"]
         default: return []
         }
@@ -364,7 +365,7 @@ struct DBoardModule: Identifiable {
         DBoardModule(id: "audihome", title: "Audi 首页", icon: "house", shortcut: "⌃W") { AppReleaseWindowController.shared.toggleHome() },
         DBoardModule(id: "clipboard", title: "剪切板历史", icon: "doc.on.clipboard", shortcut: "⌥V") { ClipboardBoardWindowController.shared.show() },
         DBoardModule(id: "skills", title: "Skills 看板", icon: "wand.and.stars", shortcut: "") { post("openSkillsBoard") },
-        DBoardModule(id: "techscout", title: "科技资讯", icon: "antenna.radiowaves.left.and.right", shortcut: "") { post("openTechScout") },
+        DBoardModule(id: "githubtrending", title: "GitHub 热门", icon: "chart.line.uptrend.xyaxis", shortcut: "") { post("openGitHubTrending") },
         DBoardModule(id: "activitymonitor", title: "打开活动监视器", icon: "waveform.path.ecg", shortcut: "") {
             NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app"))
         },

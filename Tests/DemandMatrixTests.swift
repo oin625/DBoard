@@ -36,19 +36,6 @@ final class DemandMatrixTests: XCTestCase {
         XCTAssertEqual(DemandMatrix.items(vm.filteredItems, in: .p1).map(\.id), ["D887"])
     }
 
-    func testLayoutSelectionPersistsAndInvalidStoredValueFallsBack() {
-        let name = "DBoardMatrixTests." + UUID().uuidString
-        let defaults = UserDefaults(suiteName: name)!
-        defer { defaults.removePersistentDomain(forName: name) }
-        let prefs = WorkspacePreferences(defaults: defaults)
-        prefs.demandLayout = .matrix
-        XCTAssertEqual(WorkspacePreferences(defaults: defaults).demandLayout, .matrix)
-        prefs.demandLayout = .list
-        XCTAssertEqual(WorkspacePreferences(defaults: defaults).demandLayout, .list)
-        defaults.set("removed-layout", forKey: "workspace.demandLayout")
-        XCTAssertEqual(WorkspacePreferences(defaults: defaults).demandLayout, .list)
-    }
-
     @MainActor
     func testCardOpensFullDetailsAndCanContinueIntoEditing() throws {
         let vm = DBoardViewModel(loadCache: false)
@@ -86,11 +73,6 @@ final class DemandMatrixTests: XCTestCase {
         processDefaults.setVolatileDomain(isolatedArguments, forName: UserDefaults.argumentDomain)
         defer { processDefaults.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain) }
         let before = try Data(contentsOf: URL(fileURLWithPath: CacheFile.path))
-        let name = "DBoardMatrixSnapshots." + UUID().uuidString
-        let defaults = UserDefaults(suiteName: name)!
-        defer { defaults.removePersistentDomain(forName: name) }
-        let prefs = WorkspacePreferences(defaults: defaults)
-        prefs.demandLayout = .matrix
         let vm = DBoardViewModel(loadCache: false)
         vm.items = [
             item("D881", .p0, status: .inProgress, title: "车点点锁券链路改造"),
@@ -116,22 +98,13 @@ final class DemandMatrixTests: XCTestCase {
             try snapshot(window, path: output + "/matrix-" + name + ".png")
             window.close()
             let overview = ScrollView {
-                WorkspaceOverview(preferences: prefs)
+                WorkspaceOverview()
                     .environmentObject(vm).environmentObject(ThemeManager.shared).environmentObject(FontManager.shared)
             }.environment(\.colorScheme, name == "dark" ? .dark : .light)
             let home = host(overview, width: width, height: 760)
             home.appearance = NSAppearance(named: appearance)
             try snapshot(home, path: output + "/overview-" + name + ".png")
             home.close()
-            prefs.demandLayout = .list
-            let list = host(ScrollView {
-                WorkspaceOverview(preferences: prefs)
-                    .environmentObject(vm).environmentObject(ThemeManager.shared).environmentObject(FontManager.shared)
-            }.environment(\.colorScheme, name == "dark" ? .dark : .light), width: width, height: 760)
-            list.appearance = NSAppearance(named: appearance)
-            try snapshot(list, path: output + "/list-" + name + ".png")
-            list.close()
-            prefs.demandLayout = .matrix
         }
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: CacheFile.path)), before)
     }

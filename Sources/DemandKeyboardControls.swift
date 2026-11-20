@@ -111,6 +111,7 @@ private struct DemandKeyboardMenuModifier: ViewModifier {
 
 private struct DemandKeyboardActionTarget: NSViewRepresentable {
     let action: () -> Void
+    @ObservedObject private var preferences = WorkspacePreferences.shared
     @Environment(\.isEnabled) private var enabled
     @Environment(\.demandKeyboardIdentifier) private var identifier
     @Environment(\.demandKeyboardSelected) private var selected
@@ -119,6 +120,7 @@ private struct DemandKeyboardActionTarget: NSViewRepresentable {
     func makeNSView(context: Context) -> DemandKeyboardActionView { DemandKeyboardActionView() }
     func updateNSView(_ view: DemandKeyboardActionView, context: Context) {
         view.action = action
+        view.tabNavigationEnabled = preferences.tabNavigationEnabled
         view.enabled = enabled
         view.keyboardIdentifier = identifier
         view.selected = selected
@@ -127,6 +129,7 @@ private struct DemandKeyboardActionTarget: NSViewRepresentable {
 }
 
 private struct DemandKeyboardMenuTarget: NSViewRepresentable {
+    @ObservedObject private var preferences = WorkspacePreferences.shared
     @Environment(\.demandFloatingCanvas) private var active
     @Environment(\.isEnabled) private var enabled
     @Environment(\.demandKeyboardIdentifier) private var identifier
@@ -135,6 +138,7 @@ private struct DemandKeyboardMenuTarget: NSViewRepresentable {
     func makeNSView(context: Context) -> DemandKeyboardActionView { DemandKeyboardActionView() }
     func updateNSView(_ view: DemandKeyboardActionView, context: Context) {
         view.enabled = active && enabled
+        view.tabNavigationEnabled = preferences.tabNavigationEnabled
         view.focusColor = focusColor
         view.keyboardIdentifier = identifier
         view.action = { [weak view] in
@@ -156,6 +160,15 @@ final class DemandKeyboardActionView: NSView {
     static let focusRingIdleDelay: TimeInterval = 2.5
     var action: (() -> Void)?
     var enabled = true
+    var tabNavigationEnabled = false {
+        didSet {
+            guard tabNavigationEnabled != oldValue else { return }
+            if !tabNavigationEnabled {
+                ringHide?.cancel(); ringHide = nil; ringVisible = false
+            }
+            updateRing()
+        }
+    }
     var keyboardIdentifier = ""
     var selected = false
     var focusColor = NSColor.systemBlue {
@@ -167,7 +180,10 @@ final class DemandKeyboardActionView: NSView {
 
     deinit { ringHide?.cancel() }
 
-    override var acceptsFirstResponder: Bool { enabled && !isHiddenOrHasHiddenAncestor }
+    override var acceptsFirstResponder: Bool {
+        enabled && !isHiddenOrHasHiddenAncestor &&
+            (tabNavigationEnabled || keyboardIdentifier.hasPrefix("demand-kind-"))
+    }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func becomeFirstResponder() -> Bool {
@@ -215,7 +231,7 @@ final class DemandKeyboardActionView: NSView {
 
     /// Only the visual hint expires; Enter and the next Tab still use this control's focus.
     func revealFocusRing() {
-        guard hasFocus else { return }
+        guard hasFocus, tabNavigationEnabled else { return }
         ringHide?.cancel()
         ringVisible = true
         updateRing()
@@ -230,6 +246,12 @@ final class DemandKeyboardActionView: NSView {
     }
 
     private func updateRing(animated: Bool = false) {
+        guard tabNavigationEnabled else {
+            layer?.removeAnimation(forKey: "keyboard-focus-opacity")
+            layer?.borderWidth = 0
+            layer?.opacity = 0
+            return
+        }
         wantsLayer = true
         guard let layer else { return }
         let previousOpacity = layer.presentation()?.opacity ?? layer.opacity

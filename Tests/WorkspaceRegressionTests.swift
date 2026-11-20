@@ -18,9 +18,9 @@ final class WorkspaceRegressionTests: XCTestCase {
         let (defaults, name) = isolatedDefaults()
         defer { defaults.removePersistentDomain(forName: name) }
         let prefs = ShortcutPreferences(defaults: defaults)
-        let original = prefs.binding(for: "reqflow")
-        XCTAssertFalse(prefs.set(prefs.binding(for: "logs")!, for: "reqflow"))
-        XCTAssertEqual(prefs.binding(for: "reqflow"), original)
+        let original = prefs.binding(for: "webworkspace")
+        XCTAssertFalse(prefs.set(prefs.binding(for: "logs")!, for: "webworkspace"))
+        XCTAssertEqual(prefs.binding(for: "webworkspace"), original)
         XCTAssertTrue(prefs.error?.contains("Audi 日志") == true)
         XCTAssertTrue(prefs.overrides.isEmpty)
     }
@@ -31,15 +31,15 @@ final class WorkspaceRegressionTests: XCTestCase {
         let prefs = ShortcutPreferences(defaults: defaults)
         prefs.setEnabled(false, for: "logs")
         let logBinding = ShortcutPreferences.defaultsBindings["logs"]!
-        XCTAssertTrue(prefs.set(logBinding, for: "reqflow"))
+        XCTAssertTrue(prefs.set(logBinding, for: "webworkspace"))
         let restored = ShortcutPreferences(defaults: defaults)
         XCTAssertNil(restored.binding(for: "logs"))
-        XCTAssertEqual(restored.binding(for: "reqflow"), logBinding)
+        XCTAssertEqual(restored.binding(for: "webworkspace"), logBinding)
         restored.setEnabled(true, for: "logs")
         XCTAssertNil(restored.binding(for: "logs"))
         XCTAssertNotNil(restored.error)
         restored.restoreDefaults()
-        XCTAssertEqual(restored.binding(for: "reqflow"), ShortcutPreferences.defaultsBindings["reqflow"])
+        XCTAssertEqual(restored.binding(for: "webworkspace"), ShortcutPreferences.defaultsBindings["webworkspace"])
         XCTAssertEqual(restored.binding(for: "logs"), logBinding)
     }
 
@@ -60,7 +60,7 @@ final class WorkspaceRegressionTests: XCTestCase {
         let audiShortcut = try XCTUnwrap(ShortcutPreferences.defaultsBindings["logs"])
         defaults.set(try JSONEncoder().encode(["logsearch": oldShortcut, "logs": audiShortcut]),
                      forKey: "shortcuts.bindings")
-        defaults.set(["logsearch", "reqflow"], forKey: "shortcuts.disabled")
+        defaults.set(["logsearch", "webworkspace"], forKey: "shortcuts.disabled")
         defaults.set(["logsearch", "logs", "reqflow"], forKey: "workspace.favorites")
         defaults.set(["clipboard", "logsearch", "logs"], forKey: "workspace.recentModules")
         defaults.set(["dboard", "logsearch"], forKey: "workspace.pinnedWindows")
@@ -68,9 +68,9 @@ final class WorkspaceRegressionTests: XCTestCase {
         XCTAssertNil(shortcuts.binding(for: "logsearch"))
         XCTAssertNil(shortcuts.overrides["logsearch"])
         XCTAssertEqual(shortcuts.binding(for: "logs"), audiShortcut)
-        XCTAssertEqual(shortcuts.disabled, ["reqflow"])
+        XCTAssertEqual(shortcuts.disabled, ["webworkspace"])
         shortcuts.setEnabled(false, for: "logsearch")
-        XCTAssertEqual(shortcuts.disabled, ["reqflow"])
+        XCTAssertEqual(shortcuts.disabled, ["webworkspace"])
         let workspace = WorkspacePreferences(defaults: defaults)
         XCTAssertEqual(workspace.favorites, ["logs", "reqflow"])
         XCTAssertEqual(workspace.recentModules, ["clipboard", "logs"])

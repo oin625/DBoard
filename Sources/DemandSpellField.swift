@@ -194,7 +194,7 @@ struct DemandSpellInput: NSViewRepresentable {
     }
 }
 
-final class DemandSpellTextView: NSTextView {
+class DemandSpellTextView: NSTextView {
     var imageStore: DemandImageStore = .shared
     var onError: ((String?) -> Void)?
     var pasteboard: NSPasteboard = .general
@@ -334,17 +334,20 @@ final class DemandSpellTextView: NSTextView {
         UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true
     }
 
+    func imageAttachment(at event: NSEvent) -> DemandImageAttachment? {
+        guard let layoutManager, let textContainer, layoutManager.numberOfGlyphs > 0 else { return nil }
+        let point = convert(event.locationInWindow, from: nil)
+        let glyph = layoutManager.glyphIndex(for: NSPoint(x: point.x - textContainerOrigin.x,
+                                                          y: point.y - textContainerOrigin.y), in: textContainer)
+        let index = layoutManager.characterIndexForGlyph(at: glyph)
+        guard index < attributedString().length else { return nil }
+        return textStorage?.attribute(.attachment, at: index, effectiveRange: nil) as? DemandImageAttachment
+    }
+
     override func mouseDown(with event: NSEvent) {
-        if event.clickCount == 2, let layoutManager, let textContainer, layoutManager.numberOfGlyphs > 0 {
-            let point = convert(event.locationInWindow, from: nil)
-            let glyph = layoutManager.glyphIndex(for: NSPoint(x: point.x - textContainerOrigin.x,
-                                                              y: point.y - textContainerOrigin.y), in: textContainer)
-            let index = layoutManager.characterIndexForGlyph(at: glyph)
-            if index < attributedString().length,
-               let attachment = textStorage?.attribute(.attachment, at: index, effectiveRange: nil) as? DemandImageAttachment {
-                NSWorkspace.shared.open(URL(fileURLWithPath: attachment.reference.path))
-                return
-            }
+        if event.clickCount == 2, let attachment = imageAttachment(at: event) {
+            NSWorkspace.shared.open(URL(fileURLWithPath: attachment.reference.path))
+            return
         }
         super.mouseDown(with: event)
     }
@@ -353,6 +356,7 @@ final class DemandSpellTextView: NSTextView {
 /// Formal change history uses the same image references, without exposing file paths in the UI.
 struct DemandSpellContentView: View {
     let text: String
+    var fontSize: CGFloat = 13
 
     private struct Piece: Identifiable {
         let id: Int
@@ -379,7 +383,7 @@ struct DemandSpellContentView: View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(pieces) { piece in
                 if let text = piece.text, !text.trimmingCharacters(in: .newlines).isEmpty {
-                    Text(text.trimmingCharacters(in: .newlines)).dboardFont(size: 13).textSelection(.enabled)
+                    Text(text.trimmingCharacters(in: .newlines)).dboardFont(size: fontSize).textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if let image = piece.image {

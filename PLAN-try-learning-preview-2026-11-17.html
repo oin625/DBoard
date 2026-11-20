@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>次 Try 学习与笔记 · 方案预览</title>
+<style>
+:root{color-scheme:light dark;--canvas:Canvas;--text:CanvasText;--muted:color-mix(in srgb,CanvasText 60%,Canvas);--line:color-mix(in srgb,CanvasText 12%,Canvas);--soft:color-mix(in srgb,CanvasText 5%,Canvas);--accent:AccentColor;--selected:color-mix(in srgb,AccentColor 13%,Canvas)}
+*{box-sizing:border-box}body{margin:0;background:var(--canvas);color:var(--text);font:13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.7}
+button,input,textarea{font:inherit}button{color:inherit;border:1px solid var(--line);background:var(--canvas);border-radius:6px;padding:6px 12px;cursor:pointer}button:hover{background:var(--soft)}button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+button.primary{background:var(--accent);color:HighlightText;border-color:transparent}a{color:var(--accent)}.muted{color:var(--muted)}.small{font-size:11px}.toolbar{height:58px;display:flex;align-items:center;gap:16px;padding:0 24px;border-bottom:1px solid var(--line);background:var(--soft)}
+.toolbar strong{font-size:15px;font-weight:600}.toolbar .spacer{flex:1}.tag{font-size:11px;padding:3px 8px;background:var(--soft);border-radius:6px}.toolbar .tag{border:1px solid var(--line)}
+.shell{display:grid;grid-template-columns:226px minmax(0,1fr);min-height:calc(100vh - 58px)}
+aside{padding:24px 16px;border-right:1px solid var(--line);background:var(--soft)}.eyebrow{font-size:11px;color:var(--muted);margin:0 0 10px}
+nav{display:grid;gap:6px;margin-bottom:28px}nav button{text-align:left;border:0;background:transparent;padding:9px 12px}
+nav button.active,.topic.active{background:var(--selected);font-weight:600}.topic{border:0;background:transparent;width:100%;text-align:left;padding:9px 12px;margin:2px 0;line-height:1.6}
+.topic span{display:block;font-size:11px;font-weight:400;color:var(--muted)}main{padding:28px 36px 48px;max-width:990px;width:100%}
+h1{font-size:23px;line-height:1.4;font-weight:600;margin:0 0 12px}h2{font-size:15px;font-weight:600;margin:24px 0 10px}h3{font-size:13px;margin:0 0 8px;font-weight:600}p{margin:10px 0}ul{padding-left:20px;margin:10px 0}
+.sheet{padding:20px;border:1px solid var(--line);border-radius:8px;margin-top:16px}.flat{padding:16px 0;border-bottom:1px solid var(--line)}
+.unit-controls{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0}.unit-controls button.active{background:var(--selected)}
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13px}th{text-align:left;font-weight:600;background:var(--soft)}td,th{padding:10px 12px;border-bottom:1px solid var(--line)}td:last-child{text-align:right}
+.source{font-size:11px;color:var(--muted);margin:12px 0}.callout{border-left:3px solid var(--accent);padding:4px 0 4px 14px;margin:16px 0}
+details{margin:12px 0}summary{cursor:pointer;font-weight:500}.actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:24px}.actions .spacer{flex:1}.chips{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.chips span{font-size:11px;background:var(--soft);padding:3px 8px;border-radius:6px}
+.note-heading{display:flex;align-items:center;gap:12px}.note-heading h1{flex:1}.note-body{padding:4px 0}.original{white-space:pre-wrap;font-size:12px;color:var(--muted);background:var(--soft);padding:14px;border-radius:8px}
+.q{width:100%;min-height:76px;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--canvas);color:var(--text);resize:vertical}
+.hidden{display:none!important}.review-item{padding:18px 0;border-bottom:1px solid var(--line)}.review-item strong{font-weight:600}.review-item .tag{margin-left:8px}
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);max-width:560px;padding:12px 18px;border:1px solid var(--line);border-radius:8px;background:var(--canvas);box-shadow:0 4px 18px color-mix(in srgb,CanvasText 12%,transparent);z-index:3}
+.preview-note{margin-top:30px;font-size:11px;color:var(--muted)}.compare{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:760px){.shell{grid-template-columns:1fr}aside{border-right:0;border-bottom:1px solid var(--line);padding:16px}nav{display:flex;margin-bottom:12px}main{padding:24px 18px}.compare{grid-template-columns:1fr}.toolbar{padding:0 16px;gap:10px}.topics{display:flex;overflow:auto}.topic{min-width:160px}}
+@media(prefers-reduced-motion:no-preference){button{transition:background .18s}}
+</style>
+</head>
+<body>
+<header class="toolbar"><span class="muted">次 Try</span><strong>本地小模型研究</strong><span class="spacer"></span><span class="small muted">每天60分钟 · 11月26日截止</span><span class="tag">方案预览</span></header>
+<div class="shell">
+<aside>
+<p class="eyebrow">T007 · 学习空间</p>
+<nav aria-label="学习空间">
+<button data-tab="learn" class="active" aria-pressed="true">学习</button>
+<button data-tab="notes" aria-pressed="false">知识笔记</button>
+<button data-tab="review" aria-pressed="false">复习与核验</button>
+</nav>
+<p class="eyebrow">知识主题</p>
+<div class="topics">
+<button class="topic" data-topic="map">模型的全局关系<span>模型 · 应用 · 设备</span></button>
+<button class="topic active" data-topic="resources">参数量与运行资源<span>量化 · 缓存 · PPL</span></button>
+<button class="topic" data-topic="training">训练与微调<span>损失 · LoRA · 优化器</span></button>
+<button class="topic" data-topic="selection">模型选型与指标<span>真实比较 · 适用条件</span></button>
+</div>
+<div class="flat"><p class="small muted">学习方式</p><p>从真实结果理解概念</p><p class="small muted">使用公开资料，不在工作电脑运行或下载模型。</p></div>
+<details><summary class="small">学习路线与待巩固</summary><p class="small">综合选型正在学习。基本概念已有确认；选型依据、录音方向和训练额外内存仍保留待核项。</p></details>
+</aside>
+<main>
+<section id="learn">
+<p class="eyebrow">当前学习单元 · 参数量与运行资源</p>
+<h1 id="unit-title"></h1>
+<p id="unit-lead" class="muted"></p>
+<div class="unit-controls" aria-label="真实比较">
+<button data-unit="quant" class="active">量化后发生了什么</button><button data-unit="tasks">小模型的强弱反转</button>
+</div>
+<div class="sheet">
+<h3>先看真实结果</h3><div id="material"></div><div id="source" class="source"></div>
+</div>
+<div class="flat"><h2>指标是什么意思</h2><div id="metric"></div></div>
+<div class="flat"><h2>这个现象怎么解释</h2><div id="reason"></div></div>
+<div class="flat"><h2>用于判断什么</h2><div id="decision"></div></div>
+<div class="actions">
+<button class="primary" id="another">看另一个真实案例</button>
+<button id="confused">还没懂</button><button id="specific">更具体一点</button>
+<span class="spacer"></span><button id="save-understanding">关联到知识笔记</button>
+</div>
+<div id="feedback" class="hidden sheet"><h3>记下卡住的地方</h3><textarea class="q" placeholder="几个关键词就可以，例如：PPL怎么从概率算出来？"></textarea><p class="small muted">这里是交接反馈的位置，不自动转成一道考试题。</p></div>
+</section>
+<section id="notes" class="hidden">
+<p class="eyebrow">按知识主题整理 · 跨阶段关联</p>
+<div class="note-heading"><h1 id="note-title"></h1><span class="tag">整理稿 · 待采纳</span></div>
+<p id="note-source" class="small muted"></p>
+<div class="note-body" id="note-body"></div>
+<h2>关联学习单元</h2>
+<div class="chips" id="note-links"></div>
+<details><summary>我原来写的 · 查看来源和修订</summary><div id="original" class="original"></div></details>
+<h2>我还想弄懂的</h2><textarea class="q" placeholder="自由写理解或疑问，不要求套模板。"></textarea>
+<div class="actions"><button id="back-material">回到相关真实比较</button><button id="migration-preview">看整理与合并方案</button></div>
+<p class="preview-note">整理稿与原文分开。实际采纳后保留原文版本、笔记ID和出处；AI补充不会被记录成你的独立答案。</p>
+</section>
+<section id="review" class="hidden">
+<p class="eyebrow">只依据真实作答 · 按需复习</p><h1>待核清的理解</h1>
+<p class="muted">复习围绕已有缺项；进入下一节与确认掌握分开。</p>
+<div class="review-item"><strong>选型依据</strong><span class="tag">未覆盖完整</span><p>你选了甲，但三项卡片依据和另一候选的限制没有写出。</p><details><summary class="small">原题与真实答复</summary><p>24GB Mac，一次输入约6000 token，另预留1000 token回答；比较Qwen7B与Phi3mini4K。</p><p>真实答复：1.选甲</p></details><button data-review-topic="selection">回看知识与真实比较</button></div>
+<div class="review-item"><strong>录音处理方向</strong><span class="tag">待巩固</span><p>照片→文字正确；会议录音→文字还未答出。参考解释与真实作答分别保存。</p><details><summary class="small">真实答复</summary><p>3.需要照片转文字 和 文字转语音 文字转照片</p></details><button data-review-topic="map">回看输入与输出</button></div>
+<div class="review-item"><strong>训练额外内存</strong><span class="tag">待巩固</span><p>上下文与占用有关；梯度、优化器状态和反向中间结果尚未分类完整。</p><button data-review-topic="training">回看训练笔记</button></div>
+<div class="actions"><button id="assessment-info">查看复测方式</button><button id="continue-learn" class="primary">继续学习</button></div>
+<p class="preview-note">复测由主动操作或完整阶段末的一次检查触发。“懂了”、看完讲解和整理稿篇数都不自动计为掌握。</p>
+</section>
+<p class="preview-note">此文件是可点击的设计方案，未连接真实笔记存储。可以切换学习案例、主题笔记与复习页面；不会修改D板数据。</p>
+</main>
+</div>
+<div id="toast" class="toast hidden" role="status"></div>
+<script>
+const units={
+quant:{title:"压到4bit，省了多少空间？",lead:"同一个模型，文件明显缩小；预测表现却不会按同一个比例变化。",
+material:'<table><thead><tr><th>版本</th><th>文件大小，约GB</th><th>PPL ↓</th></tr></thead><tbody><tr><td>FP16</td><td>16.07</td><td>6.233</td></tr><tr><td>Q8_0</td><td>8.55</td><td>6.234</td></tr><tr><td>Q4_K_M</td><td>4.92</td><td>6.407</td></tr><tr><td>Q2_K</td><td>3.18</td><td>9.752</td></tr></tbody></table>',
+source:'作者公开记录：LLaMA 3 8B，无额外量化校准的行。大小由原表GiB换算。<br><a href="https://raw.githubusercontent.com/ggml-org/llama.cpp/master/tools/perplexity/README.md" target="_blank" rel="noopener">查看原表与测试条件</a>',
+metric:'<p>用已有文本的真实后续token，衡量模型给它们的预测概率，再汇总为PPL。同模型、分词与评测条件下，越低越好。</p><p class="callout">PPL不是答题正确率。6.233变成6.407，不能直接解释成回答质量下降了某个百分比。</p>',
+reason:'<p>低位量化用近似数值代表原权重，节省空间，同时改变计算结果。这份记录中，Q8与FP16接近；继续压到Q2，指标变化明显增大。</p><p class="small muted">这个测试能观察量化差异，不能证明每种中文任务都会出现同样变化。</p>',
+decision:'<p>Q4文件比FP16小约69%；再到Q2只省约1.74GB，预测指标却变差得更多。4bit是这份案例中值得比较的折中候选。</p><p>文件大小、总运行内存、速度和任务效果仍分别核对。</p>'},
+tasks:{title:"小模型写代码赢了，知识问答却输了",lead:"先看任务，再看型号和规模。一个总排名无法替你选择。",
+material:'<table><thead><tr><th>测试</th><th>Phi-3，3.8B</th><th>Mistral，7B</th></tr></thead><tbody><tr><td>HumanEval · 代码生成</td><td>57.3</td><td>28.0</td></tr><tr><td>TriviaQA · 事实问答</td><td>61.4</td><td>75.2</td></tr></tbody></table>',
+source:'Phi卡片中作者公布的同流程对比。HumanEval为0-shot；TriviaQA为5-shot。<br><a href="https://hf-mirror.com/microsoft/Phi-3-mini-4k-instruct/raw/main/README.md" target="_blank" rel="noopener">查看Benchmarks与版本</a>',
+metric:'<p>两项分别测试代码生成与事实问答。分数只对应所测任务；不能把某一项看作模型处理所有事情的统一成功率。</p>',
+reason:'<p>强弱随任务反转，说明参数量不足以决定选型。两款模型训练经历与版本不同，这份结果不能单独证明“参数更小导致代码更好”。</p>',
+decision:'<p>为代码需求先查相关代码任务表现；为知识问答另查对应结果，再核对语言、窗口和具体版本。</p>'}
+};
+const topics={
+map:{title:"模型、应用与计算设备",source:"来源：N003部分内容＋已有讲解；N002正文为空，仍保留原条目。",
+body:"<p>模型权重提供计算参数；推理引擎加载权重，按结构调用支持的CPU/GPU。</p><p>聊天应用组织要求、历史和外部工具。设备、软件和权重各有自己的作用。</p><p>读取发票：图片→文字；转写录音：语音→文字。朗读文字与按描述画图是另外两个生成任务。</p>",
+links:["聊天模板与系统提示","工具请求与软件执行","录音→文字"],
+original:"N003原文节选：\n模型推理引擎：负责加载模型、管理内存、并按模型的计算流程，调用CPU/GPU等硬件执行运算。\n模型推理软件：LLaMA.cpp / MLX-LM\n权重文件格式类型：.gguf / .safetensors"},
+resources:{title:"参数量、量化与运行资源",source:"合并来源：N003主体＋N004数量简写＋公开PPL材料。这里显示AI整理建议。",
+body:"<p><strong>1B是10亿个参数；7B约70亿个参数。</strong> 参数数量与保存精度共同决定基础数值空间。</p><p>FP16每个数约2字节、8bit约1字节、4bit约0.5字节可作为基础粗算，量化附加数据和其他部分另算。</p><p>运行还需KV缓存、临时计算和系统空间。权重4bit不自动表示缓存也用4bit。</p><p><strong>PPL</strong>是同条件后续token平均预测指标，越低越好，不是回答正确率。</p>",
+links:["LLaMA3量化与PPL","Phi4K上下文预算","KV缓存"],
+original:"N003原文：\nB = 10亿 7B为10亿参数量\n内存宽带：每秒能读写多少数据，GB/s\n\n修订建议：7B约70亿个参数；术语为“内存带宽”。\n\nN004原文：简单记忆：1B = 1G\n保留数量记忆入口，并注明它不是1GB存储容量等式。"},
+training:{title:"训练、微调与LoRA",source:"合并来源：N004训练主体；量化与参数单位连接资源主题，避免重复整段。",
+body:"<p>训练：计算损失→反向传播求梯度→优化器更新可训练参数。</p><p>微调在已有模型上继续训练。基础LoRA新增少量可训练参数，原权重冻结但仍参与计算，适配器依赖匹配的基础模型。</p><p>Adam保留梯度与梯度平方的滑动平均。记下定义不等于已经会推导。</p><p>训练额外数据包含梯度、优化器状态和反向中间结果。它们与推理KV缓存分别看。</p>",
+links:["训练的实际更新步骤","冻结权重仍计算","量化与QLoRA"],
+original:"N004原文节选：\n训练：1、计算损失 2、反向传播，计算梯度 3、优化器更新参数\n新增一部分可训练参数，更新它们；原有权重冻结，但仍参与计算\n\n最后一段训练内存为教练补充，实际分类缺项仍保留。"},
+selection:{title:"模型选型、指标与真实比较",source:"来源：已核教学材料的整理补充；当前没有对应的用户独立笔记。",
+body:"<p>先用具体需求核对任务、语言和上下文，再比较版本、运行工具与资源条件。</p><p>Base/Instruct表示训练经历，GGUF/MLX与量化描述保存和运行条件，分别看。</p><p>Phi3mini4K的窗口是4096 token；实际输入与生成回答共用额度。</p><p>真实成绩按任务、版本和条件比较。选甲正确，但三项卡片依据尚未从你的答复核完整。</p>",
+links:["小模型强弱反转","卡片中的32K与4K","S003原题与真实答复"],
+original:"当前用户没有这一主题的独立笔记。此页为教练整理补充。\nN001保留学习起点：要去huggingface，了解下模型的知识，以及本地小模型的知识。"}
+};
+let activeUnit="quant",activeTopic="resources",timer;
+function toast(t){const x=document.getElementById("toast");x.textContent=t;x.classList.remove("hidden");clearTimeout(timer);timer=setTimeout(()=>x.classList.add("hidden"),5000)}
+function tab(name){for(const t of ["learn","notes","review"])document.getElementById(t).classList.toggle("hidden",t!==name);document.querySelectorAll("[data-tab]").forEach(b=>{const on=b.dataset.tab===name;b.classList.toggle("active",on);b.setAttribute("aria-pressed",String(on))})}
+function unit(name){activeUnit=name;const u=units[name];for(const [id,k]of[["unit-title","title"],["unit-lead","lead"]])document.getElementById(id).textContent=u[k];for(const k of["material","source","metric","reason","decision"])document.getElementById(k).innerHTML=u[k];document.querySelectorAll("[data-unit]").forEach(b=>b.classList.toggle("active",b.dataset.unit===name))}
+function topic(name){activeTopic=name;const t=topics[name];document.getElementById("note-title").textContent=t.title;document.getElementById("note-source").textContent=t.source;document.getElementById("note-body").innerHTML=t.body;document.getElementById("original").textContent=t.original;const links=document.getElementById("note-links");links.replaceChildren(...t.links.map(label=>{const x=document.createElement("span");x.textContent=label;return x}));document.querySelectorAll("[data-topic]").forEach(b=>b.classList.toggle("active",b.dataset.topic===name))}
+document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>tab(b.dataset.tab));
+document.querySelectorAll("[data-unit]").forEach(b=>b.onclick=()=>unit(b.dataset.unit));
+document.querySelectorAll("[data-topic]").forEach(b=>b.onclick=()=>{topic(b.dataset.topic);tab("notes")});
+document.querySelectorAll("[data-review-topic]").forEach(b=>b.onclick=()=>{topic(b.dataset.reviewTopic);tab("notes")});
+document.getElementById("another").onclick=()=>unit(activeUnit==="quant"?"tasks":"quant");
+document.getElementById("confused").onclick=()=>document.getElementById("feedback").classList.toggle("hidden");
+document.getElementById("specific").onclick=()=>{document.getElementById("feedback").classList.remove("hidden");document.querySelector("#feedback textarea").focus()};
+document.getElementById("save-understanding").onclick=()=>{topic(activeUnit==="quant"?"resources":"selection");tab("notes")};
+document.getElementById("back-material").onclick=()=>{unit(activeTopic==="selection"?"tasks":"quant");tab("learn")};
+document.getElementById("migration-preview").onclick=()=>toast("整理方案：四个知识主题，保留N001起点与N002空条目；N003/N004按来源合并，采纳前查看差异。");
+document.getElementById("assessment-info").onclick=()=>toast("主动复测或阶段末集中检查时，使用新情境和真实答复；参考解释不倒填成你的答案。");
+document.getElementById("continue-learn").onclick=()=>tab("learn");
+unit("quant");topic("resources");
+</script>
+</body></html>

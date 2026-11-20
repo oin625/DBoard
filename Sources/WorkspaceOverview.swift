@@ -3,7 +3,6 @@ import AppKit
 
 struct WorkspaceOverview: View {
     @EnvironmentObject var vm: DBoardViewModel
-    @ObservedObject var preferences: WorkspacePreferences = .shared
 
     var body: some View {
         VStack(spacing: 18) {
@@ -25,7 +24,7 @@ struct WorkspaceOverview: View {
             .padding(.horizontal, 20)
             TodaySection(compactWhenEmpty: true)
             CockpitSection()
-            OverviewDemandSection(preferences: preferences)
+            OverviewDemandSection()
         }
         .padding(.top, 18).padding(.bottom, 20)
     }
@@ -52,37 +51,21 @@ struct WorkspaceOverview: View {
 
 struct OverviewDemandSection: View {
     @EnvironmentObject var vm: DBoardViewModel
-    @ObservedObject var preferences: WorkspacePreferences = .shared
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 8) {
-                Text("需求").dboardFont(size: 17, weight: .semibold)
-                Text("\(DemandMatrix.openItems(vm.items).count)")
-                    .dboardFont(size: 12, weight: .medium, design: .rounded).foregroundStyle(.secondary)
-                Spacer()
-                Button("已完成") { vm.showDemands(.completed) }
-                    .buttonStyle(.plain).dboardFont(size: 12).foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                NewItemRow(embedded: true)
                 Button { vm.showDemands() } label: {
                     HStack(spacing: 4) {
                         Text("查看全部")
                         Image(systemName: "arrow.up.right").dboardFont(size: 10, weight: .semibold)
                     }
-                }.buttonStyle(WorkspaceActionStyle())
-            }.padding(.horizontal, 20).padding(.bottom, 12)
-            HStack {
-                DemandLayoutPicker(selection: $preferences.demandLayout)
-                Spacer(minLength: 8)
-                NewItemRow(embedded: true)
-            }.padding(.horizontal, 20).padding(.bottom, 12)
-            if preferences.demandLayout == .matrix {
-                DemandMatrixView(items: DemandMatrix.openItems(vm.items))
-            } else if vm.attentionItems.isEmpty {
-                EmptyWorkspaceState(icon: "checkmark.circle", title: "当前没有紧急或进行中的需求",
-                    detail: "所有需求仍可在「需求」中查看。")
-            } else {
-                NeedsSection(focused: true)
+                }.demandButtonStyle(WorkspaceActionStyle()).demandKeyboardID("overview-all-demands")
             }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.horizontal, 20).padding(.bottom, 12)
+            DemandMatrixView(items: vm.items)
         }
     }
 }

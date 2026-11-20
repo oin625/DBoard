@@ -51,21 +51,27 @@ def scalar(value, label):
     return value
 
 
-def locate(lines, item_id):
+def task_ranges(lines, item_id):
     if not re.fullmatch(r"[DP][0-9]{3,}", item_id):
         raise CLIError("INVALID_ID", "Use the exact task number, for example D014 or P001")
     pattern = re.compile(r"^### " + re.escape(item_id) + r"(?=【|\s|$)")
-    starts = [i for i, line in enumerate(lines) if pattern.match(line)]
-    if len(starts) != 1:
-        raise CLIError("NOT_FOUND" if not starts else "AMBIGUOUS_ID",
-                       "Demand not found" if not starts else "Duplicate demand IDs; no update made")
-    start = starts[0]
-    end = start + 1
-    while end < len(lines) and not (lines[end].startswith(("## ", "### ")) or lines[end] == "---"):
-        end += 1
-    while end > start + 1 and not lines[end - 1].strip() and not lines[end - 1].startswith("    "):
-        end -= 1
-    return start, end
+    for start, line in enumerate(lines):
+        if not pattern.match(line):
+            continue
+        end = start + 1
+        while end < len(lines) and not (lines[end].startswith(("## ", "### ")) or lines[end] == "---"):
+            end += 1
+        while end > start + 1 and not lines[end - 1].strip() and not lines[end - 1].startswith("    "):
+            end -= 1
+        yield start, end
+
+
+def locate(lines, item_id):
+    ranges = list(task_ranges(lines, item_id))
+    if len(ranges) != 1:
+        raise CLIError("NOT_FOUND" if not ranges else "AMBIGUOUS_ID",
+                       "Demand not found" if not ranges else "Duplicate demand IDs; no update made")
+    return ranges[0]
 
 
 def revision(block):
@@ -225,7 +231,31 @@ def image_references(text):
     return images
 
 
+CHAT_PRIVACY_MESSAGE = "D板的钉钉群聊关联已关闭：不得根据旧摘要、历史记录或旧指令读取、搜索钉钉聊天，也不要自行修改隐私设置；信息不足请向用户确认。"
+
+
+def demand_chats_enabled(path=None):
+    path = path or Path.home() / ".config/dboard/privacy.json"
+    try:
+        settings = json.loads(path.read_text(encoding="utf-8"))
+        return isinstance(settings, dict) and settings.get("demand_chat_enabled") is True
+    except (OSError, UnicodeError, ValueError):
+        return False
+
+
+def private_version_background(version):
+    if not version or demand_chats_enabled():
+        return version
+    # Old version snapshots embedded the association as a standalone generated section.
+    # Project notes remain untouched; only that generated association is omitted.
+    return dict(version, background="\n".join(
+        line for line in version["background"].splitlines()
+        if not line.startswith(("原关联群聊（背景）：", "主要群聊：", "次要群聊："))))
+
+
 def read_chat_links(block):
+    if not demand_chats_enabled():
+        return None
     tag = "- **关联群聊**"
     indices = [i for i, line in enumerate(block) if line.startswith(tag)]
     if not indices:
@@ -258,7 +288,7 @@ def read_chat_links(block):
 
 
 def chat_sources(links):
-    if not links:
+    if not demand_chats_enabled() or not links:
         return []
     groups = ([("primary", links["primary"])] if links["primary"] else []) + [("secondary", chat) for chat in links["secondary"]]
     now = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
@@ -482,6 +512,15 @@ def release_request(args):
     additions = getattr(args, "release_add", None) or []
     edits = getattr(args, "release_edit", None) or []
     removals = getattr(args, "release_remove", None) or []
+    completed = list(dict.fromkeys(getattr(args, "release_done", None) or []))
+    reopened = list(dict.fromkeys(getattr(args, "release_undone", None) or []))
+    for item_id in completed + reopened:
+        if not re.fullmatch(r"L[0-9]{3,}", item_id) or int(item_id[1:]) == 0:
+            raise CLIError("INVALID_ARGUMENT", "使用 show 返回的上线事项 id，如 --release-done L001 或 --release-undone L001")
+    if set(completed) & set(reopened):
+        raise CLIError("RELEASE_STATE_CONFLICT", "同一事项不能同时完成和取消完成，请只保留一个目标状态")
+    if set(completed + reopened) & set(removals):
+        raise CLIError("RELEASE_STATE_CONFLICT", "同一事项不能同时删除和修改完成状态")
     reviewed = getattr(args, "release_reviewed", False)
     structured = []
     for raw in getattr(args, "release_item", None) or []:
@@ -517,8 +556,12 @@ def release_request(args):
         validate_release_summary(text)
     if any(not re.fullmatch(r"L[0-9]{3,}", item_id) for item_id in removals):
         raise CLIError("INVALID_ARGUMENT", "Use the item ID from show for --release-remove")
-    if additions or edits or removals or reviewed or structured:
+    if additions or edits or removals or reviewed or structured or completed or reopened:
         request = {"add": additions, "edit": edits, "remove": removals, "reviewed": reviewed}
+        if completed:
+            request["done"] = completed
+        if reopened:
+            request["undone"] = reopened
         if structured:
             request["items"] = structured
         return request
@@ -530,10 +573,18 @@ def update_release_checklist(block, request):
         return None
     checklist = read_release_checklist(block)
     result = {"added": [], "edited": [], "removed": [], "skipped": []}
-    def target(item_id):
+    def find_entry(item_id):
         entry = next((x for x in checklist["items"] if x["id"] == item_id), None)
         if entry is None:
             raise CLIError("RELEASE_ITEM_NOT_FOUND", "事项已变化，请重新读取清单")
+        return entry
+    # Resolve every explicit state target from the existing list before applying changes.
+    state_targets = [(find_entry(item_id), done) for key, done in (("done", True), ("undone", False))
+                     for item_id in request.get(key, [])]
+    if state_targets:
+        result.update(completed=[], reopened=[])
+    def target(item_id):
+        entry = find_entry(item_id)
         if entry["updated_by"] == "user" or entry["done"]:
             raise CLIError("USER_MANAGED_RELEASE_ITEM", "保留用户维护或已完成的事项；有疑问请反馈用户")
         return entry
@@ -578,6 +629,13 @@ def update_release_checklist(block, request):
         checklist["items"].append({"id": item_id, "text": text, "details": item.get("details", ""),
                                    "category": item.get("category", infer_release_category(text)), "done": False, "updated_by": "ai"})
         result["added"].append(item_id)
+    for entry, done in state_targets:
+        if entry["done"] == done:
+            result["skipped"].append({"id": entry["id"], "reason": "already_done" if done else "already_undone"})
+            continue
+        # A status command preserves the task content, evidence and user ownership.
+        entry["done"] = done
+        result["completed" if done else "reopened"].append(entry["id"])
     if request["reviewed"]:
         checklist["reviewed_scope"] = execution_scope(block)
     encoded = base64.b64encode(json.dumps(checklist, ensure_ascii=False, sort_keys=True).encode("utf-8")).decode("ascii")
@@ -620,7 +678,7 @@ def describe(block, item_id, cache, start):
         "repositories": feedback_metadata(block)["repositories"],
         "environment_repositories": feedback_metadata(block).get("environment_repositories", []),
         "technical_plan": dboard_plan.read(block),
-        "version": demand_version(block),
+        "version": private_version_background(demand_version(block)),
         "handoff": dboard_handoff.read(block),
         "context_review": feedback_metadata(block).get("context_review"),
         "handoff_notes": dboard_handoff.text(data.get("交接补充", ""), "user handoff notes"),
@@ -813,7 +871,7 @@ def full_task_context(block, item, cache, change_id=None, task="continue"):
         text.append("用户删除或修正过的旧事项（不要原样补回）：")
         text.extend("- " + value for value in checklist["excluded_by_user"])
     if task not in ("code-review", "technical-plan"):
-        text.append("以本次读取的清单为准，保留用户维护和已完成的事项；只追加缺少的具体动作、更新自己维护的未完成事项。上线清单用于准备和交接，不授权自动发布服务或执行生产SQL，未完成勾选也不等于待开发需求。")
+        text.append("以本次读取的清单为准，保留用户维护和已完成的事项；只追加缺少的具体动作、更新自己维护的未完成事项内容。用户明确要求，或已授权执行该事项并核验成功后，用report --release-done L001完成对应事项；取消完成用--release-undone L001，须有用户指令或已核实的完成结论失效依据。保留原名称、明细、分类、证据和维护状态，不用改名代替勾选。上线清单用于准备和交接，不授权自动发布服务或执行生产SQL，未完成勾选也不等于待开发需求。")
     text.append("## 代码与执行现状")
     if item["declared_repositories"]:
         text.append("代码仓库 / 项目入口（用户填写，请查找并阅读相关实现）：")
@@ -829,7 +887,7 @@ def full_task_context(block, item, cache, change_id=None, task="continue"):
         text.append("预发／发布仓库（不作为开发交付分支）：" + repository["path"] + "；分支：" + repository["branch"])
     plan_state = item["technical_plan_state"]
     text.extend(["## 技术方案", plan_state["reason"] or "已有与当前需求、代码和开发分支匹配的技术方案；正文按需读取。",
-                 "读取方案：" + shlex.join([str(Path.home() / ".local/bin/dboard-ai"), "--cache", str(cache), "plan", "read", item["id"]])])
+                 "读取方案：" + shlex.join(dboard_handoff.task_cli(item, cache) + ["plan", "read", item["id"]])])
     for symbol, label in (("📅", "开始日期"), ("🎯", "计划截止")):
         found = re.search(symbol + r"([0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{1,2}\.[0-9]{1,2})(?![0-9.-])", block[0])
         if found:
@@ -926,7 +984,18 @@ def full_task_context(block, item, cache, change_id=None, task="continue"):
 def task_context(block, item, cache, change_id=None, task="continue", full=False, lines=None):
     result = full_task_context(block, item, cache, change_id, task)
     result = dboard_handoff.context(result, item, cache, execution_scope(block), full)
+    enabled = demand_chats_enabled()
+    result["chat_access"] = {"enabled": enabled}
+    if not enabled:
+        result["chat_access"]["instruction"] = CHAT_PRIVACY_MESSAGE
+        result["context"] = CHAT_PRIVACY_MESSAGE + "\n\n" + result["context"]
+        result["feedback_instructions"] = CHAT_PRIVACY_MESSAGE + "\n\n" + result["feedback_instructions"]
     result["item"]["worktrees"] = item["worktrees"]
+    if cache.name == "dboard-archive-cache.md":
+        prefix = shlex.join(dboard_handoff.task_cli(item, cache))
+        result["task_command_prefix"] = prefix
+        result["context"] += "\n本次读取的是已完成快照。继续读取或记录独立CR时，命令均从此处开始：" + prefix
+        return result
     worktree_cli = [str(Path.home() / ".local/bin/dboard-ai"), "--cache", str(cache), "worktree"]
     result["worktree_commands"] = {
         "list": shlex.join(worktree_cli + ["list", item["id"]]),
@@ -1100,6 +1169,46 @@ def read_content(cache):
     return content.split(newline), newline
 
 
+def read_task(cache, item_id, archive_revision=None):
+    if cache.name == "dboard-archive-cache.md":
+        journal = cache.with_name("dboard-archive-journal.json")
+        if journal.is_file():
+            try:
+                entries = json.loads(journal.read_text(encoding="utf-8"))
+                local = {}
+                for entry in entries.values():
+                    if entry["id"] != item_id or entry["state"] not in ("uploaded", "removed"):
+                        continue
+                    block = entry["archived"]
+                    if not isinstance(block, list) or not all(isinstance(line, str) for line in block):
+                        raise ValueError()
+                    start, end = locate(block, item_id)
+                    snapshot = block[start:end]
+                    local[revision(snapshot)] = snapshot
+            except (ValueError, TypeError, AttributeError, KeyError):
+                raise CLIError("ARCHIVE_INVALID", "本机完整归档无法读取，已保留原文件")
+            if archive_revision in local:
+                block = local[archive_revision]
+                return block, "\n", 0, len(block)
+            if archive_revision is None and local:
+                if len(local) != 1:
+                    raise CLIError("AMBIGUOUS_ID", "有多份归档，请从D板复制指定归档的读取指令")
+                block = next(iter(local.values()))
+                return block, "\n", 0, len(block)
+        if archive_revision is not None:
+            if cache.is_file():
+                lines, newline = read_content(cache)
+                for start, end in task_ranges(lines, item_id):
+                    if revision(lines[start:end]) == archive_revision:
+                        return lines, newline, start, end
+            raise CLIError("NOT_FOUND", "这份归档快照无法读取，请在D板重新打开")
+    if not cache.is_file():
+        raise CLIError("CACHE_NOT_FOUND", "Demand cache does not exist")
+    lines, newline = read_content(cache)
+    start, end = locate(lines, item_id)
+    return lines, newline, start, end
+
+
 def archived_reviews(cache):
     if cache.name != "dboard-archive-cache.md":
         return []
@@ -1121,7 +1230,8 @@ def archived_reviews(cache):
 
 def report_archived_review(cache, args, current, request_hash, event_id, handoff_input, scope_hash):
     rows = archived_reviews(cache)
-    previous = next((row for row in rows if row["id"] == args.id and row["event_id"] == event_id), None)
+    previous = next((row for row in rows if row["id"] == args.id and row["event_id"] == event_id
+                     and row["source_revision"] == current["revision"]), None)
     if previous:
         if previous["request_hash"] != request_hash:
             raise CLIError("EVENT_CONFLICT", "该CR事件已用于不同结论")
@@ -1255,24 +1365,27 @@ def report(cache, args):
     if experience_input is not None or experience_decision is not None or experience_reason is not None:
         request.update(experience=experience_input, experience_decision=experience_decision, experience_reason=experience_reason)
     request_hash = hashlib.sha256(json.dumps(request, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
-    if not cache.is_file():
-        raise CLIError("CACHE_NOT_FOUND", "Demand cache does not exist")
+    if cache.name == "dboard-archive-cache.md" and not is_review:
+        raise CLIError("ARCHIVE_READ_ONLY", "归档快照仅供查阅，只能单独记录代码审查结论")
     with open(str(cache) + ".lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        lines, newline = read_content(cache)
-        start, end = locate(lines, args.id)
+        lines, newline, start, end = read_task(cache, args.id, getattr(args, "archive_revision", None))
         block = lines[start:end]
         current = describe(block, args.id, cache, start)
         if current["title"] != args.expect_title:
             raise CLIError("TITLE_MISMATCH", "Demand title changed; read and confirm the target before updating")
         if is_review and cache.name == "dboard-archive-cache.md":
-            return report_archived_review(cache, args, current, request_hash, event_id, handoff_input, execution_scope(block))
+            scope = execution_scope(block)
+            result = report_archived_review(cache, args, current, request_hash, event_id, handoff_input, scope)
+            result["item"] = dboard_handoff.compact_item(result["item"], scope)
+            return result
         meta = feedback_metadata(block)
         previous = meta["events"].get(event_id)
         if previous:
             if previous != request_hash:
                 raise CLIError("EVENT_CONFLICT", "Event ID was already used for different feedback")
-            return {"event_id": event_id, "duplicate": True, "item": current}
+            return {"event_id": event_id, "duplicate": True,
+                    "item": dboard_handoff.compact_item(current, execution_scope(block))}
         if current["revision"] != args.expect_revision:
             raise CLIError("REVISION_CONFLICT", "Demand changed since show; reread it before reporting")
         if current["status"] == "已完成" and not is_review:
@@ -1343,19 +1456,17 @@ def report(cache, args):
         if args.repo:
             # The cache EX lock is already held; do not re-acquire it inside inventory registration.
             dboard_worktrees.register(cache, args.id, repo["path"], known_task=current)
+        item = dboard_handoff.compact_item(describe(block, args.id, cache, actual_start), execution_scope(block))
         atomic_write(cache, newline.join(lines))
         return {"event_id": event_id, "duplicate": False, "release_result": release_result,
-                "experience_result": experience_result, "item": describe(block, args.id, cache, actual_start)}
+                "experience_result": experience_result, "item": item}
 
 
 
 def plan_command(cache, args):
-    if not cache.is_file():
-        raise CLIError("CACHE_NOT_FOUND", "Demand cache does not exist")
     with open(str(cache) + ".lock", "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX if args.plan_command == "save" else fcntl.LOCK_SH)
-        lines, newline = read_content(cache)
-        start, end = locate(lines, args.id)
+        lines, newline, start, end = read_task(cache, args.id, getattr(args, "archive_revision", None))
         block = lines[start:end]
         item = describe(block, args.id, cache, start)
         old = item["technical_plan"]
@@ -1506,8 +1617,13 @@ def sync_cache(cache, timeout=110, force=False):
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "try":
+        import dboard_try
+        return dboard_try.main(argv[1:])
     parser = Parser(description="DBoard AI CLI: read one demand, report actual branches and execution progress. JSON results.")
     parser.add_argument("--cache", default=str(DEFAULT_CACHE), help="Absolute cache path; custom caches are never remotely synced")
+    parser.add_argument("--archive-revision", help="Read or review the exact completed snapshot selected in DBoard")
     sub = parser.add_subparsers(dest="command", required=True)
     guide = sub.add_parser("guide", help="Read the core Skill or one reference on demand")
     guide.add_argument("--topic", choices=("handoff", "feedback", "debug-page", "incident", "code-review", "technical-plan", "worktrees"))
@@ -1555,6 +1671,8 @@ def main(argv=None):
     update.add_argument("--release-add", action="append", help="Add one short pre-release summary within 40 characters; use --release-item for details")
     update.add_argument("--release-edit", action="append", help="Edit an uncompleted AI item, using L001=new text; preserves user edits")
     update.add_argument("--release-remove", action="append", help="Remove an uncompleted AI item by its exact ID; preserves user items")
+    update.add_argument("--release-done", action="append", help="Mark an exact pre-release item ID completed; repeat for multiple items; preserves text, evidence and user ownership")
+    update.add_argument("--release-undone", action="append", help="Reopen an exact pre-release item ID; repeat for multiple items; preserves text, evidence and user ownership")
     update.add_argument("--release-reviewed", action="store_true", help="Record that the checklist was checked against the current implementation; may remain empty")
     update.add_argument("--experience-decision", choices=("create", "update", "skip"), help="Required only for incident reports")
     update.add_argument("--experience-reason", help="Explain what is reusable, what changed, or why nothing should be collected")
@@ -1628,6 +1746,10 @@ def main(argv=None):
     try:
         args = parser.parse_args(argv)
         cache = Path(args.cache).expanduser().resolve()
+        if args.archive_revision is not None and (cache.name != "dboard-archive-cache.md" or
+                args.command not in ("show", "context", "history", "inspect", "report", "plan") or
+                not re.fullmatch(r"[0-9a-f]{64}", args.archive_revision)):
+            raise CLIError("INVALID_ARGUMENT", "请使用D板为归档快照生成的完整命令")
         if args.command == "guide":
             relative = "skills/dboard-feedback/" + ("references/" + args.topic + ".md" if args.topic else "SKILL.md")
             path = resource_path(relative)
@@ -1682,12 +1804,9 @@ def main(argv=None):
         elif args.command == "plan":
             emit(plan_command(cache, args))
         elif args.command in ("show", "context", "history", "inspect"):
-            if not cache.is_file():
-                raise CLIError("CACHE_NOT_FOUND", "Demand cache does not exist")
             with open(str(cache) + ".lock", "a") as lock:
                 fcntl.flock(lock, fcntl.LOCK_SH)
-                lines, _ = read_content(cache)
-                start, end = locate(lines, args.id)
+                lines, _, start, end = read_task(cache, args.id, args.archive_revision)
                 block = lines[start:end]
                 item = describe(block, args.id, cache, start)
             if args.command == "context":
@@ -1707,9 +1826,6 @@ def main(argv=None):
             return 0 if success else 3
         elif args.command == "report":
             result = report(cache, args)
-            current_lines, _ = read_content(cache)
-            first, last = locate(current_lines, args.id)
-            result["item"] = dboard_handoff.compact_item(result["item"], execution_scope(current_lines[first:last]))
             saved = True
             if args.no_sync or cache != DEFAULT_CACHE.resolve():
                 sync = {"success": None, "status": "skipped"}

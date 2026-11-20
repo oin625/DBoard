@@ -1,5 +1,6 @@
 import AppKit
 import ObjectiveC
+import Combine
 
 /// One focus order for text, actions and native selectors, independent of Full Keyboard Access.
 final class DemandWindowKeyboardNavigation {
@@ -18,15 +19,26 @@ final class DemandWindowKeyboardNavigation {
     private static let tabTapLimit: TimeInterval = 0.3
     private let onEscape: (() -> Void)?
     private let allowsKindSwitching: Bool
+    private let preferences: WorkspacePreferences
+    private var preferenceObserver: AnyCancellable?
 
-    init(window: NSWindow, allowsKindSwitching: Bool = false, onEscape: (() -> Void)? = nil) {
+    init(window: NSWindow, allowsKindSwitching: Bool = false, onEscape: (() -> Void)? = nil,
+         preferences: WorkspacePreferences = .shared) {
         self.window = window
         self.onEscape = onEscape
         self.allowsKindSwitching = allowsKindSwitching
+        self.preferences = preferences
+        preferenceObserver = preferences.$tabNavigationEnabled.dropFirst().sink { [weak self] enabled in
+            guard !enabled, let self else { return }
+            self.tabHold = nil
+            if self.window?.firstResponder is DemandKeyboardActionView {
+                self.window?.makeFirstResponder(nil)
+            }
+        }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .leftMouseDown]) { [weak self] event in
             guard let self else { return event }
             if event.type == .leftMouseDown {
-                self.followPointerFocus(event)
+                if self.preferences.tabNavigationEnabled { self.followPointerFocus(event) }
                 return event
             }
             return self.handleKey(event)
@@ -64,7 +76,7 @@ final class DemandWindowKeyboardNavigation {
     @discardableResult
     func handleKey(_ event: NSEvent) -> NSEvent? {
         if event.type == .keyUp {
-            guard event.keyCode == 48, let hold = tabHold else { return event }
+            guard preferences.tabNavigationEnabled, event.keyCode == 48, let hold = tabHold else { return event }
             tabHold = nil
             guard let window, event.window === window, window.isVisible, window.attachedSheet == nil,
                   event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
@@ -88,6 +100,11 @@ final class DemandWindowKeyboardNavigation {
             return nil
         }
         if event.keyCode == 48 {
+            guard preferences.tabNavigationEnabled else {
+                tabHold = nil
+                // Native text editors keep indentation; custom control navigation stays off.
+                return isEditing(window.firstResponder) ? event : nil
+            }
             if event.isARepeat {
                 tabHold?.repeated = true
             } else {
@@ -162,7 +179,7 @@ final class DemandWindowKeyboardNavigation {
     }
 
     func focusableControls() -> [NSView] {
-        guard let root = window?.contentView else { return [] }
+        guard preferences.tabNavigationEnabled, let root = window?.contentView else { return [] }
         let all = descendants(root)
         let actions = all.compactMap { $0 as? DemandKeyboardActionView }.filter(isAvailable)
         let controls = all.filter { view in
@@ -171,7 +188,10 @@ final class DemandWindowKeyboardNavigation {
                 return !allowsKindSwitching || !action.keyboardIdentifier.hasPrefix("demand-kind-") || action.selected
             }
             if let field = view as? NSTextField { return field.isEditable && field.isEnabled }
-            if let text = view as? NSTextView { return text.isEditable && !text.isFieldEditor }
+            if let text = view as? NSTextView {
+                let noteReader = (text as? TryNoteTextView)?.allowsReadingToEdit == true && text.isSelectable
+                return (text.isEditable || noteReader) && !text.isFieldEditor
+            }
             if let control = view as? NSControl,
                control is NSButton || control is NSDatePicker || control is NSSegmentedControl {
                 guard control.isEnabled else { return false }

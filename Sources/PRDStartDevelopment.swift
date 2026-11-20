@@ -158,7 +158,9 @@ struct PRDStartDevelopmentSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 8) {
-                Button("网页详情") { vm.openURL(item.url) }
+                Button("网页详情") {
+                    if vm.openWebDetail(item.url) { vm.cancelStartDevelopment() }
+                }
                 Spacer()
                 Button("取消") { vm.cancelStartDevelopment() }
                     .keyboardShortcut(.cancelAction).disabled(submitting)

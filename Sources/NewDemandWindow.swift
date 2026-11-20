@@ -5,11 +5,14 @@ import AppKit
 private struct NewDemandWindowRoot: View {
     @EnvironmentObject private var vm: DBoardViewModel
     let close: () -> Void
+    let createItem: ((DItemDraft) -> Bool)?
+    let copyCurrentState: ((String) -> Bool)?
 
     var body: some View {
         Group {
             if vm.newItemFormOpen && vm.newItemFormInWindow, let draft = vm.newItemDraft {
-                DemandItemEditor(draft: draft, close: close)
+                DemandItemEditor(draft: draft, close: close,
+                    createItem: createItem, copyCreatedState: copyCurrentState)
             }
         }
         .overlay(alignment: .bottom) {
@@ -29,10 +32,15 @@ final class NewDemandWindowController: NSObject, NSWindowDelegate {
     private(set) var keyboardNavigation: DemandWindowKeyboardNavigation?
     private let activates: Bool
     private let theme: ThemeManager
+    private let createItem: ((DItemDraft) -> Bool)?
+    private let copyCurrentState: ((String) -> Bool)?
 
-    init(activates: Bool = true, theme: ThemeManager = .shared) {
+    init(activates: Bool = true, theme: ThemeManager = .shared,
+         createItem: ((DItemDraft) -> Bool)? = nil, copyCurrentState: ((String) -> Bool)? = nil) {
         self.activates = activates
         self.theme = theme
+        self.createItem = createItem
+        self.copyCurrentState = copyCurrentState
     }
 
     func show(_ vm: DBoardViewModel) {
@@ -42,7 +50,8 @@ final class NewDemandWindowController: NSObject, NSWindowDelegate {
         let preferredScreen = vm.newDemandWindowCenterRect
         vm.newDemandWindowCenterRect = nil
         if window == nil {
-            let host = NSHostingController(rootView: NewDemandWindowRoot(close: { [weak self] in self?.close() })
+            let host = NSHostingController(rootView: NewDemandWindowRoot(close: { [weak self] in self?.close() },
+                createItem: createItem, copyCurrentState: copyCurrentState)
                 .environmentObject(vm).environmentObject(theme).dboardFont(size: 13).environmentObject(FontManager.shared))
             let value = DemandWorkspaceWindow(contentRect:
                 NSRect(x: activates ? 0 : -10000, y: 0, width: 660, height: 740))

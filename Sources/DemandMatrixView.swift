@@ -1,12 +1,5 @@
 import SwiftUI
 
-enum DemandLayout: String, CaseIterable, Identifiable {
-    case list, matrix
-    var id: String { rawValue }
-    var title: String { self == .list ? "列表" : "四象限" }
-    var symbol: String { self == .list ? "list.bullet" : "square.grid.2x2" }
-}
-
 /// Positive X points toward urgency; positive Y points toward importance.
 /// Placement comes from the user's priority, never from an inferred deadline.
 enum DemandMatrix {
@@ -24,32 +17,6 @@ extension DBoardViewModel {
         return afterWrite(DItemStore.setPriority(id: drag.id, priority, expectedPriority: drag.priority),
             fail: "需求已变化，未移动；请刷新后重试",
             success: "已移到「" + priority.title + "」")
-    }
-}
-
-struct DemandLayoutPicker: View {
-    @Binding var selection: DemandLayout
-    var body: some View {
-        HStack(spacing: 3) {
-            ForEach(DemandLayout.allCases) { layout in
-                Button { selection = layout } label: {
-                    Label(layout.title, systemImage: layout.symbol)
-                        .dboardFont(size: 11, weight: selection == layout ? .semibold : .medium)
-                        .foregroundStyle(selection == layout ? Color.primary : .secondary)
-                        .frame(width: layout == .matrix ? 76 : 66, height: 28)
-                        .background {
-                            if selection == layout {
-                                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .fill(Color(nsColor: .controlBackgroundColor))
-                                    .shadow(color: .black.opacity(0.06), radius: 2, y: 1)
-                            }
-                        }.contentShape(Rectangle())
-                }.demandButtonStyle(.plain)
-                    .accessibilityAddTraits(selection == layout ? .isSelected : [])
-            }
-        }
-        .padding(3).background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
-        .accessibilityLabel("需求视角").accessibilityIdentifier("demand-layout-picker")
     }
 }
 

@@ -65,6 +65,7 @@ enum DemandChatDiscoveryService {
     }
 
     static func discover(_ query: String) async throws -> DemandChatDiscovery {
+        guard DemandChatPrivacy.isEnabled else { throw DemandChatDirectoryError.unavailable }
         let found = await command(["aisearch", "enterprise", "--queries", query, "--types", "im",
                                    "--fields", "sourceType,meta,openConversationId"])
         guard found.succeeded else { throw DemandChatDirectoryError.unavailable }
@@ -103,7 +104,10 @@ enum DemandChatDiscoveryService {
 
     private static func command(_ arguments: [String]) async -> CommandResult {
         await Task.detached(priority: .utility) {
-            ProcessRunner.run(NSHomeDirectory() + "/.qoderwork/bin/dws",
+            guard DemandChatPrivacy.isEnabled else {
+                return CommandResult(exitCode: 1, stdout: Data(), stderr: Data(), timedOut: false, outputComplete: true)
+            }
+            return ProcessRunner.run(NSHomeDirectory() + "/.qoderwork/bin/dws",
                 arguments: arguments + ["--format", "json", "--timeout", "20"],
                 environment: ProcessInfo.processInfo.environment, timeout: 25)
         }.value

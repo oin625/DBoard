@@ -1,0 +1,5 @@
+html, body, #root { margin: 0; height: 100%; overflow: hidden; }
+body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+.excalidraw { --ui-font: -apple-system, BlinkMacSystemFont, sans-serif; }
+/* DBoard owns file opening and saving. The library is kept scene-local. */
+.excalidraw .layer-ui__wrapper__top-right { display: none; }

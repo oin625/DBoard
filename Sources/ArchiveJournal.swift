@@ -9,12 +9,14 @@ final class ArchiveJournal {
         let archived: [String]
         var state: State
         let createdAt: Date
+        var priority: ItemPriority? = nil
     }
+    static let filename = "dboard-archive-journal.json"
     private let url: URL
     private(set) var entries: [String: Entry] = [:]
     private(set) var readable = true
 
-    init(url: URL = URL(fileURLWithPath: NSHomeDirectory() + "/.claude/dboard-archive-journal.json")) {
+    init(url: URL = URL(fileURLWithPath: NSHomeDirectory() + "/.claude/" + ArchiveJournal.filename)) {
         self.url = url
         if FileManager.default.fileExists(atPath: url.path) {
             do { entries = try JSONDecoder().decode([String: Entry].self, from: Data(contentsOf: url)) }
@@ -26,6 +28,9 @@ final class ArchiveJournal {
     func save(_ entry: Entry) -> Bool {
         guard readable else { return false }
         var updated = entries
+        if let previous = entries[entry.id], previous.state == .removed, previous.archived != entry.archived {
+            updated[ContentRevision.hash(previous.archived.joined(separator: "\n"))] = previous
+        }
         updated[entry.id] = entry
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

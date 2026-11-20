@@ -105,7 +105,7 @@ final class DemandCycleTests: XCTestCase {
     }
 
     @MainActor
-    func testStartedDemandsEnterHomepageCountsAndAttentionList() {
+    func testStartedDemandsCountAsInProgressOnHomepage() {
         let source = """
         ## 🟡 重要不紧急
         ### D012【canary】质保体系 #待开始 📅10.28→🎯11.19
@@ -115,7 +115,6 @@ final class DemandCycleTests: XCTestCase {
         let vm = DBoardViewModel(loadCache: false)
         vm.items = CacheParser.parse(content: update.content).items
         XCTAssertEqual(vm.inProgressCount, 2)
-        XCTAssertEqual(Set(vm.attentionItems.map(\.id)), ["D012", "D013"])
     }
 
     func testCreatingAndSavingUsesScheduleAndKeepsManualOverrides() throws {

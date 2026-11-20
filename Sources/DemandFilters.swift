@@ -18,11 +18,23 @@ enum DemandFilter: String, CaseIterable, Identifiable {
 
 extension DBoardViewModel {
     var filteredItems: [DItem] {
-        let matches = items.filter { demandFilter.includes($0) && DemandSearch.matches($0, query: demandQuery) }
-        if viewMode == .priority { return matches.sorted { $0.priority < $1.priority } }
-        var projects: [String] = []
-        for item in matches where !projects.contains(item.project) { projects.append(item.project) }
-        return projects.flatMap { project in matches.filter { $0.project == project } }
+        items.filter { demandFilter.includes($0) && DemandSearch.matches($0, query: demandQuery) }
+    }
+
+    var isDefaultDemandList: Bool { demandFilter == .all && demandQuery.trimmed.isEmpty }
+
+    var visibleOpenDemands: [DItem] {
+        let isDefault = isDefaultDemandList
+        let matches = filteredItems.filter { isDefault ? $0.status == .inProgress : $0.status != .completed }
+        let now = Date()
+        let dated: [(item: DItem, updated: Date)] = matches.map { item in
+            let activity = DemandDates.recordedActivity(item, on: now)
+            let plan = DemandDates.timestamp(item.technicalPlan?.updatedAt)
+            let change = item.changes.map(\.createdAt).max()
+            let updated = [activity, plan, change].compactMap { $0 }.max()
+            return (item, updated ?? .distantPast)
+        }
+        return dated.sorted { $0.updated > $1.updated }.map(\.item)
     }
 
     var filteredArchiveRecords: [ArchivedDemand] {
@@ -34,7 +46,7 @@ extension DBoardViewModel {
 
     func showDemands(_ filter: DemandFilter = .all) {
         if [.all, .completed, .incidents].contains(filter) { demandArchives.reloadLocal() }
-        demandFilter = filter; demandQuery = ""; workspacePage = .demands
+        demandFilter = filter; demandQuery = ""; selectedID = nil; workspacePage = .demands
     }
 }
 

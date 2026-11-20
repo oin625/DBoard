@@ -14,14 +14,19 @@ struct DemandItemEditor: View {
     @EnvironmentObject private var vm: DBoardViewModel
     let original: DItem?
     let close: () -> Void
+    private let createItem: ((DItemDraft) -> Bool)?
+    private let copyCreatedState: ((String) -> Bool)?
     @State private var draft: DItemDraft
     @State private var confirmingDiscard = false
     @State private var saveError: String?
     @State private var pendingDismissal: (() -> Void)?
 
-    init(draft: DItemDraft, original: DItem? = nil, close: @escaping () -> Void) {
+    init(draft: DItemDraft, original: DItem? = nil, close: @escaping () -> Void,
+         createItem: ((DItemDraft) -> Bool)? = nil, copyCreatedState: ((String) -> Bool)? = nil) {
         self.original = original
         self.close = close
+        self.createItem = createItem
+        self.copyCreatedState = copyCreatedState
         _draft = State(initialValue: draft)
     }
 
@@ -112,7 +117,12 @@ struct DemandItemEditor: View {
     private func save() {
         if isNew {
             vm.updateNewItemDraft(draft)
-            if vm.createItem(draft) { vm.finishNewItemDraft(); close() }
+            if createItem?(draft) ?? vm.createItem(draft) {
+                // Read the saved record before clearing the form and handing control back.
+                _ = copyCreatedState?(draft.id) ?? vm.copyCurrentState(draft.id)
+                vm.finishNewItemDraft()
+                close()
+            }
             else { saveError = "创建失败，草稿已保留；请检查输入后重试。" }
         } else if let original {
             guard changed else { close(); return }

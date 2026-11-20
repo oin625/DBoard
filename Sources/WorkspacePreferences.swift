@@ -28,8 +28,8 @@ final class WorkspacePreferences: ObservableObject {
     static let shared = WorkspacePreferences()
     static let defaultsFavorites = ["apprelease", "logs", "reqflow", "bizmap"]
     @Published var settingsPage: SettingsPage = .general
-    @Published var demandLayout: DemandLayout {
-        didSet { defaults.set(demandLayout.rawValue, forKey: "workspace.demandLayout") }
+    @Published var tabNavigationEnabled: Bool {
+        didSet { defaults.set(tabNavigationEnabled, forKey: "workspace.tabNavigationEnabled") }
     }
     @Published var favorites: [String] {
         didSet { defaults.set(favorites, forKey: "workspace.favorites") }
@@ -44,15 +44,21 @@ final class WorkspacePreferences: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        demandLayout = DemandLayout(rawValue: defaults.string(forKey: "workspace.demandLayout") ?? "") ?? .list
+        tabNavigationEnabled = defaults.bool(forKey: "workspace.tabNavigationEnabled")
         // Keep a previously saved monitor shortcut pointing to the native tool.
-        let nativeTool: (String) -> String = { $0 == "sysmon" ? "activitymonitor" : $0 }
+        let nativeTool: (String) -> String = {
+            switch $0 {
+            case "sysmon": return "activitymonitor"
+            case "techscout": return "githubtrending"
+            default: return $0
+            }
+        }
         favorites = (defaults.stringArray(forKey: "workspace.favorites") ?? Self.defaultsFavorites)
             .map(nativeTool).filter { $0 != "logsearch" }
         recentModules = (defaults.stringArray(forKey: "workspace.recentModules") ?? [])
             .map(nativeTool).filter { $0 != "logsearch" }
-        pinnedWindows = Set(defaults.stringArray(forKey: "workspace.pinnedWindows") ?? [])
-            .filter { $0 != "logsearch" }
+        pinnedWindows = Set((defaults.stringArray(forKey: "workspace.pinnedWindows") ?? [])
+            .map(nativeTool).filter { $0 != "logsearch" })
     }
 
     func setFavorite(_ id: String, enabled: Bool) {
@@ -117,10 +123,21 @@ struct DBoardSettingsView: View {
     @ObservedObject private var prefs = WorkspacePreferences.shared
     @ObservedObject private var theme = ThemeManager.shared
     @ObservedObject private var flags = FeatureFlags.shared
+    @ObservedObject private var chatPrivacy = DemandChatPrivacy.shared
 
     var body: some View {
         TabView(selection: $prefs.settingsPage) {
             Form {
+                Section("隐私") {
+                    Toggle("需求关联钉钉群聊", isOn: Binding(get: { chatPrivacy.enabled },
+                        set: { chatPrivacy.setEnabled($0) }))
+                        .accessibilityIdentifier("privacy-demand-chats")
+                    Text("默认关闭。开启后显示群聊关联，并向接手 AI 提供关联群及聊天读取入口。")
+                        .dboardFont(size: 11).foregroundStyle(.secondary)
+                    if let error = chatPrivacy.error {
+                        Text(error).dboardFont(size: 11).foregroundStyle(.orange)
+                    }
+                }
                 Section("自动化") {
                     Toggle("钉钉值守", isOn: Binding(get: { flags.replyEnabled },
                         set: { flags.setReplyEnabled($0) }))

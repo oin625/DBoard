@@ -3,8 +3,6 @@ import Darwin
 
 // MARK: - 数据模型
 
-enum ViewMode: String { case priority, project }
-
 enum ItemPriority: String, CaseIterable, Comparable, Codable {
     case p0 = "🔴"
     case p1 = "🟡"
@@ -381,7 +379,7 @@ enum CacheParser {
                 continue
             }
             if inDescriptionBlock {
-                if line.hasPrefix("- **") || line.hasPrefix("## ") || line.hasPrefix("### ") || trimmed == "---" {
+                if !DItemStore.isDescriptionContinuation(line) {
                     inDescriptionBlock = false
                 } else {
                     let continuation = line.hasPrefix("    ") ? String(line.dropFirst(4)) : line

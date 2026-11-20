@@ -64,6 +64,27 @@
 写入沿用 DBoard 的 `.lock` 文件并原子替换，只改目标条目的分支和进度。
 内部反馈记录放在条目中的 HTML 注释里，用于仓库映射与重试去重；不作为页面内容显示。
 
+## 上线前事项完成勾选
+
+`report --release-done L001` 将对应事项设为完成，`--release-undone L001` 取消完成；多个事项重复参数。两者直接修改 D板使用的 `done` 字段，保留原名称、明细、分类、证据和维护状态，也支持用户维护项。用户明确要求，或本轮已在授权范围内执行事项并核验成功后回写，不用把名称改成“已发布”。部署制品、发布服务和生产核验按各自事项分别判断。
+
+先用 `context D014` 判断压缩，再用 `inspect D014 --section release` 核对完整清单，用最新 `show` 的标题和 revision 反馈：
+
+```bash
+~/.local/bin/dboard-ai report D014 \
+  --expect-title 'show 返回的 title' \
+  --expect-revision 'show 返回的 revision' \
+  --release-done L001 \
+  --release-done L002 \
+  --compression-decision skip \
+  --compression-reason '已核对本轮状态变更，无需整体整理' \
+  --event-id '本次勾选的稳定编号'
+```
+
+可与本轮 `--summary`、`--details` 和 `--handoff-file` 一起反馈；只改状态时无需另写摘要文件。取消完成须有用户指令或核实后的失效依据。相同状态和重复编号不会反向切换；同一事项同时完成／取消或删除／改状态会失败。无效编号、不存在的事项或过期 revision 拒绝整次写入。原内容修改／删除保护仍有效，CR模式和已完成需求不接受此操作，不改变需求完成状态。
+
+`release_result.completed` 和 `reopened` 返回本次改变的编号；`skipped` 的 `already_done`／`already_undone` 表示状态已符合目标。同一 event-id 和原参数可安全重试，换动作时使用新 event-id。
+
 ## 返回结果
 
 - 成功返回 `success: true`；report 还返回 `local_saved`、`sync`、`event_id`、`duplicate` 和最新 item。

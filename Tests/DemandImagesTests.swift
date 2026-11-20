@@ -273,11 +273,11 @@ final class DemandImagesTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let prefs = ShortcutPreferences(defaults: defaults)
         XCTAssertEqual(prefs.binding(for: "dboard")?.title, "⌃⇧D")
-        let reqFlow = prefs.binding(for: "reqflow")
+        let reqFlow = prefs.binding(for: "webworkspace")
         let replacement = GlobalShortcut(keyCode: UInt32(kVK_ANSI_B), modifiers: UInt32(controlKey | optionKey), keyLabel: "B")
         XCTAssertTrue(prefs.set(replacement, for: "dboard"))
         XCTAssertEqual(ShortcutPreferences(defaults: defaults).binding(for: "dboard"), replacement)
-        XCTAssertEqual(prefs.binding(for: "reqflow"), reqFlow)
+        XCTAssertEqual(prefs.binding(for: "webworkspace"), reqFlow)
         XCTAssertFalse(prefs.set(try XCTUnwrap(reqFlow), for: "dboard"))
         XCTAssertEqual(prefs.binding(for: "dboard"), replacement)
     }

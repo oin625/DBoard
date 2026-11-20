@@ -215,8 +215,8 @@ final class ReliabilityTests: XCTestCase {
         vm.demandFilter = .all; vm.demandQuery = "coupon"
         XCTAssertEqual(vm.filteredItems.map(\.id), ["D001"])
         vm.focusItem("D003")
-        XCTAssertEqual(vm.demandFilter, .all, "定位需求时清掉会隐藏它的筛选")
-        XCTAssertTrue(vm.filteredItems.contains { $0.id == "D003" })
+        XCTAssertEqual(vm.demandFilter, .suspended)
+        XCTAssertTrue(vm.visibleOpenDemands.contains { $0.id == "D003" })
     }
 
     @MainActor

@@ -131,6 +131,7 @@ final class DemandChatDirectory: ObservableObject {
 
     private static func run(_ arguments: [String]) async throws -> Data {
         try await Task.detached(priority: .utility) {
+            guard DemandChatPrivacy.isEnabled else { throw DemandChatDirectoryError.unavailable }
             let result = ProcessRunner.run(NSHomeDirectory() + "/.qoderwork/bin/dws",
                 arguments: arguments + ["--format", "json", "--timeout", "20"],
                 environment: ProcessInfo.processInfo.environment, timeout: 25)

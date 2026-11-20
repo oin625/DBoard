@@ -485,9 +485,20 @@ final class BizMapViewModel: ObservableObject {
     }
 
     /// 打开外部链接 (PRD 明细页 / 钉钉需求文档)
-    func openURL(_ s: String) {
-        guard let u = URL(string: s) else { return }
-        NSWorkspace.shared.open(u)
+    @discardableResult
+    func openURL(_ s: String) -> Bool {
+        guard let u = URL(string: s) else { return false }
+        return NSWorkspace.shared.open(u)
+    }
+
+    /// Only the explicit browser handoff dismisses the requirement flow.
+    @discardableResult
+    func openWebDetail(_ s: String, open: ((String) -> Bool)? = nil,
+                       dismiss: (() -> Void)? = nil) -> Bool {
+        guard open?(s) ?? openURL(s) else { return false }
+        if let dismiss { dismiss() }
+        else { BizMapBoardWindowController.shared.hideForWorkspaceSwitch() }
+        return true
     }
 
     /// 打开作战地图文档 (Obsidian 优先, 失败落默认编辑器)
@@ -1566,6 +1577,7 @@ struct BizMapBoardView: View {
     @EnvironmentObject var fm: FontManager
     var popoverMode: Bool = false
     var refreshOnAppear: Bool = true
+    var focusSearchOnAppear = true
     @FocusState private var searchFocused: Bool
     @State private var copiedHint: String? = nil
 
@@ -1608,7 +1620,7 @@ struct BizMapBoardView: View {
         }
         .onAppear {
             guard refreshOnAppear else { return }
-            vm.load(); vm.checkSyncStatus(); searchFocused = true
+            vm.load(); vm.checkSyncStatus(); searchFocused = focusSearchOnAppear
             vm.probeAuth()
             for item in vm.myActive { vm.loadDeliverableStatus(reqId: item.id) }
         }
@@ -2444,7 +2456,7 @@ struct BizMapBoardView: View {
                 Button { togglePRD(p.id) } label: {
                     Label(open ? "收起" : "详情", systemImage: open ? "chevron.up" : "chevron.down")
                 }
-                Button { vm.openURL(p.url) } label: {
+                Button { vm.openWebDetail(p.url) } label: {
                     Label("网页详情", systemImage: "arrow.up.right.square")
                 }
                 if hero || p.scopes.contains("pending") {
@@ -3013,6 +3025,14 @@ final class BizMapBoardWindowController {
         show()
     }
 
+    func showWorkspace() {
+        vm.perspective = .requirements
+        show()
+        window?.makeFirstResponder(nil)
+    }
+
+    func hideForWorkspaceSwitch() { window?.orderOut(nil); closePopover() }
+
     func show() {
         if let w = window {
             w.title = vm.perspective == .requirements ? "ReqFlow 需求流" : "BizMap 业务地图"
@@ -3022,7 +3042,7 @@ final class BizMapBoardWindowController {
             vm.load()
             return
         }
-        let view = BizMapBoardView()
+        let view = BizMapBoardView(focusSearchOnAppear: false)
             .environmentObject(vm)
             .environmentObject(ThemeManager.shared)
             .dboardFont(size: 13).environmentObject(FontManager.shared)
@@ -3030,14 +3050,13 @@ final class BizMapBoardWindowController {
         let win = NSWindow(contentViewController: host)
         win.title = vm.perspective == .requirements ? "ReqFlow 需求流" : "BizMap 业务地图"
         win.titleVisibility = .visible
-        win.titlebarAppearsTransparent = true
+        win.titlebarAppearsTransparent = false
         win.setContentSize(NSSize(width: 980, height: 740))
         win.styleMask = [.titled, .closable, .resizable, .miniaturizable]
         win.isReleasedWhenClosed = false
-        // 窗口透明度: 只在 nativeBlur 主题下透出桌面壁纸, 其它主题保持不透明避免顶栏透视
-        let _needsTransparent = ThemeManager.shared.current.nativeBlur
-        win.isOpaque = !_needsTransparent
-        win.backgroundColor = _needsTransparent ? .clear : .windowBackgroundColor
+        // Native title bar and themed content both have a solid base, including the glass skin.
+        win.isOpaque = true
+        win.backgroundColor = .windowBackgroundColor
         win.collectionBehavior = [.moveToActiveSpace, .fullScreenPrimary]
         win.contentMinSize = NSSize(width: 740, height: 540)
         win.setFrameAutosaveName("DBoardBizMapWindow")
@@ -3048,7 +3067,8 @@ final class BizMapBoardWindowController {
         windowInteraction = WorkspaceWindowInteraction(window: win, id: "bizmap", handlesEscape: false)
         windowKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, let window = self.window, window.isVisible, event.window === window,
-                  window.isKeyWindow, event.keyCode == 53, window.attachedSheet == nil else { return event }
+                  window.isKeyWindow, window.attachedSheet == nil else { return event }
+            guard event.keyCode == 53 else { return event }
             if self.vm.selected != nil { self.vm.selected = nil }
             else if !self.vm.expandedPRD.isEmpty { self.vm.expandedPRD.removeAll() }
             else if !self.vm.query.isEmpty { self.vm.query = "" }

@@ -726,7 +726,7 @@ struct McpBoardView: View {
     private static let desc: [String: String] = [
         "browser-use": "Qoder 内置的浏览器自动化：AI 可以打开网页、点击、填表、截图、看网络请求和控制台。之前抓 GitHub 趋势榜就是它干的。与 ego-browser 的区别：这个是临时浏览器实例，ego 复用你本人的登录态。",
         "genui": "对话内弹交互式 UI 面板：show_widget 渲染 HTML 小组件（表单/确认框/数据展示），load_guidelines 加载组件规范。",
-        "schedule": "定时任务引擎：让 AI 在指定时间自动执行任务。tech-scout 每天 10 点/14 点的资讯抓取就挂在它上面。",
+        "schedule": "定时任务引擎：让 AI 在指定时间自动执行任务。",
         "utools": "你自己配的 uTools 集成（本机 3501 端口）：二维码生成/解码、待办管理、笔记。绿点 = uTools 客户端正在运行。",
         "computer-use": "桌面 App 自动化：点击/键盘/滚动本地应用程序（非浏览器）。Qoder 在别的项目里注入的，与 ego-browser 互补——ego 管网页，它管桌面。",
         "codegraph": "Qoder 在代码仓库项目（muse/tesla）里自动注入的代码图谱查询，仅 codegraph_explore 一个工具。与你手动装的 codegraph CLI 同名但相互独立。",

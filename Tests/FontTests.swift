@@ -141,6 +141,9 @@ final class FontTests: XCTestCase {
 
     @MainActor
     func testStatusMenuStillChangesStatusWithCustomFont() throws {
+        let previousTabNavigation = WorkspacePreferences.shared.tabNavigationEnabled
+        WorkspacePreferences.shared.tabNavigationEnabled = true
+        defer { WorkspacePreferences.shared.tabNavigationEnabled = previousTabNavigation }
         _ = NSApplication.shared
         try withDefaults { defaults in
             let fonts = FontManager(defaults: defaults)

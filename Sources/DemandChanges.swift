@@ -80,17 +80,24 @@ struct DemandChangesEditor: View {
     let imageStore: DemandImageStore
     var refreshOnAppear = true
     @State private var latest: DItem?
+    @State private var refreshing: Bool
+    @State private var refreshRequest = UUID()
+    private let readRecord: @Sendable (String) throws -> DItem
     @StateObject private var session: DemandChangeDraftSession
     @State private var loadError: String?
     @State private var saveError: String?
     @State private var confirmingDiscard = false
 
     init(item: DItem, draftStore: DemandChangeDraftStore, cancel: @escaping () -> Void,
-         refreshOnAppear: Bool = true, imageStore: DemandImageStore = .shared) {
+         refreshOnAppear: Bool = true, imageStore: DemandImageStore = .shared,
+         readRecord: @escaping @Sendable (String) throws -> DItem = { try DItemStore.currentRecord(id: $0) }) {
         self.item = item
         self.cancel = cancel
         self.imageStore = imageStore
         self.refreshOnAppear = refreshOnAppear
+        self.readRecord = readRecord
+        _latest = State(initialValue: item)
+        _refreshing = State(initialValue: refreshOnAppear)
         _session = StateObject(wrappedValue: DemandChangeDraftSession(id: item.id, changes: item.changes, store: draftStore))
     }
 
@@ -107,13 +114,26 @@ struct DemandChangesEditor: View {
         cancel()
     }
 
-    private func reload() {
-        do {
-            let current = try DItemStore.currentItem(id: item.id)
+    @MainActor
+    private func reload() async {
+        let token = UUID()
+        refreshRequest = token
+        refreshing = true
+        let id = item.id
+        let reader = readRecord
+        let result = await Task.detached(priority: .userInitiated) {
+            Result { try reader(id) }
+        }.value
+        guard !Task.isCancelled, refreshRequest == token else { return }
+        refreshing = false
+        switch result {
+        case .success(let current):
             latest = current
             session.reconcile(with: current.changes)
             loadError = nil
-        } catch { loadError = error.localizedDescription }
+        case .failure(let error):
+            loadError = error.localizedDescription
+        }
     }
 
     private func save(copy: Bool) {
@@ -126,7 +146,6 @@ struct DemandChangesEditor: View {
         if !session.markAdded(change) {
             vm.showFeedback("变更已添加，草稿清理失败；下次打开会核对已添加内容。", failed: true)
         }
-        reload()
         if copy { vm.copyChangeState(item.id, changeID: change.id) }
         cancel()
     }
@@ -164,7 +183,7 @@ struct DemandChangesEditor: View {
                 HStack {
                     Text(error).dboardFont(size: 12).foregroundStyle(.red)
                     Spacer()
-                    Button("重试", action: reload)
+                    Button("重试") { Task { await reload() } }
                 }
             }
             if let error = saveError ?? session.error {
@@ -186,10 +205,10 @@ struct DemandChangesEditor: View {
                 Spacer()
                 Button("添加变更") { save(copy: false) }
                     .keyboardShortcut("s", modifiers: .command)
-                    .disabled(session.intent.trimmed.isEmpty || latest == nil || loadError != nil)
+                    .disabled(session.intent.trimmed.isEmpty || latest == nil || refreshing || loadError != nil)
                 Button("添加并复制") { save(copy: true) }.demandButtonStyle(.borderedProminent)
                     .keyboardShortcut(.return, modifiers: .command)
-                    .disabled(session.intent.trimmed.isEmpty || latest == nil || loadError != nil)
+                    .disabled(session.intent.trimmed.isEmpty || latest == nil || refreshing || loadError != nil)
             }
         }
         .padding(20)
@@ -205,9 +224,12 @@ struct DemandChangesEditor: View {
         .onExitCommand(perform: requestClose)
         .onAppear {
             vm.editingFormCount += 1
-            if refreshOnAppear { reload() } else { latest = item }
+        }
+        .task {
+            if refreshOnAppear { await reload() }
         }
         .onDisappear {
+            refreshRequest = UUID()
             session.preserve()
             vm.editingFormCount = max(0, vm.editingFormCount - 1)
         }

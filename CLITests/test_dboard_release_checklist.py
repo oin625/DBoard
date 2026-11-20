@@ -237,6 +237,138 @@ class ReleaseChecklistTests(unittest.TestCase):
                       "--release-add", "不能覆盖", "--no-sync", success=False)
             self.assertEqual(self.cache.read_bytes(), before)
 
+    def status_fixture(self):
+        self.write_list({"items": [
+            {"id": "L001", "text": "发布 ultra 服务", "done": False, "updated_by": "ai",
+             "details": "开发分支：feature/release。", "category": "release", "evidence": "原发布记录"},
+            {"id": "L002", "text": "核验正式制品", "done": False, "updated_by": "user",
+             "details": "保留用户说明", "category": "custom:制品核验",
+             "evidence": "用户证据\n/Users/fixture/release.png"},
+            {"id": "L003", "text": "配置生产开关", "done": False, "updated_by": "ai",
+             "details": "", "category": "configuration", "evidence": ""}
+        ], "excluded_by_user": ["用户删除的旧事项"], "next_id": 4,
+            "reviewed_scope": None})
+        return self.show()
+
+    def test_explicit_completion_and_reopening_preserve_content_and_user_ownership(self):
+        original = self.status_fixture()
+        complete = self.call(*self.args(original, "--release-done", "L001",
+            "--release-done", "L002", "--release-done", "L001"))
+        self.assertEqual(complete["release_result"]["completed"], ["L001", "L002"])
+        self.assertEqual(complete["release_result"]["reopened"], [])
+        expected = json.loads(json.dumps(original["release_checklist"]))
+        for entry in expected["items"][:2]:
+            entry["done"] = True
+        self.assertEqual(complete["item"]["release_checklist"], expected)
+        self.assertEqual(complete["item"]["status"], original["status"])
+        self.assertEqual(complete["item"]["execution"], original["execution"])
+        self.assertEqual(complete["item"]["progress"], original["progress"])
+        self.assertEqual(digest(self.cache.read_text()), digest(self.before))
+        for command in ("show", "context"):
+            snapshot = self.call(command, "D014")["item"]
+            self.assertEqual(snapshot["release_checklist"], expected)
+        reopened = self.call(*self.args(self.show(), "--release-undone", "L001",
+            "--release-undone", "L002", "--release-undone", "L002"))
+        self.assertEqual(reopened["release_result"]["reopened"], ["L001", "L002"])
+        self.assertEqual(reopened["item"]["release_checklist"], original["release_checklist"])
+
+    def test_state_commands_are_idempotent_and_event_retries_never_toggle(self):
+        original = self.status_fixture()
+        arguments = self.args(original, "--release-done", "L002", "--event-id", "mark-release")
+        self.call(*arguments)
+        before_retry = self.cache.read_bytes()
+        self.assertTrue(self.call(*arguments)["duplicate"])
+        self.assertEqual(self.cache.read_bytes(), before_retry)
+        conflict = self.call(*self.args(self.show(), "--release-undone", "L002",
+            "--event-id", "mark-release"), success=False)
+        self.assertEqual(conflict["error"]["code"], "EVENT_CONFLICT")
+        self.assertEqual(self.cache.read_bytes(), before_retry)
+        again = self.call(*self.args(self.show(), "--release-done", "L002"))
+        self.assertEqual(again["release_result"]["completed"], [])
+        self.assertEqual(again["release_result"]["skipped"], [{"id": "L002", "reason": "already_done"}])
+        self.assertTrue(again["item"]["release_checklist"]["items"][1]["done"])
+        no_change = self.call(*self.args(self.show(), "--release-undone", "L001"))
+        self.assertEqual(no_change["release_result"]["reopened"], [])
+        self.assertEqual(no_change["release_result"]["skipped"], [{"id": "L001", "reason": "already_undone"}])
+
+    def test_invalid_conflicting_or_missing_state_targets_leave_the_whole_report_unwritten(self):
+        self.status_fixture()
+        cases = [
+            (("--release-done", "bad-id"), "INVALID_ARGUMENT"),
+            (("--release-undone", "L000"), "INVALID_ARGUMENT"),
+            (("--release-done", "L001", "--release-done", "L999"), "RELEASE_ITEM_NOT_FOUND"),
+            (("--release-undone", "L001", "--release-undone", "L999"), "RELEASE_ITEM_NOT_FOUND"),
+            (("--release-done", "L001", "--release-undone", "L001"), "RELEASE_STATE_CONFLICT"),
+            (("--release-done", "L001", "--release-remove", "L001"), "RELEASE_STATE_CONFLICT"),
+            (("--release-undone", "L001", "--release-remove", "L001"), "RELEASE_STATE_CONFLICT"),
+        ]
+        for flags, code in cases:
+            with self.subTest(flags=flags):
+                before = self.cache.read_bytes()
+                failed = self.call(*self.args(self.show(), "--release-add", "不能部分写入", *flags), success=False)
+                self.assertEqual(failed["error"]["code"], code)
+                self.assertEqual(self.cache.read_bytes(), before)
+
+    def test_stale_state_update_cannot_overwrite_later_user_changes(self):
+        stale = self.status_fixture()
+        checklist = self.show()["release_checklist"]
+        checklist["items"][1].update(done=True, evidence="用户追加的新证据")
+        self.write_list(checklist)
+        before = self.cache.read_bytes()
+        for flags in (("--release-done", "L001"), ("--release-undone", "L002")):
+            failed = self.call(*self.args(stale, *flags), success=False)
+            self.assertEqual(failed["error"]["code"], "REVISION_CONFLICT")
+            self.assertEqual(self.cache.read_bytes(), before)
+        arguments = self.args(self.show(), "--release-done", "L001")
+        arguments[arguments.index("--expect-title") + 1] = "另一个需求"
+        failed = self.call(*arguments, success=False)
+        self.assertEqual(failed["error"]["code"], "TITLE_MISMATCH")
+        self.assertEqual(self.cache.read_bytes(), before)
+
+    def test_status_permission_does_not_allow_editing_or_removing_protected_content(self):
+        self.status_fixture()
+        self.call(*self.args(self.show(), "--release-done", "L001", "--release-done", "L002"))
+        for flags in (("--release-edit", "L001=改名"), ("--release-remove", "L001"),
+                      ("--release-undone", "L001", "--release-edit", "L001=改名")):
+            before = self.cache.read_bytes()
+            failed = self.call(*self.args(self.show(), *flags), success=False)
+            self.assertEqual(failed["error"]["code"], "USER_MANAGED_RELEASE_ITEM")
+            self.assertEqual(self.cache.read_bytes(), before)
+        self.call(*self.args(self.show(), "--release-undone", "L002"))
+        for flags in (("--release-edit", "L002=改名"), ("--release-remove", "L002")):
+            before = self.cache.read_bytes()
+            failed = self.call(*self.args(self.show(), *flags), success=False)
+            self.assertEqual(failed["error"]["code"], "USER_MANAGED_RELEASE_ITEM")
+            self.assertEqual(self.cache.read_bytes(), before)
+
+    def test_state_commands_keep_code_review_read_only_and_completed_demands_immutable(self):
+        self.status_fixture()
+        for flag in ("--release-done", "--release-undone"):
+            before = self.cache.read_bytes()
+            failed = self.call(*self.args(self.show(), "--task", "code-review", flag, "L001"), success=False)
+            self.assertEqual(failed["error"]["code"], "REVIEW_READ_ONLY")
+            self.assertEqual(self.cache.read_bytes(), before)
+        self.cache.write_text(self.cache.read_text().replace("锁券接口 #进行中", "锁券接口 #已完成"))
+        before = self.cache.read_bytes()
+        failed = self.call(*self.args(self.show(), "--release-done", "L001"), success=False)
+        self.assertEqual(failed["error"]["code"], "DEMAND_COMPLETED")
+        self.assertEqual(self.cache.read_bytes(), before)
+
+    def test_completion_can_be_reported_with_progress_and_handoff_once(self):
+        original = self.status_fixture()
+        arguments = self.args(original, "--release-done", "L001",
+            "--summary", "ultra 服务发布完成并已核验。",
+            "--details", "发布版本核验通过；其余上线事项待执行。",
+            "--event-id", "release-with-progress")
+        result = self.call(*arguments)
+        self.assertTrue(result["item"]["release_checklist"]["items"][0]["done"])
+        self.assertEqual(len(result["item"]["progress_records"]), len(original["progress_records"]) + 1)
+        self.assertEqual(result["item"]["progress_records"][-1]["summary"], "ultra 服务发布完成并已核验。")
+        self.assertIn("ultra 服务发布完成并已核验。", result["item"]["handoff"]["sections"]["completed"])
+        before = self.cache.read_bytes()
+        self.assertTrue(self.call(*arguments)["duplicate"])
+        self.assertEqual(self.cache.read_bytes(), before)
+
 
 if __name__ == "__main__":
     unittest.main()

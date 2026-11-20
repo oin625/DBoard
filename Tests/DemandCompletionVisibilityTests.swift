@@ -27,9 +27,32 @@ final class DemandCompletionVisibilityTests: XCTestCase {
         try body(directory, store)
     }
 
-    private func item(_ id: String, status: ItemStatus) -> DItem {
+    private func item(_ id: String, status: ItemStatus, priority: ItemPriority = .p1, milestones: [Milestone] = []) -> DItem {
         DItem(id: id, project: "ultra", title: "保留现状", headerTitle: "当前需求",
-            status: status, priority: .p1, deadline: nil, branch: nil, startDate: nil, milestones: [])
+            status: status, priority: priority, deadline: nil, branch: nil, startDate: nil, milestones: milestones)
+    }
+
+    @MainActor
+    func testDefaultListOrdersInProgressByRecordedUpdatesAndKeepsOtherStatusesSearchable() throws {
+        try fixture { _, store in
+            let vm = DBoardViewModel(loadCache: false, archiveStore: store)
+            let older = item("D021", status: .inProgress, priority: .p0,
+                milestones: [Milestone(date: "2026-11-09", content: "已开始")])
+            var newer = item("D022", status: .inProgress, priority: .p3,
+                milestones: [Milestone(date: "2026-11-07", content: "核对范围")])
+            let changeDate = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-10T09:00:00Z"))
+            newer.changes = [.init(id: "C001", createdAt: changeDate, intent: "调整范围")]
+            vm.items = [item("D023", status: .inProgress), older, newer,
+                        item("D024", status: .pending), item("D025", status: .suspended)]
+            vm.showDemands()
+            XCTAssertEqual(vm.visibleOpenDemands.map(\.id), ["D022", "D021", "D023"])
+            vm.moveSel(1)
+            XCTAssertEqual(vm.selectedID, "D022")
+            vm.demandQuery = "D024"
+            XCTAssertEqual(vm.visibleOpenDemands.map(\.id), ["D024"])
+            vm.showDemands(.suspended)
+            XCTAssertEqual(vm.visibleOpenDemands.map(\.id), ["D025"])
+        }
     }
 
     func testCompletedCatalogMixesIncidentAndDevelopmentWithCurrentDataWinning() throws {
@@ -72,13 +95,12 @@ final class DemandCompletionVisibilityTests: XCTestCase {
     }
 
     @MainActor
-    func testAllPageCompletedSectionStartsCollapsedAndCanExpandCollapseAndRevealSelection() throws {
+    func testOverviewOpensDemandListWithCompletedSectionCollapsed() throws {
         UserDefaults.standard.register(defaults: ["reply.enabled": false])
         _ = NSApplication.shared
         try fixture { _, store in
             let vm = DBoardViewModel(loadCache: false, archiveStore: store)
             vm.items = [item("D013", status: .inProgress)]
-            vm.showDemands(.all)
             let view = NSHostingView(rootView: DBoardRootView(popoverMode: true)
                 .environmentObject(vm).environmentObject(ThemeManager.shared).environmentObject(FontManager.shared)
                 .environment(\.demandFloatingCanvas, true).frame(width: 520, height: 700))
@@ -99,6 +121,20 @@ final class DemandCompletionVisibilityTests: XCTestCase {
                     .write(to: URL(fileURLWithPath: output + "/" + name + ".png"))
             }
             settle()
+            XCTAssertTrue(descendants(view).contains { $0 is DemandMatrixPointerView })
+            XCTAssertFalse(controls().contains { $0.keyboardIdentifier == "demand-list-toggle-D013" })
+            try XCTUnwrap(controls().first { $0.keyboardIdentifier == "overview-all-demands" }).activate()
+            settle()
+            XCTAssertEqual(vm.workspacePage, .demands)
+            XCTAssertEqual(vm.demandFilter, .all)
+            XCTAssertFalse(descendants(view).contains { $0 is DemandMatrixPointerView })
+            XCTAssertTrue(controls().contains { $0.keyboardIdentifier == "demand-list-toggle-D013" })
+            try XCTUnwrap(controls().first { $0.keyboardIdentifier == "in-progress-section-toggle" }).activate()
+            settle()
+            XCTAssertFalse(controls().contains { $0.keyboardIdentifier == "demand-list-toggle-D013" })
+            vm.focusItem("D013")
+            settle()
+            XCTAssertTrue(controls().contains { $0.keyboardIdentifier == "demand-list-toggle-D013" })
             let toggle = try XCTUnwrap(controls().first { $0.keyboardIdentifier == "completed-section-toggle" })
             XCTAssertFalse(controls().contains { $0.keyboardIdentifier.hasPrefix("completed-toggle-") })
             try screenshot("all-collapsed")
@@ -124,22 +160,20 @@ final class DemandCompletionVisibilityTests: XCTestCase {
                            "Returning from completed-only to all starts with the completed section collapsed")
             vm.workspacePage = .overview
             settle()
+            XCTAssertTrue(descendants(view).contains { $0 is DemandMatrixPointerView })
+            XCTAssertFalse(controls().contains { $0.keyboardIdentifier == "demand-list-toggle-D013" })
             try screenshot("home")
         }
     }
 
     @MainActor
-    func testRenderOneCompletedSectionForBothLayouts() throws {
+    func testRenderOneCompletedSectionInDemandList() throws {
         guard let output = ProcessInfo.processInfo.environment["DBOARD_COMPLETED_UI_SNAPSHOTS"] else {
             throw XCTSkip("Enable completed UI snapshots explicitly")
         }
         try FileManager.default.createDirectory(atPath: output, withIntermediateDirectories: true)
         try fixture { _, store in
             _ = NSApplication.shared
-            let suite = "DBoardCompletedUI-" + UUID().uuidString
-            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-            defer { defaults.removePersistentDomain(forName: suite) }
-            let preferences = WorkspacePreferences(defaults: defaults)
             let vm = DBoardViewModel(loadCache: false, archiveStore: store)
             var incident = item("P001", status: .completed)
             incident.kind = .incident
@@ -149,15 +183,14 @@ final class DemandCompletionVisibilityTests: XCTestCase {
             vm.showDemands(.all)
             let original = NSApp.appearance
             defer { NSApp.appearance = original }
-            for (name, layout, appearance, width) in [
-                ("matrix-light", DemandLayout.matrix, NSAppearance.Name.aqua, CGFloat(760)),
-                ("matrix-dark", .matrix, .darkAqua, CGFloat(760)),
-                ("list-compact", .list, .aqua, CGFloat(440))
+            for (name, appearance, width) in [
+                ("list-light", NSAppearance.Name.aqua, CGFloat(760)),
+                ("list-dark", .darkAqua, CGFloat(760)),
+                ("list-compact", .aqua, CGFloat(440))
             ] {
-                preferences.demandLayout = layout
                 NSApp.appearance = NSAppearance(named: appearance)
                 let view = NSHostingView(rootView: ScrollView {
-                    VStack(spacing: 0) { DemandListView(store: store, preferences: preferences) }
+                    VStack(spacing: 0) { DemandListView(store: store) }
                 }.environmentObject(vm).environmentObject(ThemeManager.shared).environmentObject(FontManager.shared)
                     .environment(\.colorScheme, appearance == .darkAqua ? .dark : .light)
                     .frame(width: width, height: 1080).background(Color(nsColor: .windowBackgroundColor)))
@@ -229,7 +262,6 @@ final class DemandCompletionVisibilityTests: XCTestCase {
             vm.showDemands(.inProgress)
             XCTAssertEqual(vm.filteredItems.map(\.id), ["D013"])
             XCTAssertTrue(vm.filteredArchiveRecords.isEmpty)
-            XCTAssertFalse(vm.attentionItems.contains { $0.id == "D018" })
         }
     }
 

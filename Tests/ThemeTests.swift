@@ -36,6 +36,9 @@ final class ThemeTests: XCTestCase {
 
     @MainActor
     func testChangingSkinUpdatesOpenWindowsAndRetainsSelectionDraftAndKeyboardFocus() throws {
+        let previousTabNavigation = WorkspacePreferences.shared.tabNavigationEnabled
+        WorkspacePreferences.shared.tabNavigationEnabled = true
+        defer { WorkspacePreferences.shared.tabNavigationEnabled = previousTabNavigation }
         UserDefaults.standard.register(defaults: ["reply.enabled": false])
         _ = NSApplication.shared
         try withDefaults { defaults in

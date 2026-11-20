@@ -1,5 +1,7 @@
 # Swift 构建产物
 .build/
+Tools/ExcalidrawEditor/node_modules/
+Resources/ExcalidrawEditor/
 *.xcodeproj
 *.xcworkspace
 DerivedData/

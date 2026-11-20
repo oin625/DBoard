@@ -1,6 +1,6 @@
 #!/bin/bash
 # DBoard 构建 & 安装脚本
-# 用法: ./install.sh
+# 用法: ./install.sh [--full]
 
 set -e
 
@@ -17,9 +17,7 @@ echo ""
 # 1. 构建
 echo "🔨 正在构建..."
 cd "$SCRIPT_DIR"
-swift build -c release 2>&1
-
-BUILD_PATH=".build/release/$APP_NAME"
+BUILD_PATH="$(bash "$SCRIPT_DIR/Tools/build_app.sh" "$@")"
 if [ ! -f "$BUILD_PATH" ]; then
     echo "❌ 构建失败"
     exit 1
@@ -36,12 +34,17 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$BUILD_PATH" "$MACOS_DIR/$APP_NAME"
 cp "$SCRIPT_DIR/Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns" 2>/dev/null || echo "⚠️  缺少 AppIcon.icns"
+# Offline, editable Excalidraw scenes; no exported map previews.
+cp -R "$SCRIPT_DIR/Resources/ExcalidrawEditor" "$RESOURCES_DIR/"
 # 同步逻辑随应用打包，不再依赖可能过时的 ~/.local/bin 副本。
 cp "$SCRIPT_DIR/sync_dboard.sh" "$RESOURCES_DIR/sync_dboard.sh"
 
 # 给执行 AI 的 CLI 与 Skill 随应用更新；保留已有 dboard GUI 命令。
 mkdir -p "$RESOURCES_DIR/CLI" "$RESOURCES_DIR/skills/dboard-feedback" "$HOME/.local/bin"
 cp "$SCRIPT_DIR/Tools/dboard_ai.py" "$RESOURCES_DIR/CLI/dboard_ai.py"
+cp "$SCRIPT_DIR/Tools/dboard_try.py" "$RESOURCES_DIR/CLI/dboard_try.py"
+cp "$SCRIPT_DIR/Tools/dboard_learning.py" "$RESOURCES_DIR/CLI/dboard_learning.py"
+cp "$SCRIPT_DIR/Tools/dboard_learning_knowledge.py" "$RESOURCES_DIR/CLI/dboard_learning_knowledge.py"
 cp "$SCRIPT_DIR/Tools/dboard_code.py" "$RESOURCES_DIR/CLI/dboard_code.py"
 cp "$SCRIPT_DIR/Tools/dboard_worktrees.py" "$RESOURCES_DIR/CLI/dboard_worktrees.py"
 cp "$SCRIPT_DIR/Tools/dboard_plan.py" "$RESOURCES_DIR/CLI/dboard_plan.py"
@@ -106,6 +109,24 @@ cat > "$CONTENTS_DIR/Info.plist" << 'PLIST'
         <key>NSAllowsArbitraryLoads</key>
         <true/>
     </dict>
+    <key>CFBundleDocumentTypes</key>
+    <array><dict>
+        <key>CFBundleTypeName</key><string>Excalidraw 绘图</string>
+        <key>CFBundleTypeRole</key><string>Editor</string>
+        <key>LSHandlerRank</key><string>Alternate</string>
+        <key>LSItemContentTypes</key><array><string>com.excalidraw.scene</string></array>
+        <key>CFBundleTypeExtensions</key><array><string>excalidraw</string></array>
+    </dict></array>
+    <key>UTImportedTypeDeclarations</key>
+    <array><dict>
+        <key>UTTypeIdentifier</key><string>com.excalidraw.scene</string>
+        <key>UTTypeDescription</key><string>Excalidraw 绘图</string>
+        <key>UTTypeConformsTo</key><array><string>public.json</string></array>
+        <key>UTTypeTagSpecification</key><dict>
+            <key>public.filename-extension</key><array><string>excalidraw</string></array>
+            <key>public.mime-type</key><string>application/vnd.excalidraw+json</string>
+        </dict>
+    </dict></array>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
@@ -146,12 +167,10 @@ CERTCNF
     security import "$SIGN_DIR/key.pem" -k "$SIGN_KC" -T /usr/bin/codesign -T /usr/bin/security >/dev/null 2>&1 || true
     security add-trusted-cert -p codeSign "$SIGN_DIR/cert.pem" >/dev/null 2>&1 || true
 fi
-security unlock-keychain -p dboard "$SIGN_KC" >/dev/null 2>&1 || true
 # 专用钥匙串加入搜索列表, 否则 codesign 找不到自签身份
 security list-keychains -d user -s "$SIGN_KC" $(security list-keychains -d user | tr -d '"') >/dev/null 2>&1 || true
-codesign --force --deep --sign "$SIGN_IDENTITY" --keychain "$SIGN_KC" "$APP_DIR" 2>/dev/null \
-    || codesign --force --deep --sign - "$APP_DIR" 2>/dev/null \
-    || echo "⚠️  codesign 失败(通知可能无法注册)"
+# 增量更新也使用这个入口，避免钥匙串睡眠/超时锁定后反复弹密码框。
+bash "$SCRIPT_DIR/Tools/sign_app.sh" "$APP_DIR"
 
 echo "✅ App 已安装到 $APP_DIR"
 

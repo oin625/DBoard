@@ -6,6 +6,13 @@ struct ArchivedDemand: Identifiable {
     let original: [String]?
     let priority: ItemPriority
     var id: String { ContentRevision.hash(block.joined(separator: "\n")) }
+    var projection: [String]? {
+        guard original != nil else { return nil }
+        return try? DemandOverview.archiveBlock(block)
+    }
+    var projectionID: String? {
+        projection.map { ContentRevision.hash($0.joined(separator: "\n")) }
+    }
     let item: DItem
     var completedDate: String? {
         guard let range = block[0].range(of: #"✅[0-9]{4}-[0-9]{2}-[0-9]{2}"#, options: .regularExpression) else { return nil }
@@ -61,7 +68,7 @@ enum DemandArchive {
             while index < lines.count && !lines[index].hasPrefix("### ") &&
                 !lines[index].hasPrefix("## ") && lines[index] != "---" { index += 1 }
             var block = Array(lines[start..<index])
-            while block.count > 1 && block.last == "" { block.removeLast() }
+            while block.count > 1, let last = block.last, last.trimmed.isEmpty, !last.hasPrefix("    ") { block.removeLast() }
             // The completion stamp belongs to the archive, not the requirement's title.
             block[0] = block[0].replacingOccurrences(of: #"\s*✅[0-9]{4}-[0-9]{2}-[0-9]{2}"#,
                 with: "", options: .regularExpression)
@@ -69,8 +76,7 @@ enum DemandArchive {
             guard parsed.count == 1 else { throw ReadError.invalid }
             guard parsed[0].status == .completed else { continue }
             // Keep the exact archive snapshot (including completion stamp) as identity.
-            var rawBlock = Array(lines[start..<index])
-            while rawBlock.count > 1 && rawBlock.last == "" { rawBlock.removeLast() }
+            let rawBlock = Array(lines[start..<(start + block.count)])
             records.append(ArchivedDemand(block: rawBlock, original: nil, priority: priority, item: parsed[0]))
         }
         var seen = Set<String>()
@@ -96,17 +102,27 @@ enum DemandArchive {
     }
 
     static func merged(_ remote: [ArchivedDemand], journal: ArchiveJournal) -> [ArchivedDemand] {
-        var records = remote
-        for entry in journal.entries.values.sorted(by: { $0.createdAt < $1.createdAt }) where entry.state != .submitted {
-            guard let parsed = try? parse(entry.archived.joined(separator: "\n")), let archived = parsed.first else { continue }
-            if let index = records.firstIndex(where: { $0.id == archived.id }) ??
-                records.firstIndex(where: { $0.item.id == archived.item.id && $0.completedDate == archived.completedDate }) {
-                records[index] = ArchivedDemand(block: archived.block, original: entry.original, priority: archived.priority, item: archived.item)
-            } else {
-                records.insert(ArchivedDemand(block: archived.block, original: entry.original, priority: archived.priority, item: archived.item), at: 0)
-            }
+        var covered = Set<String>()
+        let local: [ArchivedDemand] = journal.entries.values.sorted { $0.createdAt > $1.createdAt }.compactMap { entry in
+            guard entry.state != .submitted,
+                  let archive = try? parse((entry.priority ?? .p1).sectionPrefix + "\n" + entry.archived.joined(separator: "\n")).first,
+                  covered.insert(archive.id).inserted else { return nil }
+            let record = ArchivedDemand(block: archive.block, original: entry.original, priority: archive.priority, item: archive.item)
+            if let projection = record.projectionID { covered.insert(projection) }
+            return record
         }
-        return records
+        func normalized(_ block: [String]) -> [String] {
+            block.map { $0.replacingOccurrences(of: #"[ \t]+$"#, with: "", options: .regularExpression) }
+        }
+        return local + remote.filter { record in
+            guard !covered.contains(record.id) else { return false }
+            let matches = local.filter { candidate in
+                candidate.item.id == record.item.id && candidate.completedDate == record.completedDate &&
+                (normalized(candidate.block) == normalized(record.block) ||
+                 candidate.projection.map { normalized($0) == normalized(record.block) } == true)
+            }
+            return matches.count != 1
+        }
     }
 }
 
@@ -141,6 +157,14 @@ final class DemandArchiveStore: ObservableObject {
          allowsRemote: Bool = true) {
         self.cache = cache; self.journalURL = journalURL; self.allowsRemote = allowsRemote
         reloadLocal()
+    }
+
+    func review(for record: ArchivedDemand) -> ArchivedCodeReview? {
+        let notes = reviewNotes.filter { $0.itemID == record.item.id }
+        if let exact = notes.last(where: { $0.sourceRevision == record.id }) { return exact }
+        guard !notes.isEmpty, let projection = record.projectionID,
+              !records.contains(where: { $0.id != record.id && ($0.id == projection || $0.projectionID == projection) }) else { return nil }
+        return notes.last { $0.sourceRevision == projection }
     }
 
     func reloadLocal() {

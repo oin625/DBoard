@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - 引擎心跳(daemon 健康探测)
 // 看板的数据全靠后台 daemon 喂, daemon 挂了看板只会"安静地过期"。
-// 这里把三个引擎的死活摆到 Footer 上: 值守 reply-daemon / 资讯 tech-scout / 钉钉同步。
+// Footer 仅监测仍在运行的值守服务和钉钉同步。GitHub 榜单按需加载，不是常驻引擎。
 
 enum EngineState: Int, Comparable {
     case ok = 0, unknown = 1, warn = 2, dead = 3
@@ -23,7 +23,6 @@ final class EngineHealthModel: ObservableObject {
     static let shared = EngineHealthModel()
     @Published var engines: [EngineStatus] = [
         EngineStatus(id: "reply", name: "值守 reply-daemon", icon: "bubble.left.and.bubble.right"),
-        EngineStatus(id: "scout", name: "资讯 tech-scout", icon: "antenna.radiowaves.left.and.right"),
         EngineStatus(id: "sync", name: "钉钉同步", icon: "arrow.triangle.2.circlepath"),
     ]
     @Published var lastCheck: Date? = nil
@@ -38,7 +37,7 @@ final class EngineHealthModel: ObservableObject {
 
     init() {
         refresh()
-        // 60 秒巡检一次, 成本极低(一次 launchctl + 两次本地文件读取)
+        // 60 秒巡检一次，仅检查启用的值守服务和钉钉同步。
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             self?.refresh()
         }
@@ -48,7 +47,7 @@ final class EngineHealthModel: ObservableObject {
     func refresh() {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self else { return }
-            let result = (FeatureFlags.shared.replyEnabled ? [self.checkReplyDaemon()] : []) + [self.checkTechScout(), self.checkSync()]
+            let result = (FeatureFlags.shared.replyEnabled ? [self.checkReplyDaemon()] : []) + [self.checkSync()]
             DispatchQueue.main.async {
                 self.engines = result
                 self.lastCheck = Date()
@@ -90,35 +89,6 @@ final class EngineHealthModel: ObservableObject {
             e.problem = "值守进程退出"
             e.detail = "launchd 已加载但进程没在跑 · \(logStr)"
             e.hint = "launchctl kickstart -k gui/\(getuid())/com.zz.dws-reply-daemon"
-        }
-        return e
-    }
-
-    // MARK: 资讯 tech-scout — 每天 10/14 点各推一轮, 靠 pending.json 的 timestamp 判活
-    private func checkTechScout() -> EngineStatus {
-        var e = EngineStatus(id: "scout", name: "资讯 tech-scout", icon: "antenna.radiowaves.left.and.right")
-        let path = home + "/.claude/tech-scout-pending.json"
-        guard let data = FileManager.default.contents(atPath: path),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let ts = obj["timestamp"] as? Double else {
-            e.state = .unknown
-            e.detail = "读不到 tech-scout-pending.json"
-            e.hint = "对 agent 说「手动拉一轮资讯」"
-            return e
-        }
-        let date = Date(timeIntervalSince1970: ts)
-        let ageH = Date().timeIntervalSince(date) / 3600
-        e.detail = "上次推送 " + Self.rel(date)
-        if ageH < 26 {
-            e.state = .ok
-        } else if ageH < 50 {
-            e.state = .warn
-            e.problem = "资讯错过一轮推送"
-            e.hint = "对 agent 说「手动拉一轮资讯」排查定时任务"
-        } else {
-            e.state = .dead
-            e.problem = "资讯断供 \(Int(ageH / 24)) 天"
-            e.hint = "对 agent 说「资讯怎么没更新」排查 tech-scout"
         }
         return e
     }

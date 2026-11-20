@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 
 struct DemandArchiveSection: View {
+    @ObservedObject private var chatPrivacy = DemandChatPrivacy.shared
     @EnvironmentObject var vm: DBoardViewModel
     @ObservedObject var store: DemandArchiveStore
     var filteredRecords: [ArchivedDemand]? = nil
@@ -113,7 +114,7 @@ struct DemandArchiveSection: View {
                         .dboardFont(size: 13).foregroundStyle(.secondary).padding(.vertical, 20)
                         .frame(maxWidth: .infinity)
                 } else {
-                    ForEach(completedEntries) { entry in row(entry).id(entry.selectionID) }
+                    ForEach(completedEntries, id: \.selectionID) { entry in row(entry).id(entry.selectionID) }
                 }
             }
         }
@@ -162,6 +163,9 @@ struct DemandArchiveSection: View {
         let next = record.flatMap { successor($0) }
         let isExpanded = record == nil ? vm.expandedIDs.contains(item.id) : expanded.contains(entry.selectionID)
         let cacheURL: URL? = record == nil ? nil : store.cacheURL
+        let controlID = record.map { snapshot in
+            store.records.first(where: { $0.item.id == item.id })?.id == snapshot.id ? item.id : snapshot.id
+        } ?? item.id
         return VStack(alignment: .leading, spacing: 10) {
             Button {
                 if record == nil { vm.toggleExpanded(item.id) }
@@ -178,7 +182,7 @@ struct DemandArchiveSection: View {
                 }.frame(minHeight: 26).contentShape(Rectangle())
             }.demandButtonStyle(.plain)
                 .accessibilityLabel("\(isExpanded ? "收起" : "展开") \(item.id) \(item.displayTitle)")
-                .accessibilityIdentifier("completed-toggle-" + item.id).demandKeyboardID("completed-toggle-" + item.id)
+                .accessibilityIdentifier("completed-toggle-" + controlID).demandKeyboardID("completed-toggle-" + controlID)
             HStack(spacing: 8) {
                 Text(item.kind.rawValue).dboardFont(size: 11)
                     .foregroundStyle(item.isIncident ? Color.orange : .secondary)
@@ -199,9 +203,9 @@ struct DemandArchiveSection: View {
                 Text(closure.summary).dboardFont(size: 12).foregroundStyle(.secondary).lineLimit(2)
             }
             WorkspaceFlowLayout {
-                completedActions(item: item, record: record, active: active, next: next, cacheURL: cacheURL)
+                completedActions(item: item, record: record, active: active, next: next, cacheURL: cacheURL, controlID: controlID)
             }.demandButtonStyle(WorkspaceActionStyle())
-            if let record, let review = store.reviewNotes.last(where: { $0.itemID == item.id && $0.sourceRevision == record.id }) {
+            if let record, let review = store.review(for: record) {
                 VStack(alignment: .leading, spacing: 5) {
                     Button {
                         if reviewExpanded.contains(review.id) { reviewExpanded.remove(review.id) }
@@ -217,7 +221,7 @@ struct DemandArchiveSection: View {
             }
             if isExpanded {
                 if record == nil { DemandContextView(item: item) }
-                if let error = item.changeReadError ?? item.versionReadError ?? item.chatReadError {
+                if let error = item.changeReadError ?? item.versionReadError ?? (chatPrivacy.enabled ? item.chatReadError : nil) {
                     Text(error).dboardFont(size: 12).foregroundStyle(.orange)
                 }
                 IncidentResultView(item: item)
@@ -233,7 +237,7 @@ struct DemandArchiveSection: View {
                         Text(note).dboardFont(size: 12).foregroundStyle(.secondary).textSelection(.enabled)
                     }
                 }
-                if let chats = item.chatLinks {
+                if chatPrivacy.enabled, let chats = item.chatLinks {
                     Label(chats.summary, systemImage: "bubble.left.and.bubble.right")
                         .dboardFont(size: 12).foregroundStyle(.secondary)
                 }
@@ -269,21 +273,23 @@ struct DemandArchiveSection: View {
         }
         .padding(14).frame(maxWidth: .infinity, alignment: .leading)
         .workspaceSurface()
-        .accessibilityIdentifier("completed-card-" + item.id).demandKeyboardID("completed-card-" + item.id)
+        .accessibilityIdentifier("completed-card-" + controlID).demandKeyboardID("completed-card-" + controlID)
     }
 
     @ViewBuilder
     private func completedActions(item: DItem, record: ArchivedDemand?, active: DItem?,
-                                  next: DItem?, cacheURL: URL?) -> some View {
-        Button("复制现状", systemImage: "doc.on.doc") { vm.copyCurrentState(item.id, at: cacheURL) }
-            .dboardFont(size: 12).accessibilityIdentifier("completed-copy-" + item.id)
-        Button("代码审查", systemImage: "checkmark.bubble") { vm.copyReviewTask(item.id, at: cacheURL) }
-            .dboardFont(size: 12)
-            .accessibilityIdentifier("archive-review-copy-" + item.id).demandKeyboardID("archive-review-copy-" + item.id)
+                                  next: DItem?, cacheURL: URL?, controlID: String) -> some View {
+        Button("复制现状", systemImage: "doc.on.doc") {
+            vm.copyCurrentState(item.id, at: cacheURL, archiveRevision: record?.id)
+        }.dboardFont(size: 12).accessibilityIdentifier("completed-copy-" + controlID)
+        Button("代码审查", systemImage: "checkmark.bubble") {
+            vm.copyReviewTask(item.id, at: cacheURL, archiveRevision: record?.id)
+        }.dboardFont(size: 12)
+            .accessibilityIdentifier("archive-review-copy-" + controlID).demandKeyboardID("archive-review-copy-" + controlID)
         if record == nil, let active {
             if active.isIncident {
                 Button("恢复排查") { vm.reopenIncident(active) }.dboardFont(size: 12)
-                    .accessibilityIdentifier("completed-reopen-" + item.id).demandKeyboardID("completed-reopen-" + item.id)
+                    .accessibilityIdentifier("completed-reopen-" + controlID).demandKeyboardID("completed-reopen-" + controlID)
             } else {
                 Button("恢复继续处理") { vm.cycleToStatus(active.id, target: .inProgress) }
                     .dboardFont(size: 12).accessibilityIdentifier("completed-reopen-" + item.id)
@@ -302,7 +308,7 @@ struct DemandArchiveSection: View {
             }
             Button("恢复继续处理") { restoring = record }.dboardFont(size: 12)
                 .disabled(item.changeReadError != nil || item.versionReadError != nil)
-                .accessibilityIdentifier("completed-reopen-" + item.id).demandKeyboardID("completed-reopen-" + item.id)
+                .accessibilityIdentifier("completed-reopen-" + controlID).demandKeyboardID("completed-reopen-" + controlID)
         }
     }
 

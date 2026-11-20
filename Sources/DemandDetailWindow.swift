@@ -3,6 +3,7 @@ import AppKit
 
 /// One requirement window, with its editors inside it; the home workspace is not its presenter.
 struct DemandEditorContent: View {
+    @ObservedObject private var chatPrivacy = DemandChatPrivacy.shared
     @EnvironmentObject private var vm: DBoardViewModel
     let request: DemandCardEditor
     let close: () -> Void
@@ -19,7 +20,11 @@ struct DemandEditorContent: View {
         case .details:
             DemandItemEditor(draft: DItemDraft(from: request.item), original: request.item, close: close)
         case .chats:
-            DemandChatAssociationEditor(item: request.item, close: close)
+            if chatPrivacy.enabled {
+                DemandChatAssociationEditor(item: request.item, close: close)
+            } else {
+                Color.clear.onAppear(perform: close)
+            }
         case .technicalPlan:
             DemandTechnicalPlanEditor(itemID: request.item.id, cacheURL: vm.deliveryCoordinator.cacheURL, close: close)
         case .delivery:

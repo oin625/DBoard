@@ -73,6 +73,39 @@ class FeedbackTests(unittest.TestCase):
         subprocess.run(["git", "-C", str(path), "symbolic-ref", "HEAD", "refs/heads/" + branch], check=True)
         return path
 
+    def test_archive_context_reads_the_local_snapshot_without_a_remote_cache(self):
+        self.cache.unlink()
+        self.cache = self.root / "dboard-archive-cache.md"
+        archived = ["### D014【fixture】锁券接口 #已完成 ✅2026-11-06",
+                    "- **提示词**：", "    本机保留的完整材料",
+                    "- **进度**：", "    - 11.6: 已验收。", "        明细：", "        完整验收记录"]
+        journal = self.root / "dboard-archive-journal.json"
+        journal.write_text(json.dumps({"D014": {"id": "D014", "archived": archived, "state": "removed"}}), encoding="utf-8")
+        context = self.call("context", "D014")
+        self.assertIn("完整验收记录", context["context"])
+        self.assertIn("本机保留的完整材料", context["context"])
+        old_revision = module.revision(archived)
+        self.assertEqual(context["item"]["revision"], old_revision)
+        self.assertFalse(self.cache.exists())
+
+        latest = archived + ["<!-- dboard-archive-id: second -->"]
+        journal.write_text(json.dumps({
+            old_revision: {"id": "D014", "archived": archived, "state": "removed"},
+            "D014": {"id": "D014", "archived": latest, "state": "removed"},
+        }), encoding="utf-8")
+        args = [sys.executable, str(CLI), "--cache", str(self.cache), "--archive-revision", old_revision]
+        result = subprocess.run(args + ["context", "D014"], capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        context = json.loads(result.stdout)
+        self.assertEqual(context["item"]["revision"], old_revision)
+        self.assertIn(old_revision, context["history_read_command"])
+        self.assertTrue(all(old_revision in source["read_command"] for source in context["context_sources"]))
+        result = subprocess.run(args + ["inspect", "D014", "--section", "spell"],
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(json.loads(result.stdout)["data"]["prompt"], "本机保留的完整材料")
+        self.assertFalse(self.cache.exists())
+
     def test_summary_and_local_details_roundtrip_and_retry(self):
         before = self.show()
         detail = "验证：3 项回归通过。\n\n### D999 是明细标题\n- **描述**：不能变成顶层字段\n    - 11.2: 保留代码缩进"

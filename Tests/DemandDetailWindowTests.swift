@@ -165,6 +165,9 @@ final class DemandDetailWindowTests: XCTestCase {
 
     @MainActor
     func testTabNavigatesMultilineSpellFieldsWithoutAddingTabsOrLosingDrafts() throws {
+        let previousTabNavigation = WorkspacePreferences.shared.tabNavigationEnabled
+        WorkspacePreferences.shared.tabNavigationEnabled = true
+        defer { WorkspacePreferences.shared.tabNavigationEnabled = previousTabNavigation }
         _ = NSApplication.shared
         let vm = DBoardViewModel(loadCache: false)
         var selected = item("D881", title: "多行咒言键盘操作")

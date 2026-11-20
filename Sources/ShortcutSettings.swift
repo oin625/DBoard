@@ -38,18 +38,19 @@ struct GlobalShortcut: Codable, Equatable {
 
 final class ShortcutPreferences: ObservableObject {
     static let shared = ShortcutPreferences()
-    static let order = ["dboard", "quickopen", "clipboard", "reqflow", "logs", "apprelease", "audihome"]
-    static let names = ["dboard": "D板首页", "quickopen": "快速打开需求 / 排查", "clipboard": "剪切板历史", "reqflow": "ReqFlow 需求流",
-                        "logs": "Audi 日志", "apprelease": "应用发布台",
+    static let order = ["dboard", "quickopen", "tryquickopen", "awaylock", "clipboard", "webworkspace", "drawingnew", "logs"]
+    static let names = ["dboard": "D板首页", "quickopen": "快速打开需求 / 排查", "tryquickopen": "快速打开次 Try", "awaylock": "离座锁屏", "clipboard": "剪切板历史", "webworkspace": "快速打开页面",
+                        "drawingnew": "新建画布", "logs": "Audi 日志", "apprelease": "应用发布台",
                         "audihome": "Audi 首页"]
     static let defaultsBindings: [String: GlobalShortcut] = [
         "quickopen": GlobalShortcut(keyCode: UInt32(kVK_ANSI_P), modifiers: UInt32(cmdKey), keyLabel: "P"),
+        "tryquickopen": GlobalShortcut(keyCode: UInt32(kVK_ANSI_0), modifiers: UInt32(cmdKey), keyLabel: "0"),
         "dboard": GlobalShortcut(keyCode: UInt32(kVK_ANSI_D), modifiers: UInt32(controlKey | shiftKey), keyLabel: "D"),
         "clipboard": GlobalShortcut(keyCode: UInt32(kVK_ANSI_V), modifiers: UInt32(optionKey), keyLabel: "V"),
-        "reqflow": GlobalShortcut(keyCode: UInt32(kVK_ANSI_E), modifiers: UInt32(controlKey), keyLabel: "E"),
+        "webworkspace": GlobalShortcut(keyCode: UInt32(kVK_ANSI_A), modifiers: UInt32(controlKey), keyLabel: "A"),
+        "awaylock": GlobalShortcut(keyCode: UInt32(kVK_ANSI_L), modifiers: UInt32(controlKey | optionKey), keyLabel: "L"),
+        "drawingnew": GlobalShortcut(keyCode: UInt32(kVK_ANSI_M), modifiers: UInt32(controlKey), keyLabel: "M"),
         "logs": GlobalShortcut(keyCode: UInt32(kVK_ANSI_L), modifiers: UInt32(controlKey), keyLabel: "L"),
-        "apprelease": GlobalShortcut(keyCode: UInt32(kVK_ANSI_Q), modifiers: UInt32(controlKey), keyLabel: "Q"),
-        "audihome": GlobalShortcut(keyCode: UInt32(kVK_ANSI_W), modifiers: UInt32(controlKey), keyLabel: "W"),
     ]
     @Published private(set) var overrides: [String: GlobalShortcut]
     @Published private(set) var disabled: Set<String>
@@ -58,11 +59,17 @@ final class ShortcutPreferences: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        overrides = defaults.data(forKey: "shortcuts.bindings").flatMap {
+        let saved = defaults.data(forKey: "shortcuts.bindings").flatMap {
             try? JSONDecoder().decode([String: GlobalShortcut].self, from: $0)
-        }?.filter { Self.defaultsBindings[$0.key] != nil } ?? [:]
+        } ?? [:]
+        // Remove the former bare-Control binding so existing installs use Control+A.
+        overrides = saved.filter {
+            Self.defaultsBindings[$0.key] != nil
+                && $0.value.modifiers & UInt32(controlKey | optionKey | cmdKey) != 0
+        }
         disabled = Set(defaults.stringArray(forKey: "shortcuts.disabled") ?? [])
             .filter { Self.defaultsBindings[$0] != nil }
+        if overrides != saved { persist() }
     }
 
     func binding(for id: String) -> GlobalShortcut? {
@@ -170,7 +177,9 @@ final class GlobalShortcutManager: ObservableObject {
         }
     }
 
-    func isRegistered(_ id: String) -> Bool { hotKeys[id]?.isRegistered ?? false }
+    func isRegistered(_ id: String) -> Bool {
+        return hotKeys[id]?.isRegistered ?? false
+    }
 
     var report: String {
         ShortcutPreferences.order.map {
@@ -241,6 +250,8 @@ private struct ShortcutRecorder: NSViewRepresentable {
 struct ShortcutSettingsView: View {
     @ObservedObject private var prefs = ShortcutPreferences.shared
     @ObservedObject private var manager = GlobalShortcutManager.shared
+    @ObservedObject private var pages = WebWorkspacePreferences.shared
+    @ObservedObject private var workspace = WorkspacePreferences.shared
     var body: some View {
         Form {
             Section("全局快捷键") {
@@ -263,6 +274,19 @@ struct ShortcutSettingsView: View {
                         }
                     }
                 }
+            }
+            Section("窗口操作") {
+                Toggle("Tab 键盘导航", isOn: $workspace.tabNavigationEnabled)
+                    .accessibilityIdentifier("settings-tab-navigation")
+                Text("默认关闭。开启后可用 Tab 切换控件，或按住 Tab 配合上下键选择。")
+                    .dboardFont(size: 11).foregroundStyle(.secondary)
+            }
+            Section("快速打开页面") {
+                Picker("默认呼出的卡片", selection: $pages.defaultPage) {
+                    ForEach(WebWorkspacePage.allCases) { page in Text(page.title).tag(page) }
+                }
+                Text("按 \(prefs.binding(for: "webworkspace")?.title ?? "已关闭的快捷键") 呼出；左右选择、回车进入。进入页面后也可用左右键切换，输入文字时保留光标操作。")
+                    .dboardFont(size: 11).foregroundStyle(.secondary)
             }
             Section {
                 if let error = prefs.error {

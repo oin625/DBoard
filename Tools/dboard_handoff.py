@@ -265,13 +265,11 @@ def history_result(item, args):
 
 def context(result, item, cache, scope_hash, full=False):
     import shlex
-    from pathlib import Path
     records = item["progress_records"]
     handoff = item["handoff"]
     check = evaluate(handoff, records, scope_hash, item["code_revision"])
     result["compression_check"] = check
-    result["history_read_command"] = shlex.join([str(Path.home() / ".local/bin/dboard-ai"),
-                                               "--cache", str(cache), "history", item["id"]])
+    result["history_read_command"] = shlex.join(task_cli(item, cache) + ["history", item["id"]])
     if full:
         result["context_mode"] = "full"
         result["history_read_required"] = False
@@ -374,11 +372,18 @@ def inspect_result(item, section):
             "section": section, "data": {key: item[key] for key in fields[section]}}
 
 
+def task_cli(item, cache):
+    from pathlib import Path
+    cli = [str(Path.home() / ".local/bin/dboard-ai"), "--cache", str(cache)]
+    if cache.name == "dboard-archive-cache.md":
+        cli += ["--archive-revision", item["revision"]]
+    return cli
+
+
 def attach_sources(result, item, cache):
     """Keep authoritative state fresh, and make deferred detail explicit and retrievable."""
     import shlex
-    from pathlib import Path
-    cli = [str(Path.home() / ".local/bin/dboard-ai"), "--cache", str(cache)]
+    cli = task_cli(item, cache)
     labels = {
         "spell": ("原咒言", "需要回读原始输入时"),
         "plan": ("技术方案正文", "设计、实现、方案变化或提交开发交付前按需核对"),

@@ -20,17 +20,11 @@ enum DemandDeliveryCommand {
                 throw DemandDeliveryError.message("方案或开发分支已变化，请重新 preview 再确认提交。")
             }
             let workflow = DemandDeliveryWorkflow()
-            var receipt = try workflow.run(plan, stillCurrent: {
+            let receipt = try workflow.run(plan, cacheURL: cache, stillCurrent: {
                 try DemandDeliveryPlan.load(id: id, at: cache).key == plan.key
             })
-            if !receipt.progressRecorded {
-                let details = "技术方案：" + (receipt.documentURL ?? "") + "\n开发分支：" + plan.projects.map(\.declaration).joined(separator: "；")
-                let latest = try DItemStore.currentItem(id: id, at: cache)
-                receipt.progressRecorded = latest.milestones.contains { $0.content == DemandDeliveryPlan.feedbackSummary && $0.details == details }
-                    || DItemStore.appendProgress(id: id, text: DemandDeliveryPlan.feedbackSummary, details: details, at: cache)
-                try workflow.store.save(receipt)
-            }
             emit(["success": receipt.confirmed && receipt.progressRecorded, "local_saved": receipt.progressRecorded,
+                "remote_confirmed": receipt.confirmed,
                 "id": id, "document_url": receipt.documentURL ?? "", "delivery_revision": plan.key,
                 "projects": plan.projects.map { ["name": $0.name, "branch": $0.branch] }])
             exit(receipt.progressRecorded ? 0 : 3)
