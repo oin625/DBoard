@@ -22,6 +22,8 @@ struct DemandCodeReview: Codable, Equatable {
 }
 
 enum DemandCodeReviews {
+    /// Keep repeated focus events from running competing repository scans.
+    static let refreshQueue = DispatchQueue(label: "com.zz.dboard.code-review", qos: .utility)
     private struct Request: Encodable {
         let id: String
         let code: [DemandCodeSnapshot]?
@@ -58,30 +60,44 @@ enum DemandCodeReviews {
 
 extension DBoardViewModel {
     /// Refresh on panel activation and explicit refresh, never poll repositories while idle.
-    func refreshCodeReviews() {
+    func refreshCodeReviews(only id: String? = nil) {
         let token = UUID()
         codeReviewRequest = token
-        let snapshot = items.filter { $0.execution?.code != nil && $0.execution?.stage != .developing && $0.status != .completed }
-        for index in items.indices { items[index].executionCodeReview = nil }
+        let snapshot = items.filter {
+            (id == nil || $0.id == id) && $0.execution?.code != nil &&
+                $0.execution?.stage != .developing && $0.status != .completed
+        }
+        var pending = items
+        var changed = false
+        for index in pending.indices where id == nil || pending[index].id == id {
+            if pending[index].executionCodeReview != nil {
+                pending[index].executionCodeReview = nil
+                changed = true
+            }
+        }
+        if changed { items = pending }
         codeReviewWork?.cancel()
         guard !snapshot.isEmpty else { return }
         let work = DispatchWorkItem { [weak self] in
-            guard self?.codeReviewRequest == token else { return }
-            DispatchQueue.global(qos: .utility).async { [weak self] in
-                let results = DemandCodeReviews.check(snapshot)
-                DispatchQueue.main.async {
-                    guard let self, self.codeReviewRequest == token else { return }
-                    for result in results {
-                        guard let previous = snapshot.first(where: { $0.id == result.id }),
-                              let index = self.items.firstIndex(where: { $0.id == result.id }),
-                              self.items[index].execution == previous.execution,
-                              self.items[index].executionRepositories == previous.executionRepositories else { continue }
-                        self.items[index].executionCodeReview = result
+            let results = DemandCodeReviews.check(snapshot)
+            DispatchQueue.main.async {
+                guard let self, self.codeReviewRequest == token else { return }
+                var updated = self.items
+                var changed = false
+                for result in results {
+                    guard let previous = snapshot.first(where: { $0.id == result.id }),
+                          let index = updated.firstIndex(where: { $0.id == result.id }),
+                          updated[index].execution == previous.execution,
+                          updated[index].executionRepositories == previous.executionRepositories else { continue }
+                    if updated[index].executionCodeReview != result {
+                        updated[index].executionCodeReview = result
+                        changed = true
                     }
                 }
+                if changed { self.items = updated }
             }
         }
         codeReviewWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+        DemandCodeReviews.refreshQueue.asyncAfter(deadline: .now() + 0.15, execute: work)
     }
 }

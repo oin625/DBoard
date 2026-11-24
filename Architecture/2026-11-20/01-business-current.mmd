@@ -1,0 +1,43 @@
+flowchart TB
+  U["用户：安排 / 执行 / 确认"]
+  subgraph MAIN["主 Main：研发协作"]
+    D["D单开发 / P单排查<br/>咒言 · 变更 · 周期 · 进度"]
+    AI["外部 AI 执行<br/>context 读取 → report 回写"]
+    EV["开发证据<br/>代码版本 / CR / 调试测试"]
+    DL["技术方案与交付<br/>工程声明 / 发布事项"]
+    AR["用户完成 / 归档 / 新版本<br/>关联需求须核实正式验收"]
+    TODO["今日零碎<br/>历史未完顺延"]
+    D --> AI --> EV --> DL --> AR
+    AR -. "下一版本保留背景" .-> D
+  end
+  subgraph TRY["次 Try：个人成长"]
+    I["想法：原文 + 补充"] --> L["学习：目标 → AI计划 → 学习单元"]
+    L --> N["笔记 / 真实作答 / 检查证据"]
+    N --> R["用户确认掌握 / 复习 / 复盘"]
+    R -. "继续学习" .-> L
+    H["健康：办公 / 喝水 / 运动<br/>日周月历史；独立本地记录"]
+  end
+  subgraph TOOL["工具与外部事实"]
+    RF["ReqFlow<br/>正式状态 / 流转 / 验收"]
+    BM["BizMap<br/>服务地图 / 文档 / 路由参考"]
+    AUDI["Audi 网页<br/>发布 / 日志 / 首页"]
+    UTIL["剪切板 · Skills / Agent环境<br/>GitHub热门 · 待回复审批 · 运维入口"]
+    DD["钉钉：需求简版总览<br/>完整咒言与证据留本机"]
+  end
+  U --> D
+  U --> TODO
+  U --> I
+  U --> H
+  RF -. "ID明确关联；状态独立" .-> D
+  BM -. "辅助查找，不推断工程" .-> D
+  DL --> RF
+  RF --> AR
+  D -. "仅派生总览" .-> DD
+  DL -. "打开执行入口" .-> AUDI
+  U --> UTIL
+  classDef work fill:#dbeafe,stroke:#2563eb,color:#172554;
+  classDef personal fill:#dcfce7,stroke:#16a34a,color:#14532d;
+  classDef external fill:#f3e8ff,stroke:#9333ea,color:#3b0764;
+  class D,AI,EV,DL,AR,TODO work;
+  class I,L,N,R,H personal;
+  class RF,BM,AUDI,UTIL,DD external;

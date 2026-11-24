@@ -472,7 +472,7 @@ struct TryHealthQuickCard: View {
                             (value.mode == .away ? "已离座，回来解锁即可" : "计时暂停，保留这段时长"))
                             .dboardFont(size: 15).foregroundStyle(theme.current.accentPrimary)
                     }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                }.buttonStyle(.plain)
+                }.buttonStyle(DBoardPlainButtonStyle())
                 VStack(alignment: .leading, spacing: 14) {
                     Text("累计 \(HealthDuration.text(day.deskSeconds))")
                     Text("今天喝水 \(day.water.map(\.ml).reduce(0, +)) ml")

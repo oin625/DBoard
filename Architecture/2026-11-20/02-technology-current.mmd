@@ -1,0 +1,54 @@
+flowchart TB
+  subgraph APP["DBoard App：SwiftPM 单一 executable target"]
+    SHELL["SwiftUI + AppKit + Combine<br/>菜单栏 / 窗口 / 全局快捷键"]
+    VM["DBoardViewModel / TryStore / HealthStore<br/>业务规则 + UI状态 + 文件写入"]
+    BVM["BizMapViewModel<br/>服务地图 + ReqFlow + 项目表 + Cookie"]
+    WEB["WKWebView<br/>Audi三页 / 本地Excalidraw编辑器"]
+    RUN["ProcessRunner / URLSession<br/>超时 / 退出码 / 业务success"]
+    WATCH["FileRefreshObserver<br/>原子替换重绑 + 防抖 + 轮询兜底"]
+    SHELL --> VM
+    SHELL --> BVM
+    SHELL --> WEB
+    VM --> RUN
+    BVM --> RUN
+    WATCH --> VM
+    VM -. "共享ReqFlow模型" .-> BVM
+  end
+  CLI["外部AI → dboard-ai<br/>Python模块：读取 / 校验 / 回写<br/>与Swift分别实现部分业务规则"]
+  subgraph DATA["本地事实与缓存：多文件协议"]
+    MD["demand-center-cache.md<br/>Markdown + 结构化注释<br/>跨进程flock / atomic / revision"]
+    TJ["dboard-try.json / dboard-health.json<br/>笔记 / 学习 / 想法 / 健康"]
+    SNAP["prd / bizmap / 工程声明缓存<br/>归档 / 交付journal / 草稿 / 图片"]
+    SQLITE["clipboard.sqlite<br/>剪切板独立存储"]
+    SCENE[".excalidraw 源文件<br/>显式保存 / 磁盘变化检测"]
+  end
+  subgraph IO["适配与外部运行时"]
+    SYNC["sync_dboard.sh → Python → dws<br/>总览快照 / hash凭证 / 并发后重试"]
+    GEN["refresh_prd.sh / 服务刷新<br/>wiki gen_bizmap.py / 项目表同步"]
+    REMOTE["ReqFlow API / 钉钉文档项目表<br/>Audi远端与本地Next服务"]
+    DAEMON["外部daemon / launchd / Skills目录<br/>Cookie Bridge / AI网关 / GitHub"]
+  end
+  VM --> MD
+  VM --> TJ
+  VM --> SNAP
+  CLI --> MD
+  CLI --> TJ
+  CLI -. "交付复用原生CLI入口" .-> RUN
+  RUN --> SYNC --> REMOTE
+  RUN --> GEN --> SNAP
+  BVM --> SNAP
+  BVM --> REMOTE
+  SHELL --> SQLITE
+  WEB --> SCENE
+  WEB --> REMOTE
+  DAEMON -. "文件或网络输入" .-> SHELL
+  MD -. "变化通知" .-> WATCH
+  TJ -. "变化通知" .-> WATCH
+  classDef native fill:#dbeafe,stroke:#2563eb,color:#172554;
+  classDef data fill:#dcfce7,stroke:#16a34a,color:#14532d;
+  classDef ext fill:#f3e8ff,stroke:#9333ea,color:#3b0764;
+  classDef debt fill:#ffedd5,stroke:#ea580c,color:#7c2d12;
+  class SHELL,WEB,RUN,WATCH native;
+  class MD,TJ,SNAP,SQLITE,SCENE data;
+  class SYNC,GEN,REMOTE,DAEMON ext;
+  class VM,BVM,CLI debt;

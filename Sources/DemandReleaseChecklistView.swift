@@ -458,6 +458,7 @@ private struct ReleaseFieldBackground: View {
 private struct ReleaseIconButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.foregroundStyle(.secondary)
+            .dboardClickTarget()
             .background(configuration.isPressed ? Color.primary.opacity(0.08) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
             .contentShape(Rectangle())
     }

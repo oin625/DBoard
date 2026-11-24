@@ -589,7 +589,7 @@ struct DBoardRootView: View {
             .padding(16).padding(.bottom, 36)
             .transition(.opacity)
         }
-        .background { DemandCanvasBackground() }
+        .background { DemandCanvasBackground().ignoresSafeArea() }
         .frame(minWidth: popoverMode ? 420 : 760, minHeight: popoverMode ? 480 : 560)
         .background(WindowNumberReader { windowNumber = $0 })
         .animation(reduceMotion ? nil : DBoardUI.spring, value: vm.paletteOpen)
@@ -598,7 +598,10 @@ struct DBoardRootView: View {
         .dboardThemeAccent()
         .onReceive(NotificationCenter.default.publisher(for: .init("openDBoardSettings"))) { _ in openSettings() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            vm.refreshCodeReviews()
+            // A hidden home view must not scan every repository when another module activates.
+            if let windowNumber, NSApp.keyWindow?.windowNumber == windowNumber {
+                vm.refreshCodeReviews()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { event in
             if (event.object as? NSWindow)?.windowNumber == windowNumber { vm.refreshCodeReviews() }
@@ -648,10 +651,6 @@ struct DBoardRootView: View {
                                 .demandButtonStyle(.plain)
                         }
                     }
-                    Section {
-                        Button { openSettings() } label: { Label("设置", systemImage: "gearshape") }
-                            .demandButtonStyle(.plain)
-                    }
                 }
                 .listStyle(.sidebar)
                 .scrollContentBackground(.hidden)
@@ -677,6 +676,7 @@ struct DBoardRootView: View {
                 }
             }
             .navigationSplitViewStyle(.balanced)
+            .toolbarBackground(.hidden, for: .windowToolbar)
         }
 
     }
@@ -874,8 +874,8 @@ struct HeaderView: View {
             HeaderIconButton(icon: "magnifyingglass", help: "命令面板 ⌘K") {
                 vm.paletteQuery = ""; vm.paletteSel = 0; vm.paletteOpen = true
             }
-            // 入口收敛: 所有模块收进一个���单, 不再在头部平铺一排图标
             DBoardModuleMenu()
+            DBoardSettingsButton()
         }
         .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 6)
         .contentShape(Rectangle())
@@ -904,8 +904,8 @@ struct HeaderIconButton: View {
             Image(systemName: icon)
                 .dboardFont(size: 13)
                 .foregroundStyle(hovered ? theme.current.textPrimary : theme.current.textTertiary)
-                .frame(width: 24, height: 24)
-                .background(RoundedRectangle(cornerRadius: 6).fill(theme.current.textPrimary.opacity(hovered ? 0.07 : 0)))
+                .dboardClickTarget()
+                .background(RoundedRectangle(cornerRadius: 8).fill(theme.current.textPrimary.opacity(hovered ? 0.07 : 0)))
         }
         .demandButtonStyle(SmoothButtonStyle(scale: 0.9, hoverScale: 1.0))
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: hovered)
@@ -1280,7 +1280,7 @@ struct StatusPill: View {
                 .foregroundStyle(fg).padding(.horizontal, 8).padding(.vertical, 4)
                 .background(fg.opacity(0.08), in: Capsule())
         }
-        .demandMenuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+        .demandMenuStyle(.button).buttonStyle(DBoardPlainButtonStyle()).menuIndicator(.hidden).fixedSize()
         .dboardFont(size: 11)
     }
 }
@@ -1615,12 +1615,6 @@ struct FooterView: View {
                         OpsRunner.shared.requestRun(op)
                     }
                 }
-                Divider()
-                Button("外观…") {
-                    WorkspacePreferences.shared.settingsPage = .appearance
-                    openSettings()
-                }
-                Button("设置…") { openSettings() }
             } label: { Image(systemName: "ellipsis.circle") }
             .demandMenuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
         }

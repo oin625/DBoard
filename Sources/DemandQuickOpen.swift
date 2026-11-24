@@ -282,7 +282,7 @@ struct DemandQuickOpenView: View {
             }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .clipShape(RoundedRectangle(cornerRadius: 23))
                 .contentShape(RoundedRectangle(cornerRadius: 23))
-        }.buttonStyle(.plain).accessibilityIdentifier("quick-open-card-" + entry.id)
+        }.buttonStyle(DBoardPlainButtonStyle()).accessibilityIdentifier("quick-open-card-" + entry.id)
             .accessibilityLabel(entry.id + " " + entry.item.displayTitle + "，回车打开详情")
     }
 
@@ -303,7 +303,7 @@ struct DemandQuickOpenView: View {
                         Image(systemName: model.includesCompleted ? "checkmark.circle.fill" : "circle")
                         Text("含已完成")
                     }.foregroundStyle(model.includesCompleted ? Color.accentColor : .secondary)
-                }.buttonStyle(.plain).accessibilityIdentifier("quick-open-completed")
+                }.buttonStyle(DBoardPlainButtonStyle()).accessibilityIdentifier("quick-open-completed")
             }.dboardFont(size: 10).padding(.horizontal, 3).padding(.vertical, 4)
             ScrollViewReader { proxy in
                 ScrollView {
@@ -361,7 +361,7 @@ struct DemandQuickOpenView: View {
                     }
                 }
                 .contentShape(RoundedRectangle(cornerRadius: 14))
-        }.buttonStyle(.plain).id(entry.id)
+        }.buttonStyle(DBoardPlainButtonStyle()).id(entry.id)
             .accessibilityIdentifier("quick-open-card-" + entry.id)
             .accessibilityLabel(entry.id + " " + entry.item.displayTitle + "，回车打开详情")
             .accessibilityAddTraits(chosen ? .isSelected : [])
@@ -402,13 +402,16 @@ final class DemandQuickOpenWindowController: NSObject, NSWindowDelegate {
     }
 
     func toggle(_ vm: DBoardViewModel) {
-        if window?.isVisible == true { close() }
+        if let window, window.isVisible, window.isKeyWindow { close() }
         else { show(vm) }
     }
 
     func show(_ vm: DBoardViewModel) {
         if let window {
-            if activates { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
+            if activates {
+                focusReturn.capture()
+                present(window)
+            }
             return
         }
         viewModel = vm
@@ -417,14 +420,16 @@ final class DemandQuickOpenWindowController: NSObject, NSWindowDelegate {
         model.begin(items: vm.items, archives: vm.demandArchives.records, recentIDs: recents.ids)
         if activates { focusReturn.capture() }
         let panel = DemandQuickOpenPanel(contentRect: NSRect(x: activates ? 0 : -10000, y: 0, width: 452, height: 370),
-                                         styleMask: [.borderless], backing: .buffered, defer: false)
+                                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isReleasedWhenClosed = false
         panel.title = "D板 · 快速打开"
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.level = .floating
-        panel.hidesOnDeactivate = true
+        // The launcher takes keyboard focus without activating the whole app.
+        // Its resign-key delegate dismisses it when the user returns elsewhere.
+        panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = true
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         panel.delegate = self
@@ -444,15 +449,16 @@ final class DemandQuickOpenWindowController: NSObject, NSWindowDelegate {
             guard let self, event.window === self.window, self.window?.isVisible == true else { return event }
             return self.handleKey(event)
         }
-        if activates {
-            let pointer = NSEvent.mouseLocation
-            if let screen = NSScreen.screens.first(where: { $0.frame.contains(pointer) }) ?? NSScreen.main {
-                let frame = screen.visibleFrame
-                DemandWindowPlacement.center(panel, in: frame)
-            }
-            panel.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-        } else { panel.orderBack(nil) }
+        if activates { present(panel) }
+        else { panel.orderBack(nil) }
+    }
+
+    private func present(_ panel: NSPanel) {
+        let pointer = NSEvent.mouseLocation
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(pointer) }) ?? NSScreen.main {
+            DemandWindowPlacement.center(panel, in: screen.visibleFrame)
+        }
+        panel.makeKeyAndOrderFront(nil)
     }
 
     @discardableResult
@@ -513,10 +519,13 @@ final class DemandQuickOpenWindowController: NSObject, NSWindowDelegate {
     }
 
     func windowDidResignKey(_ notification: Notification) {
+        guard let source = notification.object as? NSWindow,
+              source === window, !source.isKeyWindow else { return }
         close(restoreFocus: false)
     }
 
     func windowWillClose(_ notification: Notification) {
+        guard let source = notification.object as? NSWindow, source === window else { return }
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor); self.keyMonitor = nil }
         subscriptions.removeAll()
         window = nil

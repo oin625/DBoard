@@ -86,7 +86,27 @@ extension DBoardTheme {
         mesh: (0.13, 0.18), floatingCard: (0.30, 0.30), glass: true,
         buttonAccent: adaptive("glass-button", light: 0x087B7F, dark: 0x087B7F))
 
-    static let all: [DBoardTheme] = [.indigo, .sand, .graphite, .glass]
+    static let nova = make(
+        id: "nova", name: "星曜", icon: "sparkles", summary: "紫电与冰蓝交织的深空棱光",
+        background: adaptive("nova-background", light: 0xEDF0FF, dark: 0x101222),
+        orbs: [Color(hex: "8155E8"), Color(hex: "428DEF"), Color(hex: "C763B6")],
+        card: adaptive("nova-card", light: 0xFBFAFF, dark: 0x22243B),
+        accent: adaptive("nova-accent", light: 0x6844C5, dark: 0xB7A0FF),
+        secondary: adaptive("nova-secondary", light: 0x236EAE, dark: 0x77CCF5),
+        mesh: (0.18, 0.29), floatingCard: (0.72, 0.76),
+        buttonAccent: adaptive("nova-button", light: 0x6844C5, dark: 0x6951BD))
+
+    static let aurora = make(
+        id: "aurora", name: "极光", icon: "moon.stars", summary: "翡翠与青蓝舒展的柔亮流光",
+        background: adaptive("aurora-background", light: 0xEAF6F2, dark: 0x102326),
+        orbs: [Color(hex: "24BDA6"), Color(hex: "347DCC"), Color(hex: "87B795")],
+        card: adaptive("aurora-card", light: 0xF8FFFC, dark: 0x203D3E),
+        accent: adaptive("aurora-accent", light: 0x087968, dark: 0x79E2BF),
+        secondary: adaptive("aurora-secondary", light: 0x2C649C, dark: 0x82BFF1),
+        mesh: (0.19, 0.29), floatingCard: (0.68, 0.73),
+        buttonAccent: adaptive("aurora-button", light: 0x087968, dark: 0x137F6A))
+
+    static let all: [DBoardTheme] = [.indigo, .sand, .graphite, .glass, .nova, .aurora]
     static let defaultTheme = indigo
 
     static func resolve(savedID: String?) -> DBoardTheme {

@@ -186,7 +186,7 @@ struct DemandMatrixCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 4) {
                 HStack(spacing: 6) {
                     Image(systemName: "line.3.horizontal").dboardFont(size: 9).foregroundStyle(.tertiary)
@@ -197,7 +197,7 @@ struct DemandMatrixCard: View {
                         .foregroundStyle(item.status == .inProgress ? Color.accentColor : Color.secondary)
                         .lineLimit(1)
                     Spacer(minLength: 0)
-                }.frame(minHeight: 22).modifier(interaction)
+                }.frame(minHeight: 36).modifier(interaction)
                 Button { vm.copyCurrentState(item.id) } label: {
                     Image(systemName: "doc.on.doc").dboardFont(size: 11).frame(width: 24, height: 24)
                 }.demandButtonStyle(.plain).foregroundStyle(.secondary)
@@ -210,10 +210,10 @@ struct DemandMatrixCard: View {
                     Text(DemandReminder.singleLine(item.project)).dboardFont(size: 11)
                         .foregroundStyle(.secondary).lineLimit(1)
                 }
-            }.frame(maxWidth: .infinity, alignment: .leading).modifier(interaction)
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4).modifier(interaction)
                 .accessibilityIdentifier("matrix-open-" + item.id).demandKeyboardID("matrix-open-" + item.id)
             if !item.reminder.isEmpty || vm.reminderDrafts[item.id] != nil {
-                DemandReminderView(item: item)
+                DemandReminderView(item: item).padding(.top, 4)
             }
         }
         .padding(10)

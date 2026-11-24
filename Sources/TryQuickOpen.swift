@@ -185,7 +185,7 @@ struct TryQuickOpenView: View {
                 }.dboardFont(size: 11).foregroundStyle(.secondary)
             }.padding(24).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .contentShape(RoundedRectangle(cornerRadius: 23))
-        }.buttonStyle(.plain).accessibilityIdentifier("try-quick-card-" + entry.id)
+        }.buttonStyle(DBoardPlainButtonStyle()).accessibilityIdentifier("try-quick-card-" + entry.id)
     }
     private func learningContent(_ entry: TryEntry) -> some View {
         let summary = TryLearningQuickSummary(entry)

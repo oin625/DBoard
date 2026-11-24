@@ -68,14 +68,14 @@ struct WebWorkspaceNavigationBar: View {
                         .padding(.horizontal, 10).frame(height: 30)
                         .background(theme.current.accentPrimary.opacity(location.page == page ? 0.10 : 0),
                             in: RoundedRectangle(cornerRadius: 8)).contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityIdentifier("webworkspace-page-" + page.id)
+                }.buttonStyle(DBoardPlainButtonStyle()).accessibilityIdentifier("webworkspace-page-" + page.id)
             }
             Rectangle().fill(theme.current.textSecondary.opacity(0.18)).frame(width: 1, height: 16).padding(.horizontal, 4)
             Button { fullURL = true } label: {
                 Text(location.url.absoluteString).dboardFont(size: 11)
                     .foregroundStyle(theme.current.textSecondary).lineLimit(1).truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading).frame(height: 32).contentShape(Rectangle())
-            }.buttonStyle(.plain).accessibilityLabel("当前链接 " + location.url.absoluteString)
+            }.buttonStyle(DBoardPlainButtonStyle()).accessibilityLabel("当前链接 " + location.url.absoluteString)
                 .popover(isPresented: $fullURL) {
                     VStack(alignment: .leading, spacing: 14) {
                         Text(location.url.absoluteString).dboardFont(size: 13).textSelection(.enabled)
@@ -89,7 +89,7 @@ struct WebWorkspaceNavigationBar: View {
                 }
             Button(action: copyURL) {
                 Image(systemName: copied ? "checkmark" : "link").frame(width: 32, height: 32).contentShape(Rectangle())
-            }.buttonStyle(.plain).foregroundStyle(theme.current.accentPrimary)
+            }.buttonStyle(DBoardPlainButtonStyle()).foregroundStyle(theme.current.accentPrimary)
                 .accessibilityLabel("复制当前链接").accessibilityIdentifier("webworkspace-copy-url")
         }.padding(.horizontal, 12).frame(height: 42)
             .background(theme.current.background)
@@ -158,7 +158,7 @@ struct WebWorkspaceQuickOpenView: View {
                                         .matchedGeometryEffect(id: "page-choice", in: selection)
                                 }
                             }.contentShape(RoundedRectangle(cornerRadius: 17))
-                    }.buttonStyle(.plain).accessibilityIdentifier("webworkspace-card-" + page.id)
+                    }.buttonStyle(DBoardPlainButtonStyle()).accessibilityIdentifier("webworkspace-card-" + page.id)
                         .accessibilityAddTraits(model.selected == page ? .isSelected : [])
                 }
             }
@@ -167,7 +167,7 @@ struct WebWorkspaceQuickOpenView: View {
                 Spacer()
                 Button(preferences.defaultPage == model.selected ? "默认打开此卡片" : "设为默认卡片") {
                     preferences.defaultPage = model.selected
-                }.buttonStyle(.plain).dboardFont(size: 11).foregroundStyle(theme.current.accentPrimary)
+                }.buttonStyle(DBoardPlainButtonStyle()).dboardFont(size: 11).foregroundStyle(theme.current.accentPrimary)
             }.padding(.horizontal, 4)
         }.padding(24).demandFloatingCanvas()
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.17), value: model.selected)

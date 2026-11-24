@@ -1668,13 +1668,13 @@ struct BizMapBoardView: View {
                     Image(systemName: "exclamationmark.triangle.fill").dboardFont(size: 10)
                         .foregroundStyle(Color.red)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DBoardPlainButtonStyle())
             }
             Button(action: { vm.regenerate() }) {
                 if vm.regenerating && vm.refreshProgress == nil { ProgressView().controlSize(.mini) }
                 else { Image(systemName: "arrow.clockwise").dboardFont(size: 11) }
             }
-            .buttonStyle(.plain).foregroundStyle(theme.current.textSecondary)
+            .buttonStyle(DBoardPlainButtonStyle()).foregroundStyle(theme.current.textSecondary)
             .disabled(vm.regenerating)
             if let prog = vm.refreshProgress {
                 HStack(spacing: 4) {
@@ -1723,7 +1723,7 @@ struct BizMapBoardView: View {
                 .background(Capsule().fill(color.opacity(lvl > 0 ? 0.14 : 0.07)))
                 .foregroundStyle(color)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(DBoardPlainButtonStyle())
         }
     }
 
@@ -1750,7 +1750,7 @@ struct BizMapBoardView: View {
                     .focused($searchFocused)
                 if !vm.query.isEmpty {
                     Button(action: { vm.query = "" }) { Image(systemName: "xmark.circle.fill").dboardFont(size: 11) }
-                        .buttonStyle(.plain).foregroundStyle(theme.current.textMuted)
+                        .buttonStyle(DBoardPlainButtonStyle()).foregroundStyle(theme.current.textMuted)
                 }
             }
             .padding(.horizontal, 10).padding(.vertical, 7)
@@ -1872,7 +1872,7 @@ struct BizMapBoardView: View {
             }
             .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading).contentShape(Rectangle())
             }
-            .buttonStyle(.plain).accessibilityLabel((isSelected ? "收起服务 " : "展开服务 ") + svc.name)
+            .buttonStyle(DBoardPlainButtonStyle()).accessibilityLabel((isSelected ? "收起服务 " : "展开服务 ") + svc.name)
             // 展开详情
             if isSelected {
                 Divider().opacity(0.4).padding(.vertical, 4)
@@ -1951,7 +1951,7 @@ struct BizMapBoardView: View {
                 .padding(.horizontal, 8).padding(.vertical, 4)
                 .background(Capsule().fill(prdBlue.opacity(0.08)))
                 .foregroundStyle(prdBlue)
-            }.buttonStyle(.plain)
+            }.buttonStyle(DBoardPlainButtonStyle())
         }
     }
 
@@ -1963,7 +1963,7 @@ struct BizMapBoardView: View {
                     badge(svc.mapLevel, active: svc.mapLevel == "L2")
                     Spacer()
                     Button(action: { vm.selected = nil }) { Image(systemName: "xmark").dboardFont(size: 10) }
-                        .buttonStyle(.plain).foregroundStyle(theme.current.textMuted)
+                        .buttonStyle(DBoardPlainButtonStyle()).foregroundStyle(theme.current.textMuted)
                 }
                 Text("\(svc.pkg) · \(svc.c) commits/6mo").font(fm.font(10)).foregroundStyle(theme.current.textMuted)
                 if !svc.branch.isEmpty {
@@ -2043,10 +2043,10 @@ struct BizMapBoardView: View {
                                             Text("开发 \(dev)").font(fm.font(9)).foregroundStyle(theme.current.textMuted)
                                         }
                                         Button("PRD明细") { vm.openURL(p.url) }
-                                            .buttonStyle(.plain).font(fm.font(9).weight(.medium)).foregroundStyle(prdBlue)
+                                            .buttonStyle(DBoardPlainButtonStyle()).font(fm.font(9).weight(.medium)).foregroundStyle(prdBlue)
                                         if let doc = p.docs.first {
                                             Button("需求文档") { vm.openURL(doc) }
-                                                .buttonStyle(.plain).font(fm.font(9).weight(.medium)).foregroundStyle(prdBlue)
+                                                .buttonStyle(DBoardPlainButtonStyle()).font(fm.font(9).weight(.medium)).foregroundStyle(prdBlue)
                                         }
                                     }
                                 }
@@ -2066,7 +2066,7 @@ struct BizMapBoardView: View {
                     .background(RoundedRectangle(cornerRadius: 7).fill(theme.current.accentPrimary.opacity(0.14)))
                     .foregroundStyle(theme.current.accentPrimary)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DBoardPlainButtonStyle())
             }
             .padding(12)
         }
@@ -2128,7 +2128,7 @@ struct BizMapBoardView: View {
                                         Text("同步/更新(\(pending))").font(fm.font(9.5).weight(.medium))
                                     }
                                 }
-                                .buttonStyle(.plain).foregroundStyle(prdBlue)
+                                .buttonStyle(DBoardPlainButtonStyle()).foregroundStyle(prdBlue)
                             }
                         }
                         Link(destination: URL(string: "https://alidocs.dingtalk.com/i/nodes/YQBnd5ExVEwGvKM7H20q9bEL8yeZqMmz?entrance=data&sheetId=VLDMsZx")!) {
@@ -2154,7 +2154,7 @@ struct BizMapBoardView: View {
                             .background(Capsule().fill(prdBlue.opacity(0.10)))
                             .foregroundStyle(prdBlue)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(DBoardPlainButtonStyle())
                     }
                     if vm.myActive.isEmpty {
                         Text("暂无我进行中的需求").font(fm.font(10.5)).foregroundStyle(theme.current.textMuted)
@@ -2205,16 +2205,16 @@ struct BizMapBoardView: View {
                     .padding(.horizontal, 10).padding(.vertical, 4)
                     .background(Capsule().fill(prdBlue))
                     .foregroundStyle(.white)
-            }.buttonStyle(.plain)
+            }.buttonStyle(DBoardPlainButtonStyle())
             Button(action: { vm.cookieInput = ""; vm.cookieError = nil; vm.showCookieSheet = true }) {
                 Text("粘贴 Cookie").font(fm.font(10.5).weight(.medium))
                     .padding(.horizontal, 9).padding(.vertical, 4)
                     .background(Capsule().fill(red.opacity(0.14)))
                     .foregroundStyle(red)
-            }.buttonStyle(.plain)
+            }.buttonStyle(DBoardPlainButtonStyle())
             Button(action: { vm.openURL("https://ai.tmallyc.com/prd/index.html") }) {
                 Text("浏览器登录").font(fm.font(10)).foregroundStyle(theme.current.accentPrimary)
-            }.buttonStyle(.plain)
+            }.buttonStyle(DBoardPlainButtonStyle())
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10).fill(red.opacity(0.06)))
@@ -2236,11 +2236,11 @@ struct BizMapBoardView: View {
                 Button(action: { vm.loadTableProjects() }) {
                     Image(systemName: "arrow.clockwise").dboardFont(size: 12)
                 }
-                .buttonStyle(.plain).foregroundStyle(theme.current.textSecondary)
+                .buttonStyle(DBoardPlainButtonStyle()).foregroundStyle(theme.current.textSecondary)
                 .disabled(vm.tableProjectsLoading)
                 Button(action: { vm.showTableProjects = false }) {
                     Image(systemName: "xmark.circle.fill").dboardFont(size: 16).foregroundStyle(.secondary)
-                }.buttonStyle(.plain)
+                }.buttonStyle(DBoardPlainButtonStyle())
             }
             .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 10)
             Divider()
@@ -2330,7 +2330,7 @@ struct BizMapBoardView: View {
                     .buttonStyle(.link).dboardFont(size: 11)
                 Button(action: { vm.showCookieSheet = false }) {
                     Image(systemName: "xmark.circle.fill").dboardFont(size: 16).foregroundStyle(.secondary)
-                }.buttonStyle(.plain)
+                }.buttonStyle(DBoardPlainButtonStyle())
             }
             VStack(alignment: .leading, spacing: 3) {
                 Text("Chrome：点「安装 Chrome 桥」装一次扩展，之后在 Chrome 登录即自动投递给 DBoard，不用再管")
@@ -2405,7 +2405,7 @@ struct BizMapBoardView: View {
                     .overlay(Capsule().stroke(active ? theme.current.accentPrimary.opacity(0.4) : theme.current.separator, lineWidth: 0.5))
                     .foregroundStyle(active ? theme.current.accentPrimary : theme.current.textMuted)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DBoardPlainButtonStyle())
             }
             Spacer()
 
@@ -2432,7 +2432,7 @@ struct BizMapBoardView: View {
                         Button { vm.syncOne(name: p.name) } label: {
                             Image(systemName: sync == "error" ? "exclamationmark.arrow.circlepath" : "arrow.triangle.2.circlepath")
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(DBoardPlainButtonStyle())
                         .foregroundStyle(sync == "error" ? Color.orange : Color.secondary)
                     }
                 }
@@ -2512,7 +2512,7 @@ struct BizMapBoardView: View {
                 Button(action: { vm.showDeliverablePanel = false }) {
                     Image(systemName: "xmark.circle.fill").dboardFont(size: 16)
                         .foregroundStyle(.secondary)
-                }.buttonStyle(.plain)
+                }.buttonStyle(DBoardPlainButtonStyle())
             }
 
             if let reqId = vm.deliverableReqId, let items = vm.deliverableItems[reqId], !items.isEmpty {
@@ -2565,7 +2565,7 @@ struct BizMapBoardView: View {
                                             .font(fm.font(10))
                                         Button(action: { vm.deliverableProjects.remove(at: i) }) {
                                             Image(systemName: "xmark").dboardFont(size: 7, weight: .bold)
-                                        }.buttonStyle(.plain)
+                                        }.buttonStyle(DBoardPlainButtonStyle())
                                     }
                                     .padding(.horizontal, 7).padding(.vertical, 3)
                                     .background(Capsule().fill(prdBlue.opacity(0.1)))
@@ -2596,7 +2596,7 @@ struct BizMapBoardView: View {
                                         Text(app.name).font(fm.font(12))
                                             .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
                                             .contentShape(Rectangle())
-                                    }.buttonStyle(.plain)
+                                    }.buttonStyle(DBoardPlainButtonStyle())
                                 }
                                 .listStyle(.plain)
                                 .frame(width: 140, height: min(CGFloat(vm.devAppResults.count) * 36, 160))
@@ -2615,7 +2615,7 @@ struct BizMapBoardView: View {
                                             Text(branch).font(fm.font(11))
                                                 .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
                                                 .contentShape(Rectangle())
-                                        }.buttonStyle(.plain)
+                                        }.buttonStyle(DBoardPlainButtonStyle())
                                     }
                                     .listStyle(.plain)
                                     .frame(width: 190, height: min(CGFloat(vm.devBranchResults.count) * 36, 180))
@@ -2637,12 +2637,12 @@ struct BizMapBoardView: View {
                     .padding(.horizontal, 8).padding(.vertical, 4)
                     .background(Capsule().fill(theme.current.separator.opacity(0.3)))
                     .foregroundStyle(theme.current.textSecondary)
-                }.buttonStyle(.plain)
+                }.buttonStyle(DBoardPlainButtonStyle())
                 if vm.deliverableFile != nil {
                     Button(action: { vm.deliverableFile = nil }) {
                         Image(systemName: "xmark.circle.fill").dboardFont(size: 11)
                             .foregroundStyle(theme.current.textMuted)
-                    }.buttonStyle(.plain)
+                    }.buttonStyle(DBoardPlainButtonStyle())
                 }
             }
 
@@ -2768,7 +2768,7 @@ struct BizMapBoardView: View {
                             Image(systemName: "plus.circle").dboardFont(size: 9)
                             Text("补充交付物").font(fm.font(9.5))
                         }.foregroundStyle(prdBlue)
-                    }.buttonStyle(.plain).padding(.top, 2)
+                    }.buttonStyle(DBoardPlainButtonStyle()).padding(.top, 2)
                 }
             }
 
@@ -2792,7 +2792,7 @@ struct BizMapBoardView: View {
                         }
                         .foregroundStyle(prdBlue)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(DBoardPlainButtonStyle())
                 }
                 if !docs.isEmpty {
                     let stage = [1: "方案", 2: "设计", 3: "开发", 4: "测试"]
@@ -2871,7 +2871,7 @@ private struct FlowChipsLinks: View {
                         .overlay(Capsule().stroke(prdBlue.opacity(0.35), lineWidth: 0.5))
                         .foregroundStyle(prdBlue)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DBoardPlainButtonStyle())
             }
         }
     }
@@ -2889,7 +2889,7 @@ private struct FlowChips: View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 56), spacing: 4, alignment: .leading)], alignment: .leading, spacing: 4) {
             ForEach(items, id: \.self) { it in
                 if clickable {
-                    Button { onTap(it) } label: { chip(it) }.buttonStyle(.plain)
+                    Button { onTap(it) } label: { chip(it) }.buttonStyle(DBoardPlainButtonStyle())
                 } else { chip(it) }
             }
         }

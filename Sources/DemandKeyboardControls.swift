@@ -22,13 +22,21 @@ struct DemandKeyboardButtonStyle<Base: ButtonStyle>: PrimitiveButtonStyle {
     @Environment(\.demandFloatingCanvas) private var enabled
 
     func makeBody(configuration: Configuration) -> some View {
-        Button(configuration).buttonStyle(base)
+        pointerButton(configuration)
             .overlay {
                 if enabled {
                     DemandKeyboardActionTarget(action: configuration.trigger)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
+    }
+
+    @ViewBuilder private func pointerButton(_ configuration: Configuration) -> some View {
+        if Base.self == PlainButtonStyle.self {
+            Button(configuration).buttonStyle(DBoardPlainButtonStyle())
+        } else {
+            Button(configuration).buttonStyle(base)
+        }
     }
 }
 
@@ -38,7 +46,7 @@ struct DemandKeyboardPrimitiveButtonStyle<Base: PrimitiveButtonStyle>: Primitive
     @Environment(\.demandFloatingCanvas) private var enabled
 
     func makeBody(configuration: Configuration) -> some View {
-        Button(configuration).buttonStyle(base)
+        pointerButton(configuration)
             // Filled native buttons need a deeper tone for their white labels.
             .tint(Base.self == BorderedProminentButtonStyle.self
                   ? theme.current.controlAccent : theme.current.accentPrimary)
@@ -48,6 +56,14 @@ struct DemandKeyboardPrimitiveButtonStyle<Base: PrimitiveButtonStyle>: Primitive
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
+    }
+
+    @ViewBuilder private func pointerButton(_ configuration: Configuration) -> some View {
+        if Base.self == PlainButtonStyle.self {
+            Button(configuration).buttonStyle(DBoardPlainButtonStyle())
+        } else {
+            Button(configuration).buttonStyle(base)
+        }
     }
 }
 
@@ -92,8 +108,12 @@ extension View {
     func demandKeyboardSelected(_ selected: Bool) -> some View {
         environment(\.demandKeyboardSelected, selected)
     }
-    func demandMenuStyle<S: MenuStyle>(_ style: S) -> some View {
-        menuStyle(style).demandKeyboardMenu()
+    @ViewBuilder func demandMenuStyle<S: MenuStyle>(_ style: S) -> some View {
+        if S.self == BorderlessButtonMenuStyle.self {
+            menuStyle(DBoardMenuStyle()).demandKeyboardMenu()
+        } else {
+            menuStyle(style).demandKeyboardMenu()
+        }
     }
     func demandKeyboardMenu() -> some View {
         modifier(DemandKeyboardMenuModifier())

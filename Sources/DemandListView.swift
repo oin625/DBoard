@@ -83,7 +83,7 @@ struct DemandListView: View {
             }
             Spacer()
             Button("排查经验", systemImage: "books.vertical") { vm.showingKnowledge = true }
-                .dboardFont(size: 11).buttonStyle(.plain).foregroundStyle(.secondary)
+                .dboardFont(size: 11).buttonStyle(DBoardPlainButtonStyle()).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 20).padding(.bottom, 8)
         .onChange(of: isDefault) { _, isDefault in

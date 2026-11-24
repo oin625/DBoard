@@ -95,8 +95,12 @@ enum DItemStore {
 
     /// 条目块 [start, end)，end 不含尾部空行
     static func blockRange(_ lines: [String], id: String) -> Range<Int>? {
-        let pattern = "^### " + id + "(?![0-9])"
-        guard let s = lines.firstIndex(where: { $0.range(of: pattern, options: .regularExpression) != nil }) else { return nil }
+        let prefix = "### " + id
+        guard let s = lines.firstIndex(where: { line in
+            guard line.hasPrefix(prefix) else { return false }
+            let next = line.dropFirst(prefix.count).first
+            return next == nil || !("0"..."9").contains(String(next!))
+        }) else { return nil }
         var e = s + 1
         while e < lines.count && !isBoundary(lines[e]) { e += 1 }
         while e > s + 1 && lines[e - 1].trimmed.isEmpty && !lines[e - 1].hasPrefix("    ") { e -= 1 }
@@ -577,7 +581,8 @@ extension DBoardViewModel {
     @discardableResult
     func copyCurrentState(_ id: String, at url: URL? = nil, archiveRevision: String? = nil, pasteboard: NSPasteboard = .general) -> Bool {
         do {
-            let latest = try DItemStore.currentItem(id: id, at: url, archiveRevision: archiveRevision)
+            // Copy only reads saved task data; Git verification belongs on the background review path.
+            let latest = try DItemStore.currentRecord(id: id, at: url, archiveRevision: archiveRevision)
             let snapshot = DboardAITaskContext.readInstruction(item: latest, cacheURL: url, archiveRevision: archiveRevision)
             pasteboard.clearContents()
             guard pasteboard.setString(snapshot, forType: .string) else {
@@ -595,7 +600,7 @@ extension DBoardViewModel {
     @discardableResult
     func setDebugPageNotNeeded(_ id: String, value: Bool, at url: URL? = nil) -> Bool {
         do {
-            let latest = try DItemStore.currentItem(id: id, at: url)
+            let latest = try DItemStore.currentRecord(id: id, at: url)
             guard DItemStore.setDebugPageNotNeeded(id: id, value: value,
                 expected: latest.debugPageNotNeeded, at: url) else {
                 flash("调试页设置保存失败，请刷新后重试")
@@ -613,7 +618,7 @@ extension DBoardViewModel {
     @discardableResult
     func copyReviewTask(_ id: String, at url: URL? = nil, archiveRevision: String? = nil, pasteboard: NSPasteboard = .general) -> Bool {
         do {
-            let latest = try DItemStore.currentItem(id: id, at: url, archiveRevision: archiveRevision)
+            let latest = try DItemStore.currentRecord(id: id, at: url, archiveRevision: archiveRevision)
             let instruction = DboardAITaskContext.reviewInstruction(item: latest, cacheURL: url, archiveRevision: archiveRevision)
             pasteboard.clearContents()
             guard pasteboard.setString(instruction, forType: .string) else {
@@ -631,7 +636,7 @@ extension DBoardViewModel {
     @discardableResult
     func copyDebugTask(_ id: String, at url: URL? = nil, pasteboard: NSPasteboard = .general) -> Bool {
         do {
-            let latest = try DItemStore.currentItem(id: id, at: url)
+            let latest = try DItemStore.currentRecord(id: id, at: url)
             guard latest.status != .completed else {
                 flash("需求已完成，请先恢复继续处理或开启新版本")
                 return false
@@ -658,7 +663,7 @@ extension DBoardViewModel {
     func copyChangeState(_ id: String, changeID: String, at url: URL? = nil,
                          pasteboard: NSPasteboard = .general) -> Bool {
         do {
-            let latest = try DItemStore.currentItem(id: id, at: url)
+            let latest = try DItemStore.currentRecord(id: id, at: url)
             guard let change = latest.changes.first(where: { $0.id == changeID }) else {
                 flash("这条变更已不存在，请重新打开")
                 return false

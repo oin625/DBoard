@@ -31,6 +31,33 @@ extension View {
     }
 }
 
+/// Expand the label itself: outer padding does not enlarge a plain button's native hit area.
+/// This stays inside layout bounds, so neighboring controls keep separate pointer targets.
+extension View {
+    func dboardClickTarget(minimum: CGFloat = 36) -> some View {
+        frame(minWidth: minimum, minHeight: minimum).contentShape(Rectangle())
+    }
+}
+
+struct DBoardPlainButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .dboardClickTarget()
+            .opacity(enabled ? (configuration.isPressed ? 0.72 : 1) : 0.45)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.10), value: configuration.isPressed)
+    }
+}
+
+/// Native borderless menus can discard label padding; button menus retain the entire target.
+struct DBoardMenuStyle: MenuStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Menu(configuration).menuStyle(.button).buttonStyle(DBoardPlainButtonStyle())
+    }
+}
+
 struct WorkspaceActionStyle: ButtonStyle {
     var prominent = false
     @EnvironmentObject private var theme: ThemeManager
@@ -40,7 +67,7 @@ struct WorkspaceActionStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .dboardFont(size: 12, weight: .medium)
-            .padding(.horizontal, 10).frame(minHeight: 30)
+            .padding(.horizontal, 12).dboardClickTarget()
             .foregroundStyle(prominent ? Color.white : Color.primary)
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)

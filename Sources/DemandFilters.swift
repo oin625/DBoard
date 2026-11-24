@@ -62,7 +62,7 @@ struct DemandFilterBar: View {
                 if !vm.demandQuery.isEmpty {
                     Button { vm.demandQuery = "" } label: {
                         Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
-                    }.buttonStyle(.plain).accessibilityLabel("清除搜索")
+                    }.buttonStyle(DBoardPlainButtonStyle()).accessibilityLabel("清除搜索")
                 }
             }
             .padding(.horizontal, 10).frame(height: 34)
@@ -74,7 +74,7 @@ struct DemandFilterBar: View {
             if vm.demandFilter != .all {
                 Button { vm.demandFilter = .all; vm.demandQuery = "" } label: {
                     Image(systemName: "line.3.horizontal.decrease.circle").dboardFont(size: 14)
-                }.buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("清除筛选")
+                }.buttonStyle(DBoardPlainButtonStyle()).foregroundStyle(.secondary).accessibilityLabel("清除筛选")
             }
         }.padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 12)
     }
@@ -101,7 +101,7 @@ struct DemandContextView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DBoardPlainButtonStyle())
                 .accessibilityLabel(expanded ? "收起需求上下文" : "展开需求上下文")
                 .accessibilityIdentifier("demand-context-" + item.id)
                 if expanded {

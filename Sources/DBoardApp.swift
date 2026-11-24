@@ -144,13 +144,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 创建可拖拽/可缩放的浮动窗口
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 740),
-            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            styleMask: [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         win.title = "D板"
         win.titlebarAppearsTransparent = true
         win.titleVisibility = .visible
+        win.titlebarSeparatorStyle = .none
         win.isMovableByWindowBackground = false
         win.level = .normal
         win.hidesOnDeactivate = false

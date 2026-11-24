@@ -37,7 +37,7 @@ struct DemandTechnicalPlanSection: View {
             Spacer()
             Button(item.technicalPlan == nil ? "复制方案指令" : "让 AI 核对更新") {
                 do {
-                    let latest = try DItemStore.currentItem(id: item.id, at: cacheURL)
+                    let latest = try DItemStore.currentRecord(id: item.id, at: cacheURL)
                     NSPasteboard.general.clearContents()
                     if NSPasteboard.general.setString(DboardAITaskContext.planInstruction(item: latest, cacheURL: cacheURL.path == CacheFile.path ? nil : cacheURL), forType: .string) {
                         vm.showFeedback("技术方案指令已复制")
@@ -104,7 +104,7 @@ struct DemandTechnicalPlanEditor: View {
     }
     private func load() {
         do {
-            let item = try DItemStore.currentItem(id: itemID, at: cacheURL)
+            let item = try DItemStore.currentRecord(id: itemID, at: cacheURL)
             original = item.technicalPlan
             markdown = UserDefaults.standard.string(forKey: draftKey) ?? original?.markdown ?? ""
             DispatchQueue.global(qos: .utility).async {

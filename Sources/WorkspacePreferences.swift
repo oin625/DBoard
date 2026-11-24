@@ -1,7 +1,32 @@
 import SwiftUI
 import AppKit
 
-enum SettingsPage: String, Hashable { case general, appearance, favorites, shortcuts, clipboard, usage }
+enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
+    case general, appearance, favorites, shortcuts, codexHooks, clipboard, usage
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .general: return "通用"
+        case .appearance: return "外观"
+        case .favorites: return "常用入口"
+        case .shortcuts: return "快捷键"
+        case .codexHooks: return "Codex Hooks"
+        case .clipboard: return "剪切板"
+        case .usage: return "使用记录"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .general: return "gearshape"
+        case .appearance: return "paintpalette"
+        case .favorites: return "star"
+        case .shortcuts: return "keyboard"
+        case .codexHooks: return "switch.2"
+        case .clipboard: return "doc.on.clipboard"
+        case .usage: return "chart.bar"
+        }
+    }
+}
 
 enum WorkspacePage: String, CaseIterable, Identifiable {
     case overview, demands, todos, history
@@ -96,8 +121,12 @@ struct WorkspacePinButton: View {
 struct DBoardSettingsButton: View {
     @Environment(\.openSettings) private var openSettings
     var body: some View {
-        Button { openSettings() } label: { Image(systemName: "gearshape") }
-            .accessibilityLabel("打开 D板设置")
+        Button { openSettings() } label: {
+            Image(systemName: "gearshape").dboardClickTarget()
+        }
+        .buttonStyle(DBoardPlainButtonStyle())
+        .accessibilityLabel("打开 D板设置")
+        .accessibilityIdentifier("dboard-open-settings")
     }
 }
 
@@ -120,13 +149,67 @@ struct EmptyWorkspaceState: View {
 }
 
 struct DBoardSettingsView: View {
-    @ObservedObject private var prefs = WorkspacePreferences.shared
-    @ObservedObject private var theme = ThemeManager.shared
+    @ObservedObject private var prefs: WorkspacePreferences
+    @ObservedObject private var theme: ThemeManager
     @ObservedObject private var flags = FeatureFlags.shared
     @ObservedObject private var chatPrivacy = DemandChatPrivacy.shared
 
+    init(theme: ThemeManager = .shared, preferences: WorkspacePreferences = .shared) {
+        self.theme = theme
+        self.prefs = preferences
+    }
+
     var body: some View {
-        TabView(selection: $prefs.settingsPage) {
+        NavigationSplitView {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("设置").dboardFont(size: 11, weight: .medium)
+                    .foregroundStyle(theme.current.textSecondary)
+                    .padding(.horizontal, 10).padding(.bottom, 8)
+                ForEach(SettingsPage.allCases) { page in
+                    Button { prefs.settingsPage = page } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: page.icon).frame(width: 18)
+                                .foregroundStyle(prefs.settingsPage == page ? theme.current.accentPrimary : theme.current.textSecondary)
+                            Text(page.title).dboardFont(size: 13, weight: prefs.settingsPage == page ? .medium : .regular)
+                                .foregroundStyle(theme.current.textPrimary)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(prefs.settingsPage == page ? theme.current.accentPrimary.opacity(0.12) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 9))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(DBoardPlainButtonStyle())
+                    .accessibilityIdentifier("settings-page-" + page.rawValue)
+                    .accessibilityAddTraits(prefs.settingsPage == page ? .isSelected : [])
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background { ThemeCanvasBackground(palette: theme.current).ignoresSafeArea() }
+            .navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 220)
+        } detail: {
+            pageContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .navigationTitle(prefs.settingsPage.title)
+                .toolbarBackground(.hidden, for: .windowToolbar)
+        }
+        .navigationSplitViewStyle(.balanced)
+        .background { ThemeCanvasBackground(palette: theme.current).ignoresSafeArea() }
+        .background(SettingsWindowSkinBridge(palette: theme.current))
+        .frame(minWidth: 800, idealWidth: 840, minHeight: 620, idealHeight: 650)
+        .dboardFont(size: 13)
+        .dboardThemeAccent()
+        .environmentObject(theme)
+        .environmentObject(FontManager.shared)
+    }
+
+    @ViewBuilder
+    private var pageContent: some View {
+        switch prefs.settingsPage {
+        case .general:
             Form {
                 Section("隐私") {
                     Toggle("需求关联钉钉群聊", isOn: Binding(get: { chatPrivacy.enabled },
@@ -146,11 +229,10 @@ struct DBoardSettingsView: View {
                 }
             }
             .formStyle(.grouped)
-            .tabItem { Label("通用", systemImage: "gearshape") }.tag(SettingsPage.general)
-
+            .scrollContentBackground(.hidden)
+        case .appearance:
             AppearanceSettingsView(theme: theme)
-                .tabItem { Label("外观", systemImage: "paintpalette") }.tag(SettingsPage.appearance)
-
+        case .favorites:
             Form {
                 Section("常用入口") {
                     ForEach(DBoardModule.visible) { module in
@@ -165,21 +247,49 @@ struct DBoardSettingsView: View {
                 }
             }
             .formStyle(.grouped)
-            .tabItem { Label("常用入口", systemImage: "star") }.tag(SettingsPage.favorites)
-
+            .scrollContentBackground(.hidden)
+        case .shortcuts:
             ShortcutSettingsView()
-                .tabItem { Label("快捷键", systemImage: "keyboard") }.tag(SettingsPage.shortcuts)
-
+        case .codexHooks:
+            CodexHooksSettingsView()
+        case .clipboard:
             ClipboardPreferencesView()
-                .tabItem { Label("剪切板", systemImage: "doc.on.clipboard") }.tag(SettingsPage.clipboard)
-
+        case .usage:
             UsageSummaryView()
-                .tabItem { Label("使用记录", systemImage: "chart.bar") }.tag(SettingsPage.usage)
         }
-        .frame(width: 640, height: 600)
-        .dboardFont(size: 13)
-        .dboardThemeAccent()
-        .environmentObject(theme)
+    }
+}
+
+/// Native Settings windows share the same titlebar and backing as the home window.
+private struct SettingsWindowSkinBridge: NSViewRepresentable {
+    let palette: DBoardTheme
+    func makeNSView(context: Context) -> SettingsWindowSkinView {
+        let view = SettingsWindowSkinView()
+        view.apply(palette)
+        return view
+    }
+    func updateNSView(_ view: SettingsWindowSkinView, context: Context) { view.apply(palette) }
+}
+
+private final class SettingsWindowSkinView: NSView {
+    private var palette = DBoardTheme.defaultTheme
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        apply(palette)
+    }
+    func apply(_ palette: DBoardTheme) {
+        self.palette = palette
+        guard let window else { return }
+        if !window.styleMask.contains(.fullSizeContentView) {
+            let frame = window.frame
+            window.styleMask.insert(.fullSizeContentView)
+            window.setFrame(frame, display: false)
+        }
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
+        window.toolbarStyle = .unified
+        window.isOpaque = !palette.nativeBlur
+        window.backgroundColor = palette.nativeBlur ? .clear : NSColor(palette.background)
     }
 }
 
@@ -211,6 +321,7 @@ struct ClipboardPreferencesView: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 }
 
@@ -237,7 +348,7 @@ struct UsageSummaryView: View {
             } else {
                 List(rows, id: \.0) { row in
                     LabeledContent(names[row.0] ?? row.0) { Text("\(row.1) 次").monospacedDigit() }
-                }
+                }.scrollContentBackground(.hidden)
             }
         }
         .padding(20)

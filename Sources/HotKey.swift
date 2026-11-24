@@ -19,7 +19,7 @@ func centerWindowOnMouseScreen(_ window: NSWindow) {
     window.setFrame(frame, display: false)
 }
 
-final class HotKey {
+final class HotKey: GlobalShortcutRegistration {
     private static var nextId: UInt32 = 1
     private static var registry: [UInt32: () -> Void] = [:]
     private static var sharedHandler: EventHandlerRef?
@@ -44,7 +44,11 @@ final class HotKey {
         self.onStatus = onStatus
         self.keyCode = keyCode
         self.modifiers = modifiers
-        Self.installSharedHandlerOnce()
+        let handlerStatus = Self.installSharedHandlerOnce()
+        guard handlerStatus == noErr else {
+            onStatus?(handlerStatus)
+            return
+        }
 
         let id = HotKey.nextId
         HotKey.nextId += 1
@@ -72,11 +76,11 @@ final class HotKey {
     }
 
     /// 共享 handler: 从事件里取 EventHotKeyID, 查注册表分发; 未命中返回 eventNotHandledErr
-    private static func installSharedHandlerOnce() {
-        guard sharedHandler == nil else { return }
+    private static func installSharedHandlerOnce() -> OSStatus {
+        guard sharedHandler == nil else { return noErr }
         var eventSpec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
                                       eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(
+        return InstallEventHandler(
             GetApplicationEventTarget(),
             { (_, eventRef, _) -> OSStatus in
                 guard let eventRef else { return OSStatus(eventNotHandledErr) }
@@ -88,7 +92,8 @@ final class HotKey {
                                             MemoryLayout<EventHotKeyID>.size,
                                             nil,
                                             &hotKeyId)
-                guard err == noErr, let cb = HotKey.registry[hotKeyId.id] else {
+                guard err == noErr, hotKeyId.signature == HotKey.signature,
+                      let cb = HotKey.registry[hotKeyId.id] else {
                     return OSStatus(eventNotHandledErr)
                 }
                 cb()

@@ -198,7 +198,7 @@ struct EngineStrip: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(DBoardPlainButtonStyle())
         .popover(isPresented: $showDetail, arrowEdge: .top) {
             EngineDetailPanel(health: health, stateColor: stateColor)
         }
@@ -221,7 +221,7 @@ struct EngineDetailPanel: View {
                 Button { health.refresh() } label: {
                     Image(systemName: "arrow.clockwise").dboardFont(size: 10)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DBoardPlainButtonStyle())
             }
             .padding(.horizontal, 12).padding(.vertical, 9)
             Divider()

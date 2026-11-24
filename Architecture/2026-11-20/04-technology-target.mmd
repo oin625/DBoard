@@ -1,0 +1,41 @@
+flowchart TB
+  subgraph ENTRY["入口层"]
+    UI["DBoardApp<br/>SwiftUI / AppKit / WindowRouter<br/>按领域拆ViewModel"]
+    CLI["现有dboard-ai命令契约<br/>Python逐步变薄适配器"]
+  end
+  subgraph CORE["共享Swift内核：独立于AppKit"]
+    CMD["Application UseCases<br/>Command / Query / TaskID / revision / eventID"]
+    DOMAIN["Domain<br/>Work · Learning · Ideas · Health<br/>状态规则 / 证据失效 / 确认边界"]
+    PORT["Repository / Connector Protocols<br/>明确读写错误与结果待核验"]
+    CMD --> DOMAIN
+    CMD --> PORT
+  end
+  BIN["独立dboard-core CLI target<br/>App未运行也可处理本地命令"]
+  UI --> CMD
+  CLI --> BIN --> CMD
+  subgraph ADAPTER["基础设施与连接器"]
+    FILE["文件Repository：第一阶段<br/>Markdown / JSON兼容<br/>后台I/O + 有界跨进程锁 + 原子写"]
+    PROC["Process / HTTP / Auth适配器<br/>取消 / 超时 / typed业务结果"]
+    CONN["ReqFlow与BizMap分别适配<br/>dws / Audi / Skills / Cookie桥"]
+    JOURNAL["按操作持久化journal<br/>准备 → 执行 → 核验 → 确认<br/>单飞 / 幂等 / 崩溃后对账"]
+    OBS["变更通知 + 局部读取投影<br/>缓存新鲜度 / 错误 / 操作耗时"]
+    MEDIA["独立文档与媒体<br/>Excalidraw / 图片 / 笔记导出"]
+  end
+  PORT --> FILE
+  PORT --> PROC --> CONN
+  CMD --> JOURNAL
+  FILE --> OBS --> UI
+  UI --> MEDIA
+  JOURNAL --> PROC
+  SQL["第二阶段按测量决策<br/>SQLite事务事实库或只读索引<br/>禁止与旧文件长期双主写"]
+  FILE -. "只有迁移验收通过才切换" .-> SQL
+  CONTRACT["验证：共享fixtures / 命令契约<br/>并发写 / 远端结果不明 / 恢复 / 旧数据往返"]
+  CONTRACT -. "贯穿迁移各阶段" .-> CORE
+  classDef native fill:#dbeafe,stroke:#2563eb,color:#172554;
+  classDef data fill:#dcfce7,stroke:#16a34a,color:#14532d;
+  classDef ext fill:#f3e8ff,stroke:#9333ea,color:#3b0764;
+  classDef optional fill:#fff7ed,stroke:#ea580c,color:#7c2d12;
+  class UI,CLI,BIN,CMD,DOMAIN,PORT native;
+  class FILE,JOURNAL,OBS,MEDIA data;
+  class PROC,CONN,CONTRACT ext;
+  class SQL optional;

@@ -9,12 +9,14 @@ struct SmoothButtonStyle: ButtonStyle {
     @State private var hovered = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .dboardClickTarget()
             .scaleEffect(configuration.isPressed ? scale : (hovered ? hoverScale : 1.0))
             .opacity(configuration.isPressed ? 0.7 : 1.0)
             .brightness(hovered && !configuration.isPressed ? 0.03 : 0)
             .animation(.spring(response: 0.25, dampingFraction: 0.55), value: configuration.isPressed)
             .animation(.spring(response: 0.28, dampingFraction: 0.7), value: hovered)
             .onHover { hovered = $0 }
+            .contentShape(Rectangle())
     }
 }
 

@@ -841,7 +841,7 @@ struct HooksBoardView: View {
         if c.contains("feedback-prompt")    { return "反馈调查：AI 回答结束后决定是否弹问卷。" }
         if c.contains("feedback-env") || c.contains("feedback-session") {
             return "反馈调查：记录会话环境与起止时间, 用于公司 AI 使用调研。" }
-        if c.contains("report-event")  { return "Luban 埋点：把事件(发消息/调工具等)异步上报到公司统计, 不影响对话。" }
+        if c.contains("report-event")  { return "Luban 会上报对话和工具事件。同步运行时，Codex 会等待脚本返回。" }
         if c.contains("check-update")  { return "Luban：启动时检查插件有没有新版本。" }
         if c.contains("check-emp-id")  { return "Luban：校验本机的工号绑定。" }
         if c.contains(".r2c/")         { return "R2C 安全审计：把每条 Bash 命令上报审计(调用前/后/失败各拦一次), 公司安全合规组件, 与 luban 同属'公司要求'性质。" }
@@ -1007,7 +1007,7 @@ struct AgentsBoardView: View {
                         Image(systemName: "doc.text").dboardFont(size: 10)
                             .foregroundStyle(theme.current.textSecondary)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(DBoardPlainButtonStyle())
                 }
                 // 自建才能删; 物理删除, 两段式确认防误触
                 if a.origin == "自建" {
@@ -1018,18 +1018,18 @@ struct AgentsBoardView: View {
                                 .background(Capsule().fill(Color(hex: "#d94f4f")))
                                 .foregroundStyle(.white)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(DBoardPlainButtonStyle())
                         Button(action: { confirmDelete = nil }) {
                             Text("取消").font(fm.font(10))
                                 .foregroundStyle(theme.current.textMuted)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(DBoardPlainButtonStyle())
                     } else {
                         Button(action: { confirmDelete = a.name }) {
                             Image(systemName: "trash").dboardFont(size: 10)
                                 .foregroundStyle(Color(hex: "#d94f4f").opacity(0.75))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(DBoardPlainButtonStyle())
                     }
                 }
             }
@@ -1109,7 +1109,7 @@ struct MemoryBoardView: View {
                             .background(Capsule().fill(theme.current.textTertiary.opacity(0.1)))
                             .foregroundStyle(theme.current.textSecondary)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(DBoardPlainButtonStyle())
                     }
                 }
                 let ranked = Dictionary(grouping: activeGroups,
@@ -1260,7 +1260,7 @@ struct MemoryBoardView: View {
                         .dboardFont(size: 9)
                         .foregroundStyle(theme.current.textMuted.opacity(0.7))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DBoardPlainButtonStyle())
             }
             .contentShape(Rectangle())
             .onTapGesture {
@@ -1351,7 +1351,7 @@ struct MemoryBoardView: View {
                                 .font(fm.font(10))
                                 .foregroundStyle(theme.current.accentPrimary.opacity(0.85))
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(DBoardPlainButtonStyle())
                         .padding(.leading, 20)
                     }
                 }

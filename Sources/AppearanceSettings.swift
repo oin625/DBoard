@@ -22,7 +22,7 @@ struct AppearanceSettingsView: View {
                                     GridItem(.flexible(), spacing: 14)], spacing: 14) {
                     ForEach(DBoardTheme.all) { palette in
                         SkinPreviewCard(palette: palette, selected: theme.current == palette) {
-                            theme.current = palette
+                            withAnimation(DBoardUI.spring) { theme.current = palette }
                         }
                     }
                 }
@@ -38,7 +38,7 @@ struct AppearanceSettingsView: View {
                 }
             }.padding(24)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background { ThemeCanvasBackground(palette: theme.current).ignoresSafeArea() }
     }
 }
 
@@ -75,7 +75,7 @@ private struct SkinPreviewCard: View {
             }
             .contentShape(RoundedRectangle(cornerRadius: 16))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(DBoardPlainButtonStyle())
         .accessibilityIdentifier("appearance-skin-" + palette.id)
         .accessibilityLabel(palette.name + "，" + palette.summary)
         .accessibilityAddTraits(selected ? .isSelected : [])

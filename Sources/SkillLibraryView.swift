@@ -114,7 +114,7 @@ struct SkillsBoardView: View {
                 Text("Skills").dboardFont(size: 22, weight: .semibold)
                     .foregroundStyle(theme.current.textPrimary)
                     .padding(.vertical, 6)
-            }.buttonStyle(.plain)
+            }.buttonStyle(DBoardPlainButtonStyle())
             if boardTab != .skills {
                 Text("/  " + boardTab.rawValue).dboardFont(size: 14)
                     .foregroundStyle(theme.current.textSecondary)
@@ -136,7 +136,7 @@ struct SkillsBoardView: View {
                     Text("刷新")
                 }.dboardFont(size: 12).padding(.horizontal, 10).padding(.vertical, 8)
                     .contentShape(Rectangle())
-            }.buttonStyle(.plain).disabled(vm.loading || envVM.loading)
+            }.buttonStyle(DBoardPlainButtonStyle()).disabled(vm.loading || envVM.loading)
             if popoverMode {
                 TearOffButton(key: "SkillsBoard")
             } else {
@@ -175,7 +175,7 @@ struct SkillsBoardView: View {
                     Spacer()
                     Button { newCategoryName = ""; showNewCategory = true } label: {
                         Image(systemName: "plus").frame(width: 30, height: 30).contentShape(Rectangle())
-                    }.buttonStyle(.plain).accessibilityLabel("新建分类")
+                    }.buttonStyle(DBoardPlainButtonStyle()).accessibilityLabel("新建分类")
                 }.padding(.top, 20).padding(.horizontal, 10)
                 ForEach(vm.categories.filter { $0.0 != "全部" }, id: \.0) { category in
                     sideButton(category.0, icon: nil, count: category.1,
@@ -219,7 +219,7 @@ struct SkillsBoardView: View {
                             .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(theme.current.accentPrimary.opacity(0.3), lineWidth: 1) }
                     }
                 }.contentShape(Rectangle())
-        }.buttonStyle(.plain)
+        }.buttonStyle(DBoardPlainButtonStyle())
     }
 
     private var library: some View {
@@ -268,7 +268,7 @@ struct SkillsBoardView: View {
                 if !vm.search.isEmpty {
                     Button { vm.search = "" } label: {
                         Image(systemName: "xmark.circle.fill").frame(width: 26, height: 26)
-                    }.buttonStyle(.plain).foregroundStyle(theme.current.textSecondary)
+                    }.buttonStyle(DBoardPlainButtonStyle()).foregroundStyle(theme.current.textSecondary)
                 }
             }.padding(.horizontal, 12).frame(height: 40)
                 .background(theme.current.cardFill, in: RoundedRectangle(cornerRadius: 11))
@@ -325,14 +325,14 @@ struct SkillsBoardView: View {
                 }
                 .shadow(color: theme.current.shadow.opacity(isSelected ? 0.09 : 0.035), radius: 7, y: 2)
                 .contentShape(RoundedRectangle(cornerRadius: 14))
-        }.buttonStyle(.plain)
+        }.buttonStyle(DBoardPlainButtonStyle())
             .overlay(alignment: .topTrailing) {
                 Button { vm.toggleFavorite(item) } label: {
                     Image(systemName: vm.favorites.contains(item.id) ? "star.fill" : "star")
                         .dboardFont(size: 12)
                         .foregroundStyle(vm.favorites.contains(item.id) ? theme.current.accentPrimary : theme.current.textSecondary)
                         .frame(width: 36, height: 36).contentShape(Rectangle())
-                }.buttonStyle(.plain).padding(5)
+                }.buttonStyle(DBoardPlainButtonStyle()).padding(5)
                     .accessibilityLabel(vm.favorites.contains(item.id) ? "取消常用" : "设为常用")
             }
             .contextMenu {
@@ -369,7 +369,7 @@ private struct SkillWindowControlStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.dboardFont(size: 12)
             .foregroundStyle(theme.current.textSecondary)
-            .frame(width: 32, height: 32)
+            .dboardClickTarget()
             .background(theme.current.accentPrimary.opacity(configuration.isPressed ? 0.12 : 0),
                         in: RoundedRectangle(cornerRadius: 8))
             .contentShape(Rectangle())
@@ -403,7 +403,7 @@ struct SkillLibraryDetail: View {
                 }
                 Spacer()
                 Button(action: close) { Image(systemName: "xmark").frame(width: 32, height: 32).contentShape(Rectangle()) }
-                    .buttonStyle(.plain).accessibilityLabel("收起技能详情")
+                    .buttonStyle(DBoardPlainButtonStyle()).accessibilityLabel("收起技能详情")
             }.padding(18)
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
@@ -424,7 +424,7 @@ struct SkillLibraryDetail: View {
                             .lineLimit(showFullDescription ? nil : 6)
                         if item.desc.count > 200 {
                             Button(showFullDescription ? "收起" : "完整用途") { withAnimation { showFullDescription.toggle() } }
-                                .buttonStyle(.plain).dboardFont(size: 11).foregroundStyle(theme.current.accentPrimary)
+                                .buttonStyle(DBoardPlainButtonStyle()).dboardFont(size: 11).foregroundStyle(theme.current.accentPrimary)
                         }
                     }
                     noteSection
@@ -507,7 +507,7 @@ struct SkillLibraryDetail: View {
                     Button(vm.note(for: item).isEmpty ? "添加" : "编辑") {
                         noteDraft = vm.note(for: item)
                         withAnimation(.easeInOut(duration: 0.18)) { editingNote = true }
-                    }.buttonStyle(.plain).dboardFont(size: 11).foregroundStyle(theme.current.accentPrimary)
+                    }.buttonStyle(DBoardPlainButtonStyle()).dboardFont(size: 11).foregroundStyle(theme.current.accentPrimary)
                         .padding(.horizontal, 8).padding(.vertical, 5)
                 }
             }

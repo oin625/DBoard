@@ -850,7 +850,7 @@ struct ClipboardBoardView: View {
                 } label: {
                     Image(systemName: "xmark").dboardFont(size: 9, weight: .semibold)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DBoardPlainButtonStyle())
                 .foregroundStyle(theme.current.textSecondary)
             } else {
                 TearOffButton(key: "ClipboardBoard")
@@ -861,7 +861,7 @@ struct ClipboardBoardView: View {
             } label: {
                 Image(systemName: "gearshape").dboardFont(size: 11)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(DBoardPlainButtonStyle())
             .foregroundStyle(theme.current.textSecondary)
         }
         .padding(.horizontal, 12)
@@ -916,7 +916,7 @@ struct ClipboardBoardView: View {
                         .dboardFont(size: 11)
                         .foregroundStyle(theme.current.textMuted)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DBoardPlainButtonStyle())
             }
         }
         .padding(.horizontal, 8)
@@ -1020,7 +1020,7 @@ struct ClipboardBoardView: View {
                     Text("合并复制 \(vm.multiSelection.count) 条")
                         .dboardFont(size: 11, weight: .medium)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DBoardPlainButtonStyle())
                 .foregroundStyle(.white)
                 .padding(.horizontal, 8).padding(.vertical, 3)
                 .background(Capsule().fill(theme.current.accentPrimary))
@@ -1248,6 +1248,7 @@ struct ClipRow: View, Equatable {
 struct ClipRowPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .dboardClickTarget()
             .brightness(configuration.isPressed ? -0.06 : 0)
             .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
     }
@@ -1302,7 +1303,7 @@ struct ClipDetailOverlay: View {
                 } label: {
                     Text("写回剪切板").dboardFont(size: 11, weight: .medium)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DBoardPlainButtonStyle())
                 .foregroundStyle(.white)
                 .padding(.horizontal, 10).padding(.vertical, 4)
                 .background(Capsule().fill(theme.current.accentPrimary))
@@ -1311,7 +1312,7 @@ struct ClipDetailOverlay: View {
                 } label: {
                     Image(systemName: "xmark").dboardFont(size: 10, weight: .semibold)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DBoardPlainButtonStyle())
                 .foregroundStyle(theme.current.textSecondary)
             }
             .padding(12)
@@ -1404,7 +1405,7 @@ struct ClipSettingsOverlay: View {
                 } label: {
                     Image(systemName: "xmark").dboardFont(size: 10, weight: .semibold)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DBoardPlainButtonStyle())
                 .foregroundStyle(theme.current.textSecondary)
             }
 
@@ -1458,7 +1459,7 @@ struct ClipSettingsOverlay: View {
                 } label: {
                     Text("立即清理").dboardFont(size: 11, weight: .medium)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(DBoardPlainButtonStyle())
                 .foregroundStyle(theme.current.accentPrimary)
                 Spacer()
                 Text("纯本地存储 · 无网络 · 无云同步")

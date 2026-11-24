@@ -77,12 +77,14 @@ private struct DemandDetailWindowRoot: View {
         }
         .demandFloatingCanvas()
         .background(WindowNumberReader { windowNumber = $0 })
-        .onAppear { vm.refreshCodeReviews() }
+        .onAppear { vm.refreshCodeReviews(only: vm.demandEditor?.item.id) }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            vm.refreshCodeReviews()
+            if let windowNumber, NSApp.keyWindow?.windowNumber == windowNumber {
+                vm.refreshCodeReviews(only: vm.demandEditor?.item.id)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { event in
-            if (event.object as? NSWindow)?.windowNumber == windowNumber { vm.refreshCodeReviews() }
+            if (event.object as? NSWindow)?.windowNumber == windowNumber { vm.refreshCodeReviews(only: vm.demandEditor?.item.id) }
         }
     }
 }

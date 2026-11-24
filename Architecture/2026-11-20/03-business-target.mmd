@@ -1,0 +1,42 @@
+flowchart TB
+  HOME["首页：现在做什么？<br/>下一步 / 阻塞 / 待用户确认 / 待核验"]
+  subgraph WORK["工作领域：D开发 / P排查"]
+    AG["工作聚合<br/>目标范围 / 版本 / 仓库 / 关联正式需求"]
+    NEXT["动作决策<br/>继续开发 / 独立CR / 测试 / 交付 / 归档"]
+    HAND["交接包<br/>当前范围 + 代码版本 + 未完项 + 证据索引"]
+    RESULT["执行结果<br/>进展 / 产物 / 验证事实"]
+    GATE["四维分别判断<br/>个人状态 · 执行证据 · 发布事项 · 正式验收"]
+    AG --> NEXT --> HAND --> RESULT --> GATE
+    GATE -. "缺少证据或范围变化" .-> NEXT
+    GATE --> DONE["用户确认完成<br/>可恢复归档 / 版本延续 / 经验复用"]
+  end
+  subgraph PERSONAL["个人领域：不套用开发任务状态"]
+    IDEA["想法：捕捉 / 补充 / 关联学习"]
+    LEARN["学习：目标与当前单元<br/>原笔记 / AI草稿 / 真实作答分开"]
+    MASTER["掌握证据绑定当时标准<br/>用户确认 / 复习 / 复盘"]
+    HEALTH["健康：真实记录 → 趋势 → 当天原始明细"]
+    IDEA --> LEARN --> MASTER
+  end
+  subgraph CONNECT["独立连接器与工具"]
+    RF["ReqFlow：正式事实归远端<br/>本机只保存带时间的快照"]
+    BM["BizMap：参考事实<br/>来源 / 核验时间 / 缺项提示"]
+    TOOL["Audi / Skills / 剪切板 / 待回复<br/>按需打开；各自授权与生命周期"]
+    OVER["钉钉：可重建的简版投影<br/>完整工作记忆继续留本机"]
+  end
+  HOME --> NEXT
+  HOME --> LEARN
+  HOME --> HEALTH
+  RF -. "明确ID关联" .-> AG
+  RF --> GATE
+  BM -. "查找线索" .-> HAND
+  RESULT --> OVER
+  NEXT -. "需要时进入" .-> TOOL
+  DONE -. "可追溯资料链接" .-> LEARN
+  classDef work fill:#dbeafe,stroke:#2563eb,color:#172554;
+  classDef personal fill:#dcfce7,stroke:#16a34a,color:#14532d;
+  classDef ext fill:#f3e8ff,stroke:#9333ea,color:#3b0764;
+  classDef propose fill:#fff7ed,stroke:#ea580c,color:#7c2d12;
+  class AG,NEXT,HAND,RESULT,GATE,DONE work;
+  class IDEA,LEARN,MASTER,HEALTH personal;
+  class RF,BM,TOOL,OVER ext;
+  class HOME propose;
